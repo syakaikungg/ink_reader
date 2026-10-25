@@ -112,6 +112,18 @@ select {
 }
 #page.finger { touch-action: none; }
 #page.erasing { cursor: cell; }
+#page.lassoing { cursor: crosshair; }
+#ink .lasso { fill: var(--accent); fill-opacity: .06; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+#ink .sel { fill: var(--accent); fill-opacity: .05; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+#selmenu {
+  position: absolute; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px;
+  background: var(--bar); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(20,30,60,.12); font: 12px/1 var(--f-ui); color: var(--muted);
+  -webkit-user-select: none; user-select: none;
+}
+#selmenu[hidden] { display: none; }
+#selmenu button { height: 32px; }
+#sel-del { color: var(--ink-r); }
 #ink { position: absolute; left: 0; top: 0; width: 100%; overflow: visible; pointer-events: none; }
 #ink path { stroke: none; }
 #ink .k { fill: var(--ink-k); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
@@ -165,6 +177,7 @@ dialog#cfg::backdrop { background: rgba(10,14,22,.35); }
     <button id="t-pen" aria-pressed="true" title="ペン">ペン</button>
     <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
     <button id="t-er" aria-pressed="false" title="消しゴム">消しゴム</button>
+    <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・色変更・削除）">投げ縄</button>
   </div>
   <div class="grp" id="colors">
     <button data-c="k" aria-pressed="true" aria-label="黒"><span class="sw k"></span></button>
@@ -194,7 +207,7 @@ dialog#cfg::backdrop { background: rgba(10,14,22,.35); }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -207,6 +220,11 @@ dialog#cfg::backdrop { background: rgba(10,14,22,.35); }
       <p class="src">H. Nishimori, <i>Statistical Physics of Spin Glasses and Information Processing</i>（DeepSeekによる和訳）</p>
     </article>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div id="selmenu" hidden>
+    <span id="sel-n"></span>
+    <button id="sel-del">削除</button>
+    <button id="sel-x">解除</button>
   </div>
 </div>
 <nav id="foot" aria-label="章の移動">

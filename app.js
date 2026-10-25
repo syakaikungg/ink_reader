@@ -111,6 +111,7 @@
     return out;
   }
   function showBlocks(data) {
+    clearSel();
     for (const s of strokes) s.el.remove();
     strokes = [];
     for (const b in data) for (const id in data[b].strokes) { const s = de(id, +b, data[b].strokes[id]); mount(s); strokes.push(s); }
@@ -296,10 +297,17 @@
   });
 
   // ---------- history ----------
-  function push(op) { undoStack.push(op); redoStack.length = 0; syncHist(); touch(op.list); }
+  // op: {type:'add'|'erase', list} か {type:'replace', from, to}（投げ縄の移動・色変更）
+  const opList = (op) => op.list || op.from.concat(op.to);
+  function push(op) { undoStack.push(op); redoStack.length = 0; syncHist(); touch(opList(op)); }
   function addAll(list) { for (const s of list) { mount(s); strokes.push(s); } }
   function removeAll(list) { const set = new Set(list); strokes = strokes.filter((s) => !set.has(s)); for (const s of list) s.el.remove(); }
-  function apply(op, inverse) { ((op.type === 'add') !== inverse) ? addAll(op.list) : removeAll(op.list); touch(op.list); }
+  function apply(op, inverse) {
+    clearSel();
+    if (op.type === 'replace') { removeAll(inverse ? op.to : op.from); addAll(inverse ? op.from : op.to); }
+    else ((op.type === 'add') !== inverse) ? addAll(op.list) : removeAll(op.list);
+    touch(opList(op));
+  }
   function syncHist() { $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length; }
   $('#undo').onclick = () => { const op = undoStack.pop(); if (!op) return; apply(op, true); redoStack.push(op); syncHist(); };
   $('#redo').onclick = () => { const op = redoStack.pop(); if (!op) return; apply(op, false); undoStack.push(op); syncHist(); };
@@ -314,6 +322,7 @@
     $('#zoomv').textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
     if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); }
+    if (sel.length) showSel();
   }
   function fitScale() {
     const avail = document.documentElement.clientWidth - 32;
@@ -337,15 +346,18 @@
 
   // ---------- toolbar ----------
   function press(group, btn) { for (const b of group) b.setAttribute('aria-pressed', String(b === btn)); }
-  const toolBtns = [$('#t-pen'), $('#t-hl'), $('#t-er')];
+  const toolBtns = [$('#t-pen'), $('#t-hl'), $('#t-er'), $('#t-ls')];
   toolBtns.forEach((b) => b.onclick = () => {
-    tool = { 't-pen': 'pen', 't-hl': 'hl', 't-er': 'er' }[b.id]; press(toolBtns, b);
+    tool = { 't-pen': 'pen', 't-hl': 'hl', 't-er': 'er', 't-ls': 'ls' }[b.id]; press(toolBtns, b);
     page.classList.toggle('erasing', tool === 'er');
+    page.classList.toggle('lassoing', tool === 'ls');
+    if (tool !== 'ls') clearSel();
   });
+  // 投げ縄で選んでいるときは、色・太さボタンで選んだ線を変える
   const colorBtns = [...document.querySelectorAll('#colors button')];
-  colorBtns.forEach((b) => b.onclick = () => { color = b.dataset.c; press(colorBtns, b); if (tool !== 'pen') toolBtns[0].click(); });
+  colorBtns.forEach((b) => b.onclick = () => { color = b.dataset.c; press(colorBtns, b); if (sel.length) restyle({ c: color }); else if (tool !== 'pen') toolBtns[0].click(); });
   const sizeBtns = [...document.querySelectorAll('#sizes button')];
-  sizeBtns.forEach((b) => b.onclick = () => { size = +b.dataset.s; press(sizeBtns, b); if (tool !== 'pen') toolBtns[0].click(); });
+  sizeBtns.forEach((b) => b.onclick = () => { size = +b.dataset.s; press(sizeBtns, b); if (sel.length) restyle({ s: size }); else if (tool !== 'pen') toolBtns[0].click(); });
   $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); };
   let armT = 0;
   $('#clear').onclick = (e) => {
@@ -357,6 +369,7 @@
     }
     clearTimeout(armT); b.classList.remove('arm'); b.textContent = '全消去';
     if (!strokes.length) return;
+    clearSel();
     const list = strokes.slice(); removeAll(list); push({ type: 'erase', list });
   };
   $('#hint-x').onclick = () => { $('#hint').hidden = true; store.set(PREF + ':hint', '0'); };
@@ -424,6 +437,112 @@
     }
     return hit.length ? hit : null;
   }
+  // ---------- 投げ縄 ----------
+  // 囲んだ線を選び、ドラッグで移動・色や太さの変更・削除ができる。
+  // 移動や変更は「元の線を消して新しい線を足す」操作として記録し、移動先の段落に付け直す
+  let sel = [], lasso = null, drag = null;
+  const lassoEl = document.createElementNS(NS, 'path'); lassoEl.setAttribute('class', 'lasso');
+  const selEl = document.createElementNS(NS, 'rect'); selEl.setAttribute('class', 'sel'); selEl.setAttribute('rx', 6);
+  const selMenu = $('#selmenu');
+  function inPoly(x, y, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function selBox() {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const s of sel) { const ty = top(s), pad = s.tool === 'hl' ? 8 : s.s; a = Math.min(a, s.bbox[0] - pad); b = Math.min(b, s.bbox[1] + ty - pad); c = Math.max(c, s.bbox[2] + pad); d = Math.max(d, s.bbox[3] + ty + pad); }
+    return [a - 6, b - 6, c + 6, d + 6];
+  }
+  function showSel(dx = 0, dy = 0) {
+    if (!sel.length) { selEl.remove(); selMenu.hidden = true; return; }
+    const [a, b, c, d] = selBox();
+    selEl.setAttribute('x', a + dx); selEl.setAttribute('y', b + dy);
+    selEl.setAttribute('width', c - a); selEl.setAttribute('height', d - b);
+    svg.appendChild(selEl);
+    selMenu.hidden = false;
+    selMenu.style.left = Math.max(0, (a + dx) * scale) + 'px';
+    selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
+    $('#sel-n').textContent = `${sel.length}画`;
+  }
+  function clearSel() { sel = []; drag = null; lassoEl.remove(); showSel(); }
+  function finishLasso() {
+    const poly = lasso; lasso = null; lassoEl.remove();
+    if (poly.length < 3) return;
+    sel = strokes.filter((s) => {
+      const ty = top(s); let n = 0;
+      for (const [x, y] of s.pts) if (inPoly(x, y + ty, poly)) n++;
+      return n >= s.pts.length / 2;
+    });
+    showSel();
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : '囲んだ中に線がありません';
+  }
+  // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
+  function rebuild(dx, dy, patch) {
+    const from = sel, to = from.map((s) => {
+      const ty = top(s);
+      const abs = s.pts.map(([x, y, p]) => [x + dx, y + ty + dy, p]);
+      let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
+      const b = blockAt(minY), t = tops[b];
+      const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
+      bbox(n); return n;
+    });
+    removeAll(from); addAll(to);
+    push({ type: 'replace', from, to });
+    sel = to; showSel();
+  }
+  function restyle(patch) {
+    const sub = patch.s != null ? { s: patch.s } : { c: patch.c };
+    if (!sel.some((s) => s.tool !== 'hl')) return;
+    const keep = sel.filter((s) => s.tool === 'hl');
+    const all = sel; sel = all.filter((s) => s.tool !== 'hl');
+    rebuild(0, 0, sub);
+    sel = sel.concat(keep); showSel();
+  }
+  $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
+  $('#sel-x').onclick = clearSel;
+  function lassoDown(e) {
+    const [x, y] = toPage(e);
+    if (sel.length) {
+      const [a, b, c, d] = selBox();
+      if (x >= a && x <= c && y >= b && y <= d) { drag = { x, y, dx: 0, dy: 0 }; selMenu.hidden = true; return; }
+      clearSel();
+    }
+    lasso = [[x, y]];
+    lassoEl.setAttribute('d', ''); svg.appendChild(lassoEl);
+  }
+  function lassoMove(list) {
+    const last = toPage(list[list.length - 1]);
+    if (drag) {
+      drag.dx = last[0] - drag.x; drag.dy = last[1] - drag.y;
+      if (!raf) raf = requestAnimationFrame(() => {
+        raf = 0; if (!drag) return;
+        for (const s of sel) s.el.setAttribute('transform', `translate(${drag.dx} ${top(s) + drag.dy})`);
+        showSel(drag.dx, drag.dy); selMenu.hidden = true;
+      });
+      return;
+    }
+    if (!lasso) return;
+    for (const ev of list) { const [x, y] = toPage(ev); lasso.push([x, y]); }
+    if (!raf) raf = requestAnimationFrame(() => {
+      raf = 0; if (!lasso) return;
+      lassoEl.setAttribute('d', 'M' + lasso.map(([x, y]) => `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`).join('L') + 'Z');
+    });
+  }
+  function lassoUp() {
+    if (drag) {
+      const { dx, dy } = drag; drag = null;
+      if (Math.hypot(dx, dy) < 2) { for (const s of sel) place(s); showSel(); return; }
+      rebuild(dx, dy, {});
+      stat.textContent = `${sel.length}画を移動しました`;
+      return;
+    }
+    if (lasso) finishLasso();
+  }
+
   function frame() {
     raf = 0; frames++;
     if (!cur) return;
@@ -439,6 +558,7 @@
     curId = e.pointerId; penDown = true;
     t0 = e.timeStamp; samples = 1; frames = 0;
     if (tool === 'er') { erased = []; eraseAt(toPage(e)); return; }
+    if (tool === 'ls') { lassoDown(e); return; }
     const b = blockAt(toPage(e)[1]);
     curTop = tops[b];
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
@@ -451,6 +571,7 @@
     const list = evs.length ? evs : [e];
     samples += list.length;
     if (tool === 'er' && erased) { for (const ev of list) eraseAt(toPage(ev)); return; }
+    if (tool === 'ls') { lassoMove(list); return; }
     if (!cur) return;
     for (const ev of list) pending.push(toRel(ev));
     predicted = e.getPredictedEvents ? e.getPredictedEvents().map(toRel) : [];
@@ -461,6 +582,7 @@
     curId = null; penDown = false;
     const dt = (e.timeStamp - t0) / 1000;
     if (erased) { if (erased.length) push({ type: 'erase', list: erased }); erased = null; return; }
+    if (tool === 'ls') { lassoUp(); return; }
     if (!cur) return;
     if (pending.length) { cur.pts.push(...pending); pending = []; }
     predicted = [];
@@ -482,26 +604,26 @@
 
 
   // ---------- chapters ----------
-  const sel = $('#chap');
+  const chapSel = $('#chap');
   const srcLine = doc.firstElementChild;
   let ids = [];
   let opening = null;
   function fillChapters() {
-    sel.replaceChildren(...book.chapters.map((c) => new Option(c.label, c.id)));
+    chapSel.replaceChildren(...book.chapters.map((c) => new Option(c.label, c.id)));
     ids = book.chapters.map((c) => c.id);
     srcLine.textContent = book.source || book.title || '';
   }
   async function openChapter(id, restore) {
     if (!ids.includes(id)) id = ids.includes('ch1') ? 'ch1' : ids[0];
     const my = opening = {};
-    sel.value = id; syncNav(id);
+    chapSel.value = id; syncNav(id);
     if (CH) store.set(PREF + ':pos:' + CH, String(scrollY));
     if (cs && cs.pending.size) pushChapter(CH);
     doc.classList.add('loading');
     let html = await chapterHtml(id);
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
-    if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) { sel.value = CH; syncNav(CH); } return; }
+    if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) { chapSel.value = CH; syncNav(CH); } return; }
     const saved = await kv.get(inkKey(id));
     if (my !== opening) return;
     for (const s of strokes) s.el.remove();
@@ -525,8 +647,8 @@
     for (const b of [$('#prev'), $('#prev2')]) b.disabled = i <= 0;
     for (const b of [$('#next'), $('#next2')]) b.disabled = i >= ids.length - 1;
   }
-  const step = (d) => { const i = ids.indexOf(sel.value) + d; if (ids[i]) openChapter(ids[i], false); };
-  sel.onchange = () => openChapter(sel.value, true);
+  const step = (d) => { const i = ids.indexOf(chapSel.value) + d; if (ids[i]) openChapter(ids[i], false); };
+  chapSel.onchange = () => openChapter(chapSel.value, true);
   $('#prev').onclick = $('#prev2').onclick = () => step(-1);
   $('#next').onclick = $('#next2').onclick = () => step(1);
   addEventListener('pagehide', () => { if (CH) store.set(PREF + ':pos:' + CH, String(scrollY)); });
@@ -545,7 +667,7 @@
       if (!online()) throw new Error('通信できません');
       await syncBook(force);
       msg.textContent = '本をダウンロードしました';
-      fillChapters(); $('#empty').hidden = true; sel.disabled = false;
+      fillChapters(); $('#empty').hidden = true; chapSel.disabled = false;
       await openChapter(CH && ids.includes(CH) ? CH : (store.get(PREF + ':chapter') || 'ch1'), true);
       pushAll();
       return true;
@@ -570,7 +692,7 @@
   (async () => {
     await loadBook();
     if (!book && canSync()) { try { await syncBook(); } catch (e) { stat.textContent = '本をダウンロードできませんでした: ' + (e.message || ''); } }
-    if (!book) { $('#empty').hidden = false; sel.disabled = true; if (!cfg.token) openCfg(); return; }
+    if (!book) { $('#empty').hidden = false; chapSel.disabled = true; if (!cfg.token) openCfg(); return; }
     fillChapters();
     const fromHash = location.hash.slice(1);
     await openChapter(ids.includes(fromHash) ? fromHash : (store.get(PREF + ':chapter') || 'ch1'), true);
