@@ -189,9 +189,10 @@
     const hk = 'html:' + bookKey() + ':' + id, src = await kv.get('md:' + bookKey() + ':' + id);
     if (!src) return null;
     const cached = await kv.get(hk);
-    if (cached && cached.sha === src.sha) return cached.html;
+    const v = renderMarkdown.version;
+    if (cached && cached.sha === src.sha && cached.v === v) return cached.html;
     const html = renderMarkdown(src.md, book.images);
-    kv.set(hk, { sha: src.sha, html }).catch(() => {});
+    kv.set(hk, { sha: src.sha, v, html }).catch(() => {});
     return html;
   }
 
@@ -440,7 +441,7 @@
   // ---------- 投げ縄 ----------
   // 囲んだ線を選び、ドラッグで移動・色や太さの変更・削除ができる。
   // 移動や変更は「元の線を消して新しい線を足す」操作として記録し、移動先の段落に付け直す
-  let sel = [], lasso = null, drag = null;
+  let sel = [], picked = [], lassoBox = null, lasso = null, drag = null;   // picked: 囲んだ段落の番号
   const lassoEl = document.createElementNS(NS, 'path'); lassoEl.setAttribute('class', 'lasso');
   const selEl = document.createElementNS(NS, 'rect'); selEl.setAttribute('class', 'sel'); selEl.setAttribute('rx', 6);
   const selMenu = $('#selmenu');
@@ -458,17 +459,18 @@
     return [a - 6, b - 6, c + 6, d + 6];
   }
   function showSel(dx = 0, dy = 0) {
-    if (!sel.length) { selEl.remove(); selMenu.hidden = true; return; }
-    const [a, b, c, d] = selBox();
+    if (!sel.length && !picked.length) { selEl.remove(); selMenu.hidden = true; return; }
+    const [a, b, c, d] = sel.length ? selBox() : lassoBox;
     selEl.setAttribute('x', a + dx); selEl.setAttribute('y', b + dy);
     selEl.setAttribute('width', c - a); selEl.setAttribute('height', d - b);
     svg.appendChild(selEl);
     selMenu.hidden = false;
     selMenu.style.left = Math.max(0, (a + dx) * scale) + 'px';
     selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
-    $('#sel-n').textContent = `${sel.length}画`;
+    $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}段落`;
+    $('#sel-del').hidden = !sel.length;
   }
-  function clearSel() { sel = []; drag = null; lassoEl.remove(); showSel(); }
+  function clearSel() { sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); }
   function finishLasso() {
     const poly = lasso; lasso = null; lassoEl.remove();
     if (poly.length < 3) return;
@@ -477,8 +479,15 @@
       for (const [x, y] of s.pts) if (inPoly(x, y + ty, poly)) n++;
       return n >= s.pts.length / 2;
     });
+    // 囲んだ範囲にかかる段落と、選んだ線の段落（「Claudeに聞く」で渡す本文）
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const [x, y] of poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+    lassoBox = [a, b, c, d];
+    const set = new Set(sel.map((s) => s.b));
+    blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
+    picked = [...set].sort((x, y) => x - y);
     showSel();
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : '囲んだ中に線がありません';
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : picked.length ? `${picked.length}段落を選択` : '囲んだ中に何もありません';
   }
   // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
   function rebuild(dx, dy, patch) {
@@ -509,8 +518,8 @@
     if (sel.length) {
       const [a, b, c, d] = selBox();
       if (x >= a && x <= c && y >= b && y <= d) { drag = { x, y, dx: 0, dy: 0 }; selMenu.hidden = true; return; }
-      clearSel();
     }
+    if (sel.length || picked.length) clearSel();
     lasso = [[x, y]];
     lassoEl.setAttribute('d', ''); svg.appendChild(lassoEl);
   }
@@ -537,11 +546,90 @@
       const { dx, dy } = drag; drag = null;
       if (Math.hypot(dx, dy) < 2) { for (const s of sel) place(s); showSel(); return; }
       rebuild(dx, dy, {});
+      picked = [...new Set([...picked, ...sel.map((s) => s.b)])].sort((x, y) => x - y);
       stat.textContent = `${sel.length}画を移動しました`;
       return;
     }
     if (lasso) finishLasso();
   }
+
+  // ---------- Claudeに聞く ----------
+  // 選んだ段落の本文（数式は TeX に戻す）と手書きの画像を、質問と一緒に Claude アプリへ渡す。
+  // サブスクの範囲で使うため API は呼ばず、共有シート・クリップボード・claude.ai/new?q= を使う
+  const INK = { k: '#15181f', r: '#d0302a', b: '#1d56d8' };
+  function blockMd(el) {
+    const c = el.cloneNode(true);
+    for (const k of c.querySelectorAll('.katex-display')) { const t = k.querySelector('[data-tex]'); k.replaceWith(`\n$$${t ? t.dataset.tex : ''}$$\n`); }
+    for (const k of c.querySelectorAll('.katex[data-tex]')) k.replaceWith(`$${k.dataset.tex}$`);
+    for (const i of c.querySelectorAll('img')) i.replaceWith(`[${i.alt || '図'}]`);
+    const t = c.textContent.trim();
+    return /^H[1-6]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' + t : t;
+  }
+  function passage() {
+    const out = [];
+    const first = picked[0];
+    for (let i = first - 1; i > 0; i--) if (/^H[1-6]$/.test(blocks[i].tagName)) { out.push(blockMd(blocks[i])); if (i < first - 1) out.push('…'); break; }
+    for (const i of picked) out.push(blockMd(blocks[i]));
+    return out.join('\n\n');
+  }
+  function inkImage() {   // 選んだ段落の書き込み（なければ選んだ線）を白地の PNG に
+    const list = strokes.filter((s) => picked.includes(s.b) || sel.includes(s));
+    if (!list.length) return null;
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const s of list) { const ty = top(s); a = Math.min(a, s.bbox[0]); b = Math.min(b, s.bbox[1] + ty); c = Math.max(c, s.bbox[2]); d = Math.max(d, s.bbox[3] + ty); }
+    const pad = 20, k = 2, cv = document.createElement('canvas');
+    cv.width = Math.ceil((c - a + 2 * pad) * k); cv.height = Math.ceil((d - b + 2 * pad) * k);
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.scale(k, k); g.translate(pad - a, pad - b);
+    for (const s of [...list].sort((x, y) => (y.tool === 'hl') - (x.tool === 'hl'))) {
+      g.save(); g.translate(0, top(s));
+      g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || INK.k;
+      g.fill(new Path2D(s.el.getAttribute('d')));
+      g.restore();
+    }
+    return cv;
+  }
+  let askImg = null;
+  function askText(withImg) {
+    const ch = book && book.chapters.find((c) => c.id === CH);
+    const q = $('#ask-q').value.trim();
+    return [
+      `「${book.title || book.source || ''}」${ch ? ' ' + ch.label : ''} を読んでいて質問があります。`,
+      '', '該当箇所（Markdown、数式は TeX）:', '"""', passage(), '"""', '',
+      withImg ? '添付の画像は、この箇所に私が手書きで書き込んだものです。' : null,
+      `質問: ${q || '（この箇所を分かりやすく説明してください）'}`,
+    ].filter((v) => v != null).join('\n');
+  }
+  $('#sel-ask').onclick = () => {
+    if (!picked.length) return;
+    askImg = inkImage();
+    $('#ask-pv').textContent = passage();
+    $('#ask-img').hidden = !askImg;
+    if (askImg) $('#ask-img').src = askImg.toDataURL('image/png');
+    $('#ask-msg').textContent = '';
+    $('#ask').showModal();
+  };
+  async function copy(t) { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } }
+  $('#ask-open').onclick = async () => {
+    const t = askText(false);
+    const w = open('https://claude.ai/new?q=' + encodeURIComponent(t), '_blank');
+    const ok = await copy(t);
+    $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (askImg ? '手書きの画像も送るときは「共有」を使ってください。' : '') + (w ? '' : ' Claude を開けませんでした。');
+  };
+  $('#ask-share').onclick = async () => {
+    const t = askText(!!askImg);
+    try {
+      const files = askImg ? [new File([await new Promise((r) => askImg.toBlob(r, 'image/png'))], 'ink.png', { type: 'image/png' })] : [];
+      const data = files.length && navigator.canShare && navigator.canShare({ files }) ? { text: t, files } : { text: t };
+      await copy(t);
+      await navigator.share(data);
+      $('#ask-msg').textContent = '共有シートで Claude を選んでください（質問文はコピー済みです）';
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      $('#ask-msg').textContent = (await copy(t)) ? 'この端末では共有できないので、質問文をコピーしました' : '共有できませんでした';
+    }
+  };
 
   function frame() {
     raf = 0; frames++;
