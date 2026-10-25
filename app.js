@@ -617,6 +617,23 @@
     const ok = await copy(t);
     $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (askImg ? '手書きの画像も送るときは「共有」を使ってください。' : '') + (w ? '' : ' Claude を開けませんでした。');
   };
+  // sakai_study のリポジトリで Claude Code のセッションを開く。本文と書き込みはリポジトリにあるので、場所を伝える
+  $('#ask-code').onclick = async () => {
+    const ch = book.chapters.find((c) => c.id === CH);
+    const q = $('#ask-q').value.trim();
+    const hasInk = strokes.some((s) => picked.includes(s.b));
+    const t = [
+      `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照）。`,
+      `本: ${cfg.book}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${cfg.book}/${ch ? ch.file : ''}`,
+      `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${cfg.book} ${CH} ${picked.join(' ')}）` : ''),
+      '', '該当箇所:', '"""', passage(), '"""', '',
+      `質問: ${q || 'この箇所を分かりやすく説明してください'}`,
+    ].join('\n');
+    const w = open('https://claude.ai/code/new?' + new URLSearchParams({ q: t, repo: cfg.repo, branch: cfg.branch }), '_blank');
+    if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
+    const ok = await copy(t);
+    $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (w ? '' : 'Claude を開けませんでした。') + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
+  };
   $('#ask-share').onclick = async () => {
     const t = askText(!!askImg);
     try {
