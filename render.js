@@ -3,7 +3,10 @@
 window.renderMarkdown = function renderMarkdown(md, images) {
   const math = [];
   const put = (tex, display) => {
-    math.push(katex.renderToString(tex.trim(), { displayMode: display, output: 'html', throwOnError: false, strict: false }));
+    // data-tex に元の TeX を残す（「Claudeに聞く」で本文を md に戻すため）
+    const esc = tex.trim().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    math.push(katex.renderToString(tex.trim(), { displayMode: display, output: 'html', throwOnError: false, strict: false })
+      .replace('<span class="katex"', `<span class="katex" data-tex="${esc}"`));
     return `@@M${math.length - 1}@@`;
   };
   md = md.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => '\n\n' + put(t, true) + '\n\n');
@@ -19,3 +22,4 @@ window.renderMarkdown = function renderMarkdown(md, images) {
   html = html.replace(/<p>FIG\. /g, '<p class="cap">FIG. ');
   return html;
 };
+window.renderMarkdown.version = 2;   // 出力を変えたら上げる（端末内のキャッシュを作り直す）
