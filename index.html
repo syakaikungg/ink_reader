@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ink Reader</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ink Reader">
+<meta name="theme-color" content="#e9ecf1">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="vendor/katex.min.css">
+<style>
+@font-face { font-family: "Source Serif 4"; font-style: normal; font-weight: 200 900; font-display: swap;
+  src: url(vendor/fonts/SourceSerif4-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Source Serif 4"; font-style: italic; font-weight: 200 900; font-display: swap;
+  src: url(vendor/fonts/SourceSerif4-latin-italic.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+/* Layout: 固定幅(680px)の紙を一枚、拡大はtransformで。書き込みは紙の座標で保存するので画面幅や回転で位置がずれない */
+:root {
+  --bg: #e9ecf1;
+  --paper: #ffffff;
+  --fg: #1a1e26;
+  --muted: #5d6573;
+  --rule: #d5dae3;
+  --accent: #2747c9;
+  --bar: rgba(255,255,255,.92);
+  --ink-k: #15181f;
+  --ink-r: #d0302a;
+  --ink-b: #1d56d8;
+  --hl: #ffd53d;
+  --hl-blend: multiply;
+  --hl-op: .45;
+  --f-body: "Source Serif 4", "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif;
+  --f-ui: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --page-w: 680px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101318; --paper: #1a1e25; --fg: #e3e6ec; --muted: #9aa2b1; --rule: #2e3440;
+    --accent: #8ea4ff; --bar: rgba(26,30,37,.92);
+    --ink-k: #f1f3f7; --ink-r: #ff7a72; --ink-b: #79a6ff; --hl: #d6b100; --hl-blend: screen; --hl-op: .35;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101318; --paper: #1a1e25; --fg: #e3e6ec; --muted: #9aa2b1; --rule: #2e3440;
+  --accent: #8ea4ff; --bar: rgba(26,30,37,.92);
+  --ink-k: #f1f3f7; --ink-r: #ff7a72; --ink-b: #79a6ff; --hl: #d6b100; --hl-blend: screen; --hl-op: .35;
+  color-scheme: dark;
+}
+html, body { background: var(--bg); color: var(--fg); margin: 0; }
+body {
+  font-family: var(--f-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 48px;
+  overflow-x: hidden;
+}
+
+/* ---------- toolbar ---------- */
+#bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
+  margin: 0 auto 14px; padding: 8px 10px; max-width: 980px;
+  background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+  -webkit-user-select: none; user-select: none;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bar); }
+.grp { display: flex; align-items: center; gap: 4px; }
+.grp + .grp { padding-left: 10px; border-left: 1px solid var(--rule); }
+button {
+  font: 600 13px/1 var(--f-ui); color: var(--fg); background: transparent;
+  border: 1px solid transparent; border-radius: 8px; min-width: 40px; height: 38px; padding: 0 10px;
+  cursor: pointer; touch-action: manipulation;
+}
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button[aria-pressed="true"] { background: var(--paper); border-color: var(--rule); color: var(--accent); }
+button:disabled { opacity: .35; }
+.sw { width: 18px; height: 18px; border-radius: 50%; display: inline-block; vertical-align: middle; }
+.sw.k { background: var(--ink-k); } .sw.r { background: var(--ink-r); } .sw.b { background: var(--ink-b); }
+.dot { display: inline-block; border-radius: 50%; background: currentColor; vertical-align: middle; }
+#zoomv { font-variant-numeric: tabular-nums; min-width: 56px; }
+#stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 9em; text-align: center; }
+select {
+  font: 600 13px/1 var(--f-ui); color: var(--fg); background: var(--paper);
+  border: 1px solid var(--rule); border-radius: 8px; height: 38px; padding: 0 8px; max-width: 15em;
+}
+#foot { display: flex; justify-content: space-between; gap: 12px; max-width: 680px; margin: 20px auto 0; }
+#foot button { border-color: var(--rule); background: var(--paper); }
+#doc.loading { opacity: .35; }
+#clear.arm { color: var(--ink-r); border-color: var(--ink-r); }
+
+#hint {
+  max-width: 680px; margin: 0 auto 14px; font-size: 13px; line-height: 1.6; color: var(--muted);
+  display: flex; gap: 12px; align-items: flex-start;
+}
+#hint p { margin: 0; flex: 1; min-width: 0; }
+#hint button { height: 30px; font-weight: 400; color: var(--muted); }
+
+/* ---------- paper ---------- */
+#sizer { position: relative; margin: 0 auto; }
+#page {
+  position: absolute; left: 0; top: 0; width: var(--page-w);
+  transform-origin: 0 0;
+  background: var(--paper);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 8px 30px rgba(20,30,60,.08);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+#page.finger { touch-action: none; }
+#page.erasing { cursor: cell; }
+#ink { position: absolute; left: 0; top: 0; width: 100%; overflow: visible; pointer-events: none; }
+#ink path { stroke: none; }
+#ink .k { fill: var(--ink-k); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
+#ink .hl { fill: var(--hl); opacity: var(--hl-op); mix-blend-mode: var(--hl-blend); }
+
+#doc {
+  padding: 44px 48px 64px;
+  font-family: var(--f-body); font-size: 17px; line-height: 1.85; color: var(--fg);
+  font-optical-sizing: auto;
+}
+#doc .src { font: 12px/1.5 var(--f-ui); color: var(--muted); letter-spacing: .02em; margin: 0 0 28px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+#doc h1, #doc h2, #doc h3, #doc h4 { font-family: var(--f-body); text-wrap: balance; line-height: 1.25; }
+#doc h1 { font-size: 40px; font-weight: 400; margin: 56px 0 4px; color: var(--accent); }
+#doc h2 { font-size: 24px; font-weight: 600; margin: 40px 0 14px; letter-spacing: .01em; }
+#doc h3 { font-size: 19px; font-weight: 600; margin: 32px 0 10px; }
+#doc h4 { font-size: 17px; font-weight: 600; font-style: italic; margin: 24px 0 8px; }
+#doc p { margin: 0 0 14px; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+#doc p.cap { font: 13px/1.5 var(--f-ui); color: var(--muted); text-align: left; }
+#doc img { display: block; margin: 18px auto 6px; height: auto; border-radius: 3px; }
+#doc .katex-display { margin: 14px 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+#doc .katex { font-size: 1.06em; }
+#doc ul, #doc ol { padding-left: 1.4em; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { font-size: 14px; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+#gear { font-weight: 400; }
+dialog#cfg { border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); color: var(--fg); max-width: min(520px, calc(100vw - 32px)); padding: 20px 22px; }
+dialog#cfg::backdrop { background: rgba(10,14,22,.35); }
+#cfg h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
+#cfg label { display: grid; gap: 4px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+#cfg input { font: 14px/1.4 ui-monospace, Menlo, monospace; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; }
+#cfg p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
+#cfg .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+#cfg .row button { border-color: var(--rule); }
+#cfg .row button.primary { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+#cfg-msg { min-height: 1.5em; }
+#empty { max-width: 560px; margin: 40px auto; font-size: 15px; line-height: 1.8; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="bar" role="toolbar" aria-label="書き込みツール">
+  <div class="grp">
+    <button id="prev" aria-label="前の章">‹</button>
+    <select id="chap" aria-label="章を選ぶ"><!--CHAPTERS--></select>
+    <button id="next" aria-label="次の章">›</button>
+  </div>
+  <div class="grp">
+    <button id="t-pen" aria-pressed="true" title="ペン">ペン</button>
+    <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
+    <button id="t-er" aria-pressed="false" title="消しゴム">消しゴム</button>
+  </div>
+  <div class="grp" id="colors">
+    <button data-c="k" aria-pressed="true" aria-label="黒"><span class="sw k"></span></button>
+    <button data-c="r" aria-pressed="false" aria-label="赤"><span class="sw r"></span></button>
+    <button data-c="b" aria-pressed="false" aria-label="青"><span class="sw b"></span></button>
+  </div>
+  <div class="grp" id="sizes">
+    <button data-s="2.2" aria-pressed="false" aria-label="細"><span class="dot" style="width:4px;height:4px"></span></button>
+    <button data-s="3.4" aria-pressed="true" aria-label="中"><span class="dot" style="width:7px;height:7px"></span></button>
+    <button data-s="5.5" aria-pressed="false" aria-label="太"><span class="dot" style="width:11px;height:11px"></span></button>
+  </div>
+  <div class="grp">
+    <button id="undo" disabled title="元に戻す">戻す</button>
+    <button id="redo" disabled title="やり直す">進む</button>
+  </div>
+  <div class="grp">
+    <button id="zout" aria-label="縮小">−</button>
+    <button id="zoomv" title="画面幅に合わせる">100%</button>
+    <button id="zin" aria-label="拡大">＋</button>
+  </div>
+  <div class="grp">
+    <button id="finger" aria-pressed="false" title="オンにすると指でも書ける（スクロールはできなくなる）">指で書く</button>
+    <button id="clear">全消去</button>
+    <button id="gear" aria-label="設定">設定</button>
+  </div>
+  <div id="stat" aria-live="polite">Pencilで書いてみてください</div>
+</div>
+
+<div id="hint">
+  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
+  <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
+</div>
+<div id="empty" hidden>
+  <p>はじめに「設定」から GitHub のトークンを入力してください。本（sakai_study の books/nishimori-ja）をこのiPadにダウンロードします。</p>
+</div>
+
+<div id="sizer">
+  <div id="page">
+    <article id="doc">
+      <p class="src">H. Nishimori, <i>Statistical Physics of Spin Glasses and Information Processing</i>（DeepSeekによる和訳）</p>
+    </article>
+    <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+<nav id="foot" aria-label="章の移動">
+  <button id="prev2">‹ 前の章</button>
+  <button id="next2">次の章 ›</button>
+</nav>
+
+
+<dialog id="cfg">
+  <form method="dialog" id="cfg-form">
+    <h2>設定</h2>
+    <p>sakai_study の中身を読み書きできる GitHub のトークン（fine-grained、Contents: Read and write）を入れてください。トークンはこのiPadの中だけに保存されます。</p>
+    <label>トークン<input id="cfg-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_..."></label>
+    <label>リポジトリ<input id="cfg-repo" autocapitalize="off" spellcheck="false"></label>
+    <label>ブランチ<input id="cfg-branch" autocapitalize="off" spellcheck="false"></label>
+    <label>本のフォルダ<input id="cfg-book" autocapitalize="off" spellcheck="false"></label>
+    <p id="cfg-msg" aria-live="polite"></p>
+    <div class="row">
+      <button type="button" id="cfg-sync">本を再ダウンロード</button>
+      <button value="cancel">閉じる</button>
+      <button type="button" class="primary" id="cfg-save">保存して接続</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="vendor/katex.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/perfect-freehand.js"></script>
+<script src="render.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
