@@ -168,6 +168,8 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
 #ask pre { white-space: pre-wrap; font: 12px/1.6 ui-monospace, Menlo, monospace; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; max-height: 30vh; overflow: auto; }
 #ask img { display: block; max-width: 100%; max-height: 22vh; margin: 0 0 10px; border: 1px solid var(--rule); border-radius: 8px; }
 #ask label { display: grid; gap: 4px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+#ask .sess { margin: 12px 0 0; }
+#ask input { font: 13px/1.4 ui-monospace, Menlo, monospace; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; }
 #ask textarea { font: 15px/1.5 var(--f-ui); padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); resize: vertical; }
 #ask p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 10px; min-height: 1.5em; }
 #ask .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
@@ -273,8 +275,10 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
       <button value="cancel">閉じる</button>
       <button type="button" id="ask-share">共有（画像つき）</button>
       <button type="button" id="ask-open">コピーしてClaudeを開く</button>
+      <button type="button" id="ask-new" hidden>新しいセッションで聞く</button>
       <button type="button" class="primary" id="ask-code">sakai_studyで聞く</button>
     </div>
+    <label class="sess">いつものセッションのURL（Claude Code の sakai_study のセッション）<input id="ask-sess" type="url" autocapitalize="off" spellcheck="false" placeholder="https://claude.ai/code/session_..."></label>
   </form>
 </dialog>
 
