@@ -4,7 +4,7 @@
   const W = 680;
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
-  const page = $('#page'), sizer = $('#sizer'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
+  const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
   const NS = 'http://www.w3.org/2000/svg';
   let CH = null;   // 開いている章の id
 
@@ -329,19 +329,64 @@
     const avail = document.documentElement.clientWidth - 32;
     return Math.max(.5, Math.min(1.6, avail / W));
   }
-  function setScale(next, mode) {
+  // at: 画面上の点 {x, y}。その点の下にある紙の位置（px, py。省略すると今その点にある位置）が、拡大後も x, y に来るようにする
+  function setScale(next, mode, at) {
     const r0 = page.getBoundingClientRect();
-    const cy = (innerHeight / 2 - r0.top) / scale;
+    at = at || { x: innerWidth / 2, y: innerHeight / 2 };
+    const px = at.px ?? (at.x - r0.left) / scale, py = at.py ?? (at.y - r0.top) / scale;
     scale = next; zoomMode = mode;
     layout();
     const r1 = page.getBoundingClientRect();
-    scrollBy(0, r1.top + cy * scale - innerHeight / 2);
+    wrap.scrollLeft += r1.left + px * scale - at.x;
+    scrollBy(0, r1.top + py * scale - at.y);
     store.set(PREF + ':zoom', mode === 'fit' ? 'fit' : String(scale));
   }
-  const steps = [.5, .75, .9, 1, 1.15, 1.3, 1.5, 1.75, 2, 2.5];
-  $('#zin').onclick = () => setScale(steps.find((v) => v > scale + .01) || scale, 'manual');
-  $('#zout').onclick = () => setScale([...steps].reverse().find((v) => v < scale - .01) || scale, 'manual');
   $('#zoomv').onclick = () => setScale(fitScale(), 'fit');
+
+  // 2本指のピンチ。動かしている間は #sizer を transform で伸ばすだけにして（レイアウトし直さない）、指を離したときに拡大率を決める
+  let pinch = null, pinchRaf = 0;
+  const fingers = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus');
+  const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2, d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1 });
+  const pinchK = () => Math.max(.5, Math.min(3, scale * pinch.m.d / pinch.m0.d)) / scale;
+  function pinchDraw() {
+    pinchRaf = 0;
+    if (!pinch) return;
+    const { m0, m, o } = pinch, k = pinchK();
+    sizer.style.transformOrigin = `${o.x}px ${o.y}px`;
+    sizer.style.transform = `translate(${m.x - m0.x}px, ${m.y - m0.y}px) scale(${k})`;
+    $('#zoomv').textContent = Math.round(scale * k * 100) + '%';
+  }
+  function pinchEnd() {
+    if (pinchRaf) cancelAnimationFrame(pinchRaf), pinchRaf = 0;
+    const { m, r0 } = pinch, next = scale * pinchK(), fit = fitScale();
+    const at = { x: m.x, y: m.y, px: (pinch.m0.x - r0.left) / scale, py: (pinch.m0.y - r0.top) / scale };
+    pinch = null;
+    sizer.classList.remove('pinching'); sizer.style.transform = ''; sizer.style.transformOrigin = '';
+    // 画面幅の近くで離したら、画面幅にぴったり合わせる
+    if (Math.abs(next - fit) / fit < .04) setScale(fit, 'fit', at); else setScale(next, 'manual', at);
+  }
+  document.addEventListener('touchstart', (e) => {
+    const t = fingers(e);
+    if (t.length !== 2 || pinch || (penDown && curType !== 'touch')) return;
+    if (curId !== null) abortInput();   // 指で書いているときに2本目の指が来たら、書きかけの線はやめてピンチにする
+    const r0 = page.getBoundingClientRect(), rs = sizer.getBoundingClientRect(), m0 = mid(t);
+    pinch = { m0, m: m0, r0, o: { x: m0.x - rs.left, y: m0.y - rs.top } };
+    sizer.classList.add('pinching');
+    e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('touchmove', (e) => {
+    if (!pinch) return;
+    e.preventDefault();
+    const t = fingers(e);
+    if (t.length < 2) return;
+    pinch.m = mid(t);
+    if (!pinchRaf) pinchRaf = requestAnimationFrame(pinchDraw);
+  }, { passive: false });
+  const pinchUp = (e) => { if (pinch && fingers(e).length < 2) pinchEnd(); };
+  document.addEventListener('touchend', pinchUp);
+  document.addEventListener('touchcancel', pinchUp);
+  // Safari が画面全体を拡大しないようにする（ツールバーまで大きくなるため）
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
   addEventListener('resize', () => { if (zoomMode === 'fit') setScale(fitScale(), 'fit'); });
   new ResizeObserver(layout).observe(doc);
 
@@ -386,7 +431,7 @@
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
   const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (finger && e.pointerType === 'touch');
-  let cur = null, curId = null, curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
+  let cur = null, curId = null, curType = '', curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
   let t0 = 0, samples = 0, frames = 0;
 
   function toPage(ev) {
@@ -675,11 +720,11 @@
   }
 
   page.addEventListener('pointerdown', (e) => {
-    if (!accepts(e) || curId !== null) return;
+    if (!accepts(e) || curId !== null || pinch) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
-    curId = e.pointerId; penDown = true;
+    curId = e.pointerId; curType = e.pointerType; penDown = true;
     t0 = e.timeStamp; samples = 1; frames = 0;
     if (tool === 'er') { erased = []; eraseAt(toPage(e)); return; }
     if (tool === 'ls') { lassoDown(e); return; }
@@ -722,6 +767,15 @@
     const tag = cur.pen ? 'Pencil入力' : '入力';
     if (dt > .25) stat.textContent = `${tag} ${Math.round(samples / dt)}Hz・描画 ${Math.round(frames / dt)}fps`;
     cur = null;
+  }
+  // 書いている途中でやめる（指で書いているときにピンチが始まったとき）。消しゴムで消した分はそのまま残す
+  function abortInput() {
+    try { page.releasePointerCapture(curId); } catch {}
+    curId = null; penDown = false;
+    if (erased) { if (erased.length) push({ type: 'erase', list: erased }); erased = null; }
+    if (drag) { drag = null; for (const s of sel) place(s); showSel(); }
+    if (lasso) { lasso = null; lassoEl.remove(); }
+    if (cur) { cur.el.remove(); cur = null; pending = []; predicted = []; }
   }
   page.addEventListener('pointerup', end);
   page.addEventListener('pointercancel', end);

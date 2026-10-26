@@ -1,13 +1,13 @@
 // 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
-// 確認すること: 接続して本を取得 → 線を書く → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存
+// 確認すること: 接続して本を取得 → 線を書く → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
 let shaN = 1, putCount = 0;
 const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComponent(q.url.split('?')[0]) === '/' ? 'index.html' : decodeURIComponent(q.url.split('?')[0])); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } const ext = path.extname(f); r.writeHead(200, { 'content-type': { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }[ext] || 'application/octet-stream' }); r.end(b); }); }).listen(8767);
 (async () => {
-  const b = await chromium.launch(); const ctx = await b.newContext({ permissions: ['clipboard-read','clipboard-write'],  viewport: { width: 820, height: 1180 } });
+  const b = await chromium.launch(); const ctx = await b.newContext({ permissions: ['clipboard-read','clipboard-write'],  viewport: { width: 820, height: 1180 }, hasTouch: true });
   await ctx.route('https://api.github.com/**', async (route) => {
     const req = route.request(); const u = new URL(req.url()); const p = decodeURIComponent(u.pathname.replace('/repos/syakaikungg/sakai_study/contents/', ''));
     const raw = /raw/.test(req.headers()['accept']);
@@ -47,7 +47,20 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('3', await go('#ask-new')); await p.fill('#ask-q', '別の質問'); console.log('upd', decodeURIComponent(await p.getAttribute('#ask-open','href')).slice(-12));
   await p.reload(); await p.waitForTimeout(1500); console.log('saved', await p.evaluate(() => JSON.parse(localStorage.getItem('ink:cfg')).session));
   await p.screenshot({ path: path.join(OUT, 'smoke.png') });
-  // lasso blank text only (no strokes)
-  
+  // 2本指のピンチ: 指の間にあった紙の位置が、離したあとも指の間に残る。指で書いている途中の線は取りやめる
+  const cdp = await ctx.newCDPSession(p);
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
+  const pinchOut = async (cx, cy, d0, d1) => { await touch('touchStart', [[cx - d0, cy], [cx + d0, cy]]); for (let i = 1; i <= 8; i++) { const d = d0 + (d1 - d0) * i / 8; await touch('touchMove', [[cx - d, cy], [cx + d, cy]]); } await touch('touchEnd', []); await p.waitForTimeout(100); };
+  const under = (x, y) => p.evaluate(([x, y]) => { const r = document.getElementById('page').getBoundingClientRect(), s = r.width / 680; return [(x - r.left) / s, (y - r.top) / s]; }, [x, y]);
+  const before = await under(400, 600), z0 = await p.textContent('#zoomv');
+  await pinchOut(400, 600, 60, 120);
+  const after = await under(400, 600);
+  console.log('pinch', z0, '->', await p.textContent('#zoomv'), 'drift', Math.round(Math.hypot(after[0] - before[0], after[1] - before[1])), 'scrollX', await p.evaluate(() => document.getElementById('wrap').scrollLeft > 0), 'bar', await p.evaluate(() => Math.round(document.getElementById('bar').getBoundingClientRect().width)));
+  await p.screenshot({ path: path.join(OUT, 'pinch.png') });
+  await p.click('#zoomv'); console.log('fit', await p.textContent('#zoomv'));
+  await p.click('#t-pen'); await p.click('#finger'); const n0 = await p.evaluate(() => document.querySelectorAll('#ink path').length);
+  await touch('touchStart', [[300, 500]]); await touch('touchMove', [[320, 510]]); await touch('touchStart', [[300, 500], [420, 520]]); await touch('touchMove', [[290, 500], [440, 520]]); await touch('touchEnd', []); await p.waitForTimeout(100);
+  console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv'));
+
   console.log('errs', errs); await b.close(); srv.close(); process.exit(errs.length ? 1 : 0);
 })();

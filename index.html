@@ -102,7 +102,10 @@ select {
 #hint button { height: 30px; font-weight: 400; color: var(--muted); }
 
 /* ---------- paper ---------- */
-#sizer { position: relative; margin: 0 auto; }
+/* 画面幅より大きく拡大したときは、ここだけ横にスクロールする（ツールバーは動かさない） */
+#wrap { overflow-x: auto; overflow-y: hidden; }
+#sizer { position: relative; margin: 0 auto; transform-origin: 0 0; }
+#sizer.pinching { will-change: transform; }
 #page {
   position: absolute; left: 0; top: 0; width: var(--page-w);
   transform-origin: 0 0;
@@ -209,9 +212,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
     <button id="redo" disabled title="やり直す">進む</button>
   </div>
   <div class="grp">
-    <button id="zout" aria-label="縮小">−</button>
-    <button id="zoomv" title="画面幅に合わせる">100%</button>
-    <button id="zin" aria-label="拡大">＋</button>
+    <button id="zoomv" title="2本指のピンチで拡大・縮小。押すと画面幅に合わせる">100%</button>
   </div>
   <div class="grp">
     <button id="finger" aria-pressed="false" title="オンにすると指でも書ける（スクロールはできなくなる）">指で書く</button>
@@ -222,13 +223,14 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと画面幅に戻ります）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
   <p>はじめに「設定」から GitHub のトークンを入力してください。本（sakai_study の books/nishimori-ja）をこのiPadにダウンロードします。</p>
 </div>
 
+<div id="wrap">
 <div id="sizer">
   <div id="page">
     <article id="doc">
@@ -242,6 +244,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
     <button id="sel-del">削除</button>
     <button id="sel-x">解除</button>
   </div>
+</div>
 </div>
 <nav id="foot" aria-label="章の移動">
   <button id="prev2">‹ 前の章</button>
