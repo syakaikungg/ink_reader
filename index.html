@@ -152,6 +152,21 @@ select {
 #doc .katex-display { margin: 14px 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 #doc .katex { font-size: 1.06em; }
 #doc ul, #doc ol { padding-left: 1.4em; }
+/* Claude の答え: 段落の右余白の「Q」（答え待ちは点線）と、押すと段落の下に開く答え */
+#qs { position: absolute; left: 0; top: 0; width: 100%; height: 0; }
+#qs .qm { position: absolute; left: 641px; margin-top: 3px; min-width: 0; width: 32px; height: 26px; padding: 0; font: 700 12px/1 var(--f-ui);
+  color: var(--paper); background: var(--accent); border: 1px solid var(--accent); border-radius: 13px 13px 13px 4px; }
+#qs .qm.wait { color: var(--accent); background: var(--paper); border-style: dashed; opacity: .55; }
+#qs .qm[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+#doc .ans { font: 15px/1.7 var(--f-ui); background: var(--bg); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 14px; margin: 0 0 18px;
+  -webkit-user-select: text; user-select: text; }
+#doc .ans .a + .a, #doc .ans .wait + .a { border-top: 1px solid var(--rule); margin-top: 10px; padding-top: 10px; }
+#doc .ans p { margin: 0 0 8px; text-align: left; }
+#doc .ans :is(h1, h2, h3, h4) { font: 600 15px/1.5 var(--f-ui); color: var(--fg); margin: 10px 0 6px; }
+#doc .ans blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--muted); }
+#doc .ans .wait { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; }
+#doc .ans .wait button { height: 30px; font-weight: 400; color: var(--muted); border-color: var(--rule); }
+#doc .ans pre { white-space: pre-wrap; font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 
 :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -255,7 +270,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと画面幅に戻ります）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルを開けます。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと画面幅に戻ります）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルを開けます。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -271,6 +286,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
       <p class="src"></p>
     </article>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="qs"></div>
   </div>
   <div id="selmenu" hidden>
     <span id="sel-n"></span>
