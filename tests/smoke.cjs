@@ -21,6 +21,8 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   });
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errs.push(m.text()));
   await p.goto('http://localhost:8767/'); await p.waitForTimeout(500);
+  console.log('empty', await p.isVisible('#empty'));
+  await p.click('#gear');
   await p.fill('#cfg-token', 'test'); await p.click('#cfg-save');
   await p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 60000 });
   await p.waitForTimeout(800);
@@ -56,5 +58,26 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.screenshot({ path: path.join(OUT, 'smoke.png') });
   // lasso blank text only (no strokes)
   
+  // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
+  const MD = process.env.MD_DIR;
+  if (MD) {
+    const puts = putCount;
+    await p.click('#books'); await p.setInputFiles('#shelf .open-file', fs.readdirSync(MD).map((n) => path.join(MD, n)));
+    await p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 10000 });
+    console.log('local', await p.textContent('#stat'), [...await p.$$eval('#chap option', (o) => o.map((x) => x.textContent))]);
+    const ly = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[5]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top; });
+    await p.click('#t-pen'); await line(200, ly + 12); await p.waitForTimeout(500);
+    await p.click('#t-ls'); await p.mouse.move(90, ly - 5); await p.mouse.down(); for (const q of [[700, ly - 5], [700, ly + 40], [90, ly + 40], [90, ly - 3]]) for (let k = 1; k <= 5; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up();
+    await p.click('#sel-ask'); await p.waitForTimeout(200);
+    console.log('local ask: code hidden', await p.isHidden('#ask-code'), 'sess hidden', await p.isHidden('.sess'), 'open', decodeURIComponent(await p.getAttribute('#ask-open', 'href')).slice(0, 60));
+    await p.click('#ask button[value=cancel]');
+    await p.reload(); await p.waitForTimeout(1500);
+    console.log('local after reload', await p.textContent('#chap option'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length), 'puts', putCount - puts);
+    await p.click('#books'); console.log('shelf', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent + (x.getAttribute('aria-current') === 'true' ? '*' : ''))));
+    await p.click('#shelf-list li:first-child .open'); await p.waitForTimeout(1000);
+    console.log('back to gh', await p.textContent('#chap option'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length));
+    await p.click('#books'); await p.click('#shelf-list li:nth-child(2) .del'); await p.click('#shelf-list li:nth-child(2) .del'); await p.waitForTimeout(300);
+    console.log('after delete', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent)));
+  }
   console.log('errs', errs); await b.close(); srv.close(); process.exit(errs.length ? 1 : 0);
 })();

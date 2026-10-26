@@ -153,8 +153,8 @@ body { font-size: 14px; }
 img { max-width: 100%; }
 [hidden] { display: none !important; }
 #gear { font-weight: 400; }
-dialog#cfg, dialog#ask { border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); color: var(--fg); max-width: min(520px, calc(100vw - 32px)); padding: 20px 22px; }
-dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
+dialog#cfg, dialog#ask, dialog#shelf { border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); color: var(--fg); max-width: min(520px, calc(100vw - 32px)); padding: 20px 22px; }
+dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop { background: rgba(10,14,22,.35); }
 #cfg h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
 #cfg label { display: grid; gap: 4px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
 #cfg input { font: 14px/1.4 ui-monospace, Menlo, monospace; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; }
@@ -179,11 +179,26 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
 #ask .row button.primary, #ask .row .btn.primary { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 #sel-ask { color: var(--accent); }
 #empty { max-width: 560px; margin: 40px auto; font-size: 15px; line-height: 1.8; color: var(--muted); }
+#empty:not([hidden]) ~ #sizer, #empty:not([hidden]) ~ #foot { display: none; }
+#shelf { width: min(480px, calc(100vw - 32px)); }
+#shelf h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
+#shelf ul { list-style: none; margin: 0 0 12px; padding: 0; }
+#shelf li { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--rule); }
+#shelf li .open { flex: 1; min-width: 0; text-align: left; font-weight: 400; font-size: 15px; height: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shelf li .open[aria-current="true"] { color: var(--accent); font-weight: 600; }
+#shelf li .del { color: var(--muted); font-weight: 400; }
+#shelf li .del.arm { color: var(--ink-r); }
+#shelf p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
+#shelf .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+#shelf .row button { border-color: var(--rule); }
+.pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
+#empty .pick { font-size: 15px; height: 44px; padding: 0 16px; }
 </style>
 </head>
 <body>
 <div id="bar" role="toolbar" aria-label="書き込みツール">
   <div class="grp">
+    <button id="books" title="本を選ぶ・ファイルから開く">本</button>
     <button id="prev" aria-label="前の章">‹</button>
     <select id="chap" aria-label="章を選ぶ"><!--CHAPTERS--></select>
     <button id="next" aria-label="次の章">›</button>
@@ -222,17 +237,19 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます。書き込みは段落ごとにiPadに保存され、通信できるときにGitHub（sakai_study）へ送られます。本と書き込みはiPadに保存されるので、通信なしでも開けます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール・ピンチ拡大。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルを開けます。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
-  <p>はじめに「設定」から GitHub のトークンを入力してください。本（sakai_study の books/nishimori-ja）をこのiPadにダウンロードします。</p>
+  <p>読みたい md ファイルを選んでください（いくつか選ぶと、1ファイルが1章になります）。本と書き込みはこのiPadの中に保存されます。</p>
+  <p><label class="pick">ファイルから開く<input type="file" class="open-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden></label></p>
+  <p>GitHub のリポジトリにある本と同期したいときは「設定」からトークンを入れてください。</p>
 </div>
 
 <div id="sizer">
   <div id="page">
     <article id="doc">
-      <p class="src">H. Nishimori, <i>Statistical Physics of Spin Glasses and Information Processing</i>（DeepSeekによる和訳）</p>
+      <p class="src"></p>
     </article>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
@@ -262,6 +279,18 @@ dialog#cfg::backdrop, dialog#ask::backdrop { background: rgba(10,14,22,.35); }
       <button type="button" id="cfg-sync">本を再ダウンロード</button>
       <button value="cancel">閉じる</button>
       <button type="button" class="primary" id="cfg-save">保存して接続</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="shelf">
+  <form method="dialog">
+    <h2>本</h2>
+    <ul id="shelf-list"></ul>
+    <p id="shelf-msg" aria-live="polite">md ファイルをいくつか選ぶと、1ファイルが1章の本になります。</p>
+    <div class="row">
+      <button value="cancel">閉じる</button>
+      <label class="pick">ファイルから開く<input type="file" class="open-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden></label>
     </div>
   </form>
 </dialog>
