@@ -989,7 +989,7 @@
     toc.showModal();
     const cur = toc.querySelector('.cur'); if (cur) cur.scrollIntoView({ block: 'center' });
   };
-  // 段落を指で長押しすると、しおりを付ける・外す（「指で書く」がオフのとき）
+  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる（「指で書く」がオフのとき）
   let lp = null;
   const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
   page.addEventListener('touchstart', (e) => {
@@ -1000,7 +1000,14 @@
     lp = { x, y, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
   }, { passive: true });
   page.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (lp && Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 8) lpStop(); }, { passive: true });
-  page.addEventListener('touchend', lpStop);
+  page.addEventListener('touchend', () => {
+    if (!lp) return;
+    const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale;
+    lpStop();
+    // 印は紙の左余白、段落の上端あたりにある。指で押しやすいよう、余白全体と上端から 36px までを当たりにする
+    const b = blockAt(y);
+    if (x < 48 && blocks[b] && blocks[b].classList.contains('bm') && y - tops[b] < 36) toggleBm(b);
+  });
   page.addEventListener('touchcancel', lpStop);
 
   // ---------- 設定画面 ----------

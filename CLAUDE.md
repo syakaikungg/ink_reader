@@ -12,7 +12,7 @@ iPad と Apple Pencil で、md（数式つき）の本に手書きで書き込�
 - 端末側は IndexedDB に本・図・書き込みを保存し、未送信の段落を貯めてオンライン時に送る。409/422 のときは取り込んでからまとめ直す（`app.js` の `pushChapter` / `merge`）。
 - 書き込みは「`#doc` の何番目の子要素（段落）か」と、その段落の上端からの座標×10で保存する。`render.js` の段落の分け方を変えると、既存の書き込みがずれる。出力を変えたら `renderMarkdown.version` を上げる（端末内の HTML キャッシュを作り直すため）。
 - 紙は幅 680px 固定で、拡大は CSS transform。2本指のピンチ中は `#sizer` を transform で伸ばすだけにし、指を離したときに拡大率を決めてレイアウトし直す（Safari の画面全体の拡大は止めている）。線は perfect-freehand で SVG にする。描画は requestAnimationFrame にまとめ、getCoalescedEvents / getPredictedEvents を使う。
-- 機能：ペン・マーカー・消しゴム・ぐちゃぐちゃ消し・投げ縄（移動・色・太さ・削除）・戻す/進む・章の切替（章の名前を押すと目次・しおり。しおりは段落を指で長押しで付け外しし、本ごとに端末の localStorage に保存）・「Claudeに聞く」。「Claudeに聞く」では、囲んだ段落の本文（数式は TeX に戻す）と手書きを、Claude アプリか sakai_study の Claude Code セッションに渡す。いつものセッションの URL は端末に保存する。
+- 機能：ペン・マーカー・消しゴム・ぐちゃぐちゃ消し・投げ縄（移動・色・太さ・削除）・戻す/進む・章の切替（章の名前を押すと目次・しおり。しおりは段落を指で長押しで付け外しし（印のタップでも外れる）、本ごとに端末の localStorage に保存）・「Claudeに聞く」。「Claudeに聞く」では、囲んだ段落の本文（数式は TeX に戻す）と手書きを、Claude アプリか sakai_study の Claude Code セッションに渡す。いつものセッションの URL は端末に保存する。
 - 「sakai_studyで聞く」の質問文には質問ID が付く。sakai_study のセッションは答えを `books/<本>/answers/<章>.md` に `<!-- ink-answer id=<質問ID> b=<段落番号,…> -->` の行で区切って追記し、アプリは章を開くとき・アプリに戻ったときにそれを読んで、段落の右余白の「Q」から答えを開く（`app.js` の「Claude の答え」）。答え待ちの質問は端末だけに保存する。
 - sakai_study 側では、`CLAUDE.md` の「Ink Reader からの質問」と `scripts/ink_view.py`（手書きを PNG にする）で質問に答える。
 
