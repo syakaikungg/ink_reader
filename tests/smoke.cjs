@@ -54,7 +54,23 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('btn', await p.textContent('#ask-code'), 'new hidden', await p.isHidden('#ask-new'));
   console.log('2', await go('#ask-code'), await p.textContent('#ask-msg'));
   console.log('3', await go('#ask-new')); await p.fill('#ask-q', '別の質問'); console.log('upd', decodeURIComponent(await p.getAttribute('#ask-open','href')).slice(-12));
+  const qid = decodeURIComponent(await p.getAttribute('#ask-new', 'href')).match(/質問ID:[+ ](\w+)/)[1];
   await p.reload(); await p.waitForTimeout(1500); console.log('saved', await p.evaluate(() => JSON.parse(localStorage.getItem('ink:cfg')).session));
+  // Claude の答え: 送った質問は薄い「Q」→ answers/<章>.md に答えが入ると濃い「Q」→ 押すと段落の下に開き、下の書き込みも一緒に下がる
+  const marks = () => p.$$eval('#qs .qm', (m) => m.map((x) => x.textContent + (x.classList.contains('wait') ? '(待ち)' : '') + '@' + x.dataset.b));
+  console.log('ask marks', await marks());
+  const qb = await p.evaluate(() => +document.querySelector('#qs .qm').dataset.b);
+  remote['books/nishimori/answers/ch1.md'] = { sha: 'a1', content: Buffer.from(`# ch1 の答え\n\n<!-- ink-answer id=old b=${qb} -->\n> 質問: 前の質問\n\n前の答え\n\n<!-- ink-answer id=${qid} b=${qb},${qb + 1} -->\n> 質問: この式の意味は？\n\n$E=mc^2$ のことです。\n\n$$\\int_0^1 x\\,dx = \\tfrac12$$\n`) };
+  await p.reload(); await p.waitForTimeout(1500);
+  console.log('answer marks', await marks());
+  const lastY = () => p.evaluate(() => { const l = [...document.querySelectorAll('#ink path:not(.lasso)')].pop(); return l ? Math.round(l.getBoundingClientRect().top) : null; });
+  const n0b = await p.evaluate(() => document.querySelectorAll('#doc > *').length), y0 = await lastY();
+  await p.evaluate(() => document.querySelector('#qs .qm').scrollIntoView({ block: 'center' }));
+  await p.click('#qs .qm'); await p.waitForTimeout(300);
+  console.log('open', await p.$$eval('#doc .ans .a', (a) => a.map((x) => x.textContent.slice(0, 30))), 'katex', await p.$$eval('#doc .ans .katex', (k) => k.length));
+  await p.screenshot({ path: path.join(OUT, 'answer.png') });
+  await p.click('#qs .qm'); await p.waitForTimeout(300);
+  console.log('closed', await p.$$eval('#doc .ans', (a) => a.length), 'children', n0b, '->', await p.evaluate(() => document.querySelectorAll('#doc > *').length));
   await p.screenshot({ path: path.join(OUT, 'smoke.png') });
   // 2本指のピンチ: 指の間にあった紙の位置が、離したあとも指の間に残る。指で書いている途中の線は取りやめる
   const cdp = await ctx.newCDPSession(p);
