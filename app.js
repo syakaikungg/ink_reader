@@ -331,7 +331,7 @@
     page.style.transform = `scale(${scale})`;
     zoomNow.textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
-    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); placeMarks(); }
+    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); placeMarks(); placeBm(); }
     if (sel.length) showSel();
   }
   function fitScale() {
@@ -948,15 +948,30 @@
   // ---------- 目次・しおり ----------
   // しおりは本ごとに端末へ保存する: [{ c: 章, b: 段落の番号, t: 段落の書き出し }]
   const toc = $('#toc');
+  // 目次の外（暗くなった部分）を触ったら閉じる
+  toc.addEventListener('click', (e) => {
+    if (e.target !== toc) return;
+    const r = toc.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) toc.close();
+  });
   const loadBm = () => { try { return JSON.parse(store.get(memKey('bm')) || '[]'); } catch { return []; } };
   const blockTitle = (el) => blockMd(el).replace(/^#+ /, '').replace(/\$+/g, '').replace(/\s+/g, ' ').slice(0, 60);
-  function markBm() { for (const m of loadBm()) if (m.c === CH && blocks[m.b]) blocks[m.b].classList.add('bm'); }
+  const bmsEl = $('#bms');
+  function markBm() { for (const m of loadBm()) if (m.c === CH && blocks[m.b]) blocks[m.b].classList.add('bm'); showBm(); }
+  function showBm() {
+    bmsEl.replaceChildren(...blocks.flatMap((el, b) => {
+      if (!el.classList.contains('bm')) return [];
+      const i = document.createElement('i'); i.dataset.b = b; return [i];
+    }));
+    placeBm();
+  }
+  function placeBm() { for (const m of bmsEl.children) m.style.top = (tops[+m.dataset.b] || 0) + 'px'; }
   function toggleBm(b) {
     if (!CH || !blocks[b]) return;
     const list = loadBm(), i = list.findIndex((m) => m.c === CH && m.b === b);
     if (i >= 0) list.splice(i, 1); else list.push({ c: CH, b, t: blockTitle(blocks[b]) });
     store.set(memKey('bm'), JSON.stringify(list));
-    blocks[b].classList.toggle('bm', i < 0);
+    blocks[b].classList.toggle('bm', i < 0); showBm();
     stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
   }
   async function goTo(c, b, flash) {
