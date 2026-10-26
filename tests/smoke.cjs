@@ -54,22 +54,39 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('btn', await p.textContent('#ask-code'), 'new hidden', await p.isHidden('#ask-new'));
   console.log('2', await go('#ask-code'), await p.textContent('#ask-msg'));
   console.log('3', await go('#ask-new')); await p.fill('#ask-q', '別の質問'); console.log('upd', decodeURIComponent(await p.getAttribute('#ask-open','href')).slice(-12));
+  const qid = decodeURIComponent(await p.getAttribute('#ask-new', 'href')).match(/質問ID:[+ ](\w+)/)[1];
   await p.reload(); await p.waitForTimeout(1500); console.log('saved', await p.evaluate(() => JSON.parse(localStorage.getItem('ink:cfg')).session));
+  // Claude の答え: 送った質問は薄い「Q」→ answers/<章>.md に答えが入ると濃い「Q」→ 押すと段落の下に開き、下の書き込みも一緒に下がる
+  const marks = () => p.$$eval('#qs .qm', (m) => m.map((x) => x.textContent + (x.classList.contains('wait') ? '(待ち)' : '') + '@' + x.dataset.b));
+  console.log('ask marks', await marks());
+  const qb = await p.evaluate(() => +document.querySelector('#qs .qm').dataset.b);
+  remote['books/nishimori/answers/ch1.md'] = { sha: 'a1', content: Buffer.from(`# ch1 の答え\n\n<!-- ink-answer id=old b=${qb} -->\n> 質問: 前の質問\n\n前の答え\n\n<!-- ink-answer id=${qid} b=${qb},${qb + 1} -->\n> 質問: この式の意味は？\n\n$E=mc^2$ のことです。\n\n$$\\int_0^1 x\\,dx = \\tfrac12$$\n`) };
+  await p.reload(); await p.waitForTimeout(1500);
+  console.log('answer marks', await marks());
+  const lastY = () => p.evaluate(() => { const l = [...document.querySelectorAll('#ink path:not(.lasso)')].pop(); return l ? Math.round(l.getBoundingClientRect().top) : null; });
+  const n0b = await p.evaluate(() => document.querySelectorAll('#doc > *').length), y0 = await lastY();
+  await p.evaluate(() => document.querySelector('#qs .qm').scrollIntoView({ block: 'center' }));
+  await p.click('#qs .qm'); await p.waitForTimeout(300);
+  console.log('open', await p.$$eval('#doc .ans .a', (a) => a.map((x) => x.textContent.slice(0, 30))), 'katex', await p.$$eval('#doc .ans .katex', (k) => k.length));
+  await p.screenshot({ path: path.join(OUT, 'answer.png') });
+  await p.click('#qs .qm'); await p.waitForTimeout(300);
+  console.log('closed', await p.$$eval('#doc .ans', (a) => a.length), 'children', n0b, '->', await p.evaluate(() => document.querySelectorAll('#doc > *').length));
   await p.screenshot({ path: path.join(OUT, 'smoke.png') });
   // 2本指のピンチ: 指の間にあった紙の位置が、離したあとも指の間に残る。指で書いている途中の線は取りやめる
   const cdp = await ctx.newCDPSession(p);
   const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
   const pinchOut = async (cx, cy, d0, d1) => { await touch('touchStart', [[cx - d0, cy], [cx + d0, cy]]); for (let i = 1; i <= 8; i++) { const d = d0 + (d1 - d0) * i / 8; await touch('touchMove', [[cx - d, cy], [cx + d, cy]]); } await touch('touchEnd', []); await p.waitForTimeout(100); };
   const under = (x, y) => p.evaluate(([x, y]) => { const r = document.getElementById('page').getBoundingClientRect(), s = r.width / 680; return [(x - r.left) / s, (y - r.top) / s]; }, [x, y]);
-  const before = await under(400, 600), z0 = await p.textContent('#zoomv');
+  const before = await under(400, 600), z0 = await p.textContent('#zoomv option:first-child');
   await pinchOut(400, 600, 60, 120);
   const after = await under(400, 600);
-  console.log('pinch', z0, '->', await p.textContent('#zoomv'), 'drift', Math.round(Math.hypot(after[0] - before[0], after[1] - before[1])), 'scrollX', await p.evaluate(() => document.getElementById('wrap').scrollLeft > 0), 'bar', await p.evaluate(() => Math.round(document.getElementById('bar').getBoundingClientRect().width)));
+  console.log('pinch', z0, '->', await p.textContent('#zoomv option:first-child'), 'drift', Math.round(Math.hypot(after[0] - before[0], after[1] - before[1])), 'scrollX', await p.evaluate(() => document.getElementById('wrap').scrollLeft > 0), 'bar', await p.evaluate(() => Math.round(document.getElementById('bar').getBoundingClientRect().width)));
   await p.screenshot({ path: path.join(OUT, 'pinch.png') });
-  await p.click('#zoomv'); console.log('fit', await p.textContent('#zoomv'));
+  await p.selectOption('#zoomv', '1.5'); console.log('pick 150', await p.textContent('#zoomv option:first-child'), await p.inputValue('#zoomv'));
+  await p.selectOption('#zoomv', 'fit'); console.log('fit', await p.textContent('#zoomv option:first-child'));
   await p.click('#t-pen'); await p.click('#finger'); const n0 = await p.evaluate(() => document.querySelectorAll('#ink path').length);
   await touch('touchStart', [[300, 500]]); await touch('touchMove', [[320, 510]]); await touch('touchStart', [[300, 500], [420, 520]]); await touch('touchMove', [[290, 500], [440, 520]]); await touch('touchEnd', []); await p.waitForTimeout(100);
-  console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv'));
+  console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv option:first-child'));
 
   // 目次・しおり: 段落を指で長押し → 印が付く → 目次に並ぶ → 別の章から押すと戻ってくる
   await p.click('#finger');
@@ -85,7 +102,7 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   const hy = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().top + 10; });
   await touch('touchStart', [[400, hy]]); await p.waitForTimeout(100); await touch('touchEnd', []);
   console.log('tap text (keeps)', await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
-  await p.click('#zoomv'); await p.evaluate(() => document.querySelector('#doc > .bm').scrollIntoView({ block: 'center' }));
+  await p.selectOption('#zoomv', 'fit'); await p.evaluate(() => document.querySelector('#doc > .bm').scrollIntoView({ block: 'center' }));
   const hy2 = await p.evaluate(() => document.querySelector('#doc > .bm').getBoundingClientRect().top + 10);
   const mx = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().left - 24; });
   await touch('touchStart', [[mx, hy2]]); await p.waitForTimeout(100); await touch('touchEnd', []);
