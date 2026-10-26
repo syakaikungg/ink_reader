@@ -1,5 +1,6 @@
 // Ink Reader: md の本を章ごとに表示し、Apple Pencil で書き込む。
-// 本文と書き込みは非公開リポジトリ（既定 syakaikungg/sakai_study）に置き、iPad の IndexedDB にも保存してオフラインで使う
+// 本は iPad の「ファイル」から開くか、非公開リポジトリ（既定 syakaikungg/sakai_study）から取る。
+// どちらも本・書き込みを IndexedDB に保存してオフラインで使い、GitHub の本だけ書き込みを GitHub と同期する
 (() => {
   const W = 680;
   const PREF = 'ink';
@@ -122,7 +123,10 @@
   let cfg = { ...DEF };
   try { cfg = { ...DEF, ...JSON.parse(store.get(PREF + ':cfg') || '{}') }; } catch {}
   const online = () => navigator.onLine !== false;
-  const canSync = () => !!cfg.token && online();
+  // 開いている本: 'gh'（設定の GitHub の本）か 'local:<id>'（ファイルから開いた本）
+  let src = store.get(PREF + ':book') || 'gh';
+  const isLocal = () => src !== 'gh';
+  const canSync = () => !isLocal() && !!cfg.token && online();
 
   // ---------- GitHub ----------
   const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
@@ -141,7 +145,9 @@
 
   // ---------- 本のダウンロード（端末に保存） ----------
   let book = null;
-  const bookKey = () => cfg.repo + '@' + cfg.branch + ':' + cfg.book;
+  const bookKey = () => isLocal() ? src : cfg.repo + '@' + cfg.branch + ':' + cfg.book;
+  // 章の位置や最後に開いた章は本ごとに覚える（GitHub の本は前からのキーのまま）
+  const memKey = (k) => PREF + ':' + k + (isLocal() ? ':' + src : '');
   async function loadBook() { book = await kv.get('book:' + bookKey()); return book; }
   // 変わったファイルだけ取り直す。図は一度取れば取り直さない
   async function syncBook(force) {
@@ -205,13 +211,13 @@
   let saveT = 0;
   function persist() {
     clearTimeout(saveT);
-    const id = CH, st = cs;
+    const key = inkKey(CH), st = cs;
     st.blocks = serialize();
-    saveT = setTimeout(() => kv.set(inkKey(id), { blocks: st.blocks, sha: st.sha, pending: [...st.pending] }).catch(() => {}), 150);
+    saveT = setTimeout(() => kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] }).catch(() => {}), 150);
   }
   function touch(list) {
     if (!cs) return;
-    for (const s of list) cs.pending.add(s.b);
+    if (!isLocal()) for (const s of list) cs.pending.add(s.b);
     persist(); schedulePush(); showPending();
   }
   function showPending() {
@@ -236,7 +242,8 @@
   let pushing = false;
   async function pushChapter(id) {
     if (pushing || !canSync()) { showPending(); return; }
-    const st = id === CH ? cs : await kv.get(inkKey(id)).then((v) => v && { ...v, pending: new Set(v.pending) });
+    const key = inkKey(id);   // 送信中に本を切り替えても、元の本に保存する
+    const st = id === CH ? cs : await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
     if (!st || !st.pending.size) return;
     pushing = true;
     try {
@@ -259,7 +266,7 @@
           if (id === CH) { showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist(); }
         }
       }
-      await kv.set(inkKey(id), { blocks: st.blocks, sha: st.sha, pending: [...st.pending] });
+      await kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] });
       if (id === CH && !st.pending.size) stat.textContent = 'GitHubに保存しました';
     } catch (e) {
       stat.textContent = e.status === 401 || e.status === 403 ? 'GitHubに保存できません（トークンを確認してください）' : 'GitHubに送れませんでした（iPadには保存済み）';
@@ -679,7 +686,13 @@
   // sakai_study のリポジトリで Claude Code のセッションを開く。本文と書き込みはリポジトリにあるので、場所を伝える
   // いつものセッション（claude.ai/code/<id>）があればそれを開いて質問文を貼ってもらう。なければ新しいセッションを質問文つきで開く
   const sessUrl = () => { const v = (cfg.session || '').trim(), m = v.match(/\/code\/([\w-]+)/); const id = m ? m[1] : /^[\w-]+$/.test(v) ? v : ''; return id && id !== 'new' ? 'https://claude.ai/code/' + id : ''; };
-  function syncSess() { $('#ask-code').textContent = sessUrl() ? 'いつものセッションで聞く' : 'sakai_studyで聞く（新しいセッション）'; $('#ask-new').hidden = !sessUrl(); }
+  function syncSess() {
+    $('#ask-code').textContent = sessUrl() ? 'いつものセッションで聞く' : 'sakai_studyで聞く（新しいセッション）';
+    $('#ask-new').hidden = !sessUrl() || isLocal();
+    // ファイルから開いた本はリポジトリにないので、Claude アプリに渡す方だけ
+    $('#ask-code').hidden = $('.sess').hidden = isLocal();
+    $('#ask-open').classList.toggle('primary', isLocal());
+  }
   $('#ask-sess').onchange = () => { cfg.session = $('#ask-sess').value.trim(); store.set(PREF + ':cfg', JSON.stringify(cfg)); syncSess(); links(); };
   function codeText() {
     const ch = book.chapters.find((c) => c.id === CH);
@@ -799,7 +812,7 @@
     if (!ids.includes(id)) id = ids.includes('ch1') ? 'ch1' : ids[0];
     const my = opening = {};
     chapSel.value = id; syncNav(id);
-    if (CH) store.set(PREF + ':pos:' + CH, String(scrollY));
+    if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs && cs.pending.size) pushChapter(CH);
     doc.classList.add('loading');
     let html = await chapterHtml(id);
@@ -812,13 +825,13 @@
     strokes = []; undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
     cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []) };
-    store.set(PREF + ':chapter', id);
+    store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
     initBlocks(); layout();
     showBlocks(cs.blocks);
     doc.classList.remove('loading');
-    scrollTo(0, restore ? +(store.get(PREF + ':pos:' + id) || 0) : 0);
+    scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
     if (document.fonts) document.fonts.ready.then(layout);
     showPending();
@@ -833,7 +846,7 @@
   chapSel.onchange = () => openChapter(chapSel.value, true);
   $('#prev').onclick = $('#prev2').onclick = () => step(-1);
   $('#next').onclick = $('#next2').onclick = () => step(1);
-  addEventListener('pagehide', () => { if (CH) store.set(PREF + ':pos:' + CH, String(scrollY)); });
+  addEventListener('pagehide', () => { if (CH) store.set(memKey('pos:' + CH), String(scrollY)); });
 
   // ---------- 設定画面 ----------
   const dlg = $('#cfg'), msg = $('#cfg-msg');
@@ -847,10 +860,11 @@
     msg.textContent = '接続中…';
     try {
       if (!online()) throw new Error('通信できません');
+      if (isLocal()) await switchBook('gh');
       await syncBook(force);
       msg.textContent = '本をダウンロードしました';
       fillChapters(); $('#empty').hidden = true; chapSel.disabled = false;
-      await openChapter(CH && ids.includes(CH) ? CH : (store.get(PREF + ':chapter') || 'ch1'), true);
+      await openChapter(CH && ids.includes(CH) ? CH : (store.get(memKey('chapter')) || 'ch1'), true);
       pushAll();
       return true;
     } catch (e) {
@@ -866,18 +880,84 @@
   };
   $('#cfg-sync').onclick = () => connect(true);
 
+  // ---------- 本（ファイルから開く・切り替え） ----------
+  // ファイルから開いた本: kv 'book:local:<id>' = { title, local:true, chapters:[{id,label,file}] }、本文は 'md:local:<id>:<章>'
+  // 一覧は kv 'books' = [{ id, title }]（新しい順）
+  function setSrc(v) { src = v; store.set(PREF + ':book', v); }
+  function leaveBook() {   // 今の章を保存してから本を切り替える
+    if (CH) store.set(memKey('pos:' + CH), String(scrollY));
+    if (cs) persist();
+    if (cs && cs.pending.size) pushChapter(CH);
+    CH = null; cs = null;
+  }
+  async function switchBook(v) {
+    leaveBook(); setSrc(v);
+    if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); layout(); return; }
+    $('#empty').hidden = true; chapSel.disabled = false;
+    fillChapters();
+    await openChapter(store.get(memKey('chapter')) || ids[0], true);
+    if (!isLocal()) { pushAll(); if (canSync()) syncBook(false).catch(() => {}); }
+  }
+  const mdTitle = (md, name) => ((md.match(/^#{1,3}\s+(.+)$/m) || [])[1] || name.replace(/\.[^.]+$/, '')).replace(/[*_`$]/g, '').trim();
+  async function openFiles(files) {
+    files = [...files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
+    if (!files.length) return;
+    const id = 'local:' + newId(), chapters = [];
+    for (const [i, f] of files.entries()) {
+      const md = await f.text(), c = { id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name };
+      await kv.set('md:' + id + ':' + c.id, { sha: f.name + ':' + f.size + ':' + f.lastModified, md });
+      chapters.push(c);
+    }
+    const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : '');
+    await kv.set('book:' + id, { title, local: true, chapters, images: {} });
+    await kv.set('books', [{ id, title }, ...((await kv.get('books')) || [])]);
+    shelf.close();
+    await switchBook(id);
+    stat.textContent = `「${title}」をこのiPadに保存しました`;
+  }
+  for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
+  const shelf = $('#shelf');
+  async function showShelf() {
+    const list = (await kv.get('books')) || [];
+    const gh = cfg.token || await kv.get('book:' + cfg.repo + '@' + cfg.branch + ':' + cfg.book);
+    const rows = (gh ? [{ id: 'gh', title: 'GitHub: ' + cfg.book.split('/').pop() }] : []).concat(list);
+    $('#shelf-list').replaceChildren(...rows.map((r) => {
+      const li = document.createElement('li'), b = document.createElement('button');
+      b.type = 'button'; b.className = 'open'; b.textContent = r.title; b.setAttribute('aria-current', String(r.id === src));
+      b.onclick = () => { shelf.close(); if (r.id !== src || !CH) switchBook(r.id); };
+      li.append(b);
+      if (r.id !== 'gh') {   // ファイルから開いた本だけ消せる（2回押す）
+        const d = document.createElement('button'); d.type = 'button'; d.className = 'del'; d.textContent = '削除';
+        d.onclick = async () => {
+          if (!d.classList.contains('arm')) { d.classList.add('arm'); d.textContent = 'もう一度押すと削除'; return; }
+          const meta = await kv.get('book:' + r.id);
+          for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + r.id + ':' + c.id);
+          await kv.del('book:' + r.id);
+          await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== r.id));
+          if (r.id === src) { CH = null; cs = null; await switchBook('gh'); }
+          showShelf();
+        };
+        li.append(d);
+      }
+      return li;
+    }));
+    if (!shelf.open) shelf.showModal();
+  }
+  $('#books').onclick = showShelf;
+
   // ---------- boot ----------
   const z = store.get(PREF + ':zoom');
   scale = z && z !== 'fit' ? +z : fitScale();
   zoomMode = z && z !== 'fit' ? 'manual' : 'fit';
   layout();
   (async () => {
+    if (isLocal() && !await loadBook()) setSrc('gh');
     await loadBook();
     if (!book && canSync()) { try { await syncBook(); } catch (e) { stat.textContent = '本をダウンロードできませんでした: ' + (e.message || ''); } }
-    if (!book) { $('#empty').hidden = false; chapSel.disabled = true; if (!cfg.token) openCfg(); return; }
+    if (!book) { $('#empty').hidden = false; chapSel.disabled = true; return; }
     fillChapters();
     const fromHash = location.hash.slice(1);
-    await openChapter(ids.includes(fromHash) ? fromHash : (store.get(PREF + ':chapter') || 'ch1'), true);
+    await openChapter(ids.includes(fromHash) ? fromHash : (store.get(memKey('chapter')) || 'ch1'), true);
     pushAll();
     // 起動のたびに本の更新を確認（変わった章だけ取り直す）
     if (canSync()) syncBook(false).then(() => { stat.textContent = ''; }).catch(() => {});
