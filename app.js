@@ -118,7 +118,7 @@
   }
 
   // ---------- 設定 ----------
-  const DEF = { token: '', repo: 'syakaikungg/sakai_study', branch: 'master', book: 'books/nishimori' };
+  const DEF = { token: '', repo: 'syakaikungg/sakai_study', branch: 'master', book: 'books/nishimori', session: '' };
   let cfg = { ...DEF };
   try { cfg = { ...DEF, ...JSON.parse(store.get(PREF + ':cfg') || '{}') }; } catch {}
   const online = () => navigator.onLine !== false;
@@ -608,32 +608,51 @@
     $('#ask-img').hidden = !askImg;
     if (askImg) $('#ask-img').src = askImg.toDataURL('image/png');
     $('#ask-msg').textContent = '';
+    $('#ask-sess').value = cfg.session || ''; syncSess();
     $('#ask').showModal();
+    links();
   };
   async function copy(t) { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } }
+  // Claude を開くボタンは本物のリンク（新しいタブを使うと、iPad の Chrome に空のタブが残るため）。
+  // href は質問を書き換えるたびに作り直し、押したときは質問文のコピーだけをする
+  const newUrl = () => 'https://claude.ai/code/new?' + new URLSearchParams({ q: codeText(), repo: cfg.repo, branch: cfg.branch });
+  function links() {
+    if (!picked.length) return;
+    $('#ask-open').href = 'https://claude.ai/new?q=' + encodeURIComponent(askText(false));
+    $('#ask-code').href = sessUrl() || newUrl();
+    $('#ask-new').href = newUrl();
+  }
+  $('#ask-q').addEventListener('input', links);
   $('#ask-open').onclick = async () => {
-    const t = askText(false);
-    const w = open('https://claude.ai/new?q=' + encodeURIComponent(t), '_blank');
-    const ok = await copy(t);
-    $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (askImg ? '手書きの画像も送るときは「共有」を使ってください。' : '') + (w ? '' : ' Claude を開けませんでした。');
+    const ok = await copy(askText(false));
+    $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (askImg ? '手書きの画像も送るときは「共有」を使ってください。' : '');
   };
   // sakai_study のリポジトリで Claude Code のセッションを開く。本文と書き込みはリポジトリにあるので、場所を伝える
-  $('#ask-code').onclick = async () => {
+  // いつものセッション（claude.ai/code/<id>）があればそれを開いて質問文を貼ってもらう。なければ新しいセッションを質問文つきで開く
+  const sessUrl = () => { const v = (cfg.session || '').trim(), m = v.match(/\/code\/([\w-]+)/); const id = m ? m[1] : /^[\w-]+$/.test(v) ? v : ''; return id && id !== 'new' ? 'https://claude.ai/code/' + id : ''; };
+  function syncSess() { $('#ask-code').textContent = sessUrl() ? 'いつものセッションで聞く' : 'sakai_studyで聞く（新しいセッション）'; $('#ask-new').hidden = !sessUrl(); }
+  $('#ask-sess').onchange = () => { cfg.session = $('#ask-sess').value.trim(); store.set(PREF + ':cfg', JSON.stringify(cfg)); syncSess(); links(); };
+  function codeText() {
     const ch = book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
     const hasInk = strokes.some((s) => picked.includes(s.b));
-    const t = [
-      `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照）。`,
+    return [
+      `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照。先に git pull して最新の書き込みを取り込んでください）。`,
       `本: ${cfg.book}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${cfg.book}/${ch ? ch.file : ''}`,
       `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${cfg.book} ${CH} ${picked.join(' ')}）` : ''),
       '', '該当箇所:', '"""', passage(), '"""', '',
       `質問: ${q || 'この箇所を分かりやすく説明してください'}`,
     ].join('\n');
-    const w = open('https://claude.ai/code/new?' + new URLSearchParams({ q: t, repo: cfg.repo, branch: cfg.branch }), '_blank');
+  }
+  async function askCode(fresh) {
+    const t = codeText(), url = fresh ? '' : sessUrl();
     if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
     const ok = await copy(t);
-    $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (w ? '' : 'Claude を開けませんでした。') + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
-  };
+    $('#ask-msg').textContent = (url ? (ok ? '質問文をコピーしました。セッションに貼り付けて送ってください。' : 'コピーできませんでした。') : (ok ? '質問文をコピーしました。' : '') + '開いたセッションのURLを下に入れておくと、次から同じセッションで聞けます。')
+      + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
+  }
+  $('#ask-code').onclick = () => askCode(false);
+  $('#ask-new').onclick = () => askCode(true);
   $('#ask-share').onclick = async () => {
     const t = askText(!!askImg);
     try {
@@ -783,7 +802,7 @@
   }
   $('#cfg-save').onclick = async () => {
     cfg = { token: $('#cfg-token').value.trim(), repo: $('#cfg-repo').value.trim() || DEF.repo,
-      branch: $('#cfg-branch').value.trim() || DEF.branch, book: $('#cfg-book').value.trim().replace(/\/+$/, '') || DEF.book };
+      branch: $('#cfg-branch').value.trim() || DEF.branch, session: cfg.session, book: $('#cfg-book').value.trim().replace(/\/+$/, '') || DEF.book };
     store.set(PREF + ':cfg', JSON.stringify(cfg));
     if (await connect(false)) setTimeout(() => dlg.close(), 600);
   };
