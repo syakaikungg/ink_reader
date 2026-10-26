@@ -451,16 +451,8 @@
     if (hit.length) { removeAll(hit); erased.push(...hit); }
   }
   // 往復の多い線（ぐちゃぐちゃ）なら、その範囲にほぼ収まる既存の線を返す。該当なしなら null
-  function scribbleTargets(s) {
-    const pts = s.pts;
-    if (pts.length < 12) return null;
-    const ty = top(s);
-    const [a, b0, c, d0] = s.bbox, b = b0 + ty, d = d0 + ty, w = c - a, h = d - b;
-    if (Math.max(w, h) < 8) return null;
-    let len = 0;
-    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-    if (len < 3.5 * Math.max(w, h)) return null;
-    const ax = w >= h ? 0 : 1, minRun = Math.max(w, h) * .25;
+  // 折り返しは縦横それぞれで数える（横の往復・縦のギザギザ・くるくる、どれでも拾う）
+  function turnsOn(pts, ax, minRun) {
     let turns = 0, dir = 0, anchor = pts[0][ax];
     for (const p of pts) {
       const dv = p[ax] - anchor;
@@ -468,18 +460,30 @@
       else if (dir <= 0 && dv > minRun) { if (dir < 0) turns++; dir = 1; anchor = p[ax]; }
       else if ((dir > 0 && dv > 0) || (dir < 0 && dv < 0)) anchor = p[ax];
     }
-    if (turns < 3) return null;
-    const pad = 4, hit = [];
+    return turns;
+  }
+  function scribbleTargets(s) {
+    const pts = s.pts;
+    if (pts.length < 12) return null;
+    const ty = top(s);
+    const [a, b0, c, d0] = s.bbox, b = b0 + ty, d = d0 + ty, w = c - a, h = d - b;
+    if (Math.max(w, h) < 8) return null;
+    const tx = turnsOn(pts, 0, Math.max(3, w * .3)), tz = turnsOn(pts, 1, Math.max(3, h * .3));
+    // 4回以上折り返す（m や w は3回）。細長い範囲を長く往復するなら少なくてよい
+    const r = Math.max(w, h) / Math.max(1, Math.min(w, h)), long = w >= h ? tx : tz;
+    if (Math.max(tx, tz) < 4 && !(r >= 2 && long >= 3) && !(r >= 3 && long >= 2)) return null;
+    const pad = Math.max(6, Math.min(w, h) * .2), hit = [];
     for (const o of strokes) {
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
       if (oc < a - pad || oa > c + pad || od + oy < b - pad || ob + oy > d + pad) continue;
       let inside = 0;
       for (const [x, y] of o.pts) if (x >= a - pad && x <= c + pad && y + oy >= b - pad && y + oy <= d + pad) inside++;
-      if (inside / o.pts.length < .6) continue;
-      const r2 = (Math.max(o.s || 8, s.s) + 6) ** 2;
+      if (inside / o.pts.length < .5) continue;
+      // ぐちゃぐちゃが実際にその線の上を通っていること（点のような短い線も含む）
+      const r2 = (Math.max(o.s || 8, s.s) + 6) ** 2, need = Math.min(2, o.pts.length);
       let near = 0;
-      outer: for (const [x, y] of o.pts) for (const [sx, sy] of pts) if ((x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2) { near++; if (near >= 2) break outer; break; }
-      if (near >= 2 || o.pts.length < 3) hit.push(o);
+      outer: for (const [x, y] of o.pts) for (const [sx, sy] of pts) if ((x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2) { near++; if (near >= need) break outer; break; }
+      if (near >= need) hit.push(o);
     }
     return hit.length ? hit : null;
   }
