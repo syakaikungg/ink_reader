@@ -959,12 +959,13 @@
     blocks[b].classList.toggle('bm', i < 0);
     stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
   }
-  async function goTo(c, b) {
+  async function goTo(c, b, flash) {
     toc.close();
     if (c !== CH) await openChapter(c, false);
     if (c !== CH) return;
     if (!b || !blocks[b]) { scrollTo(0, 0); return; }
     scrollBy(0, blocks[b].getBoundingClientRect().top - $('#bar').getBoundingClientRect().bottom - 12);
+    if (flash) { const el = blocks[b]; el.classList.remove('hit'); void el.offsetWidth; el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 1900); }
   }
   function tocItem(text, cls, go, at) {
     const li = document.createElement('li'), btn = document.createElement('button');
@@ -986,9 +987,53 @@
       if (c.id === CH) blocks.forEach((el, b) => { if (/^H[2-4]$/.test(el.tagName)) rows.push(tocItem(el.cloneNode(true), el.tagName.toLowerCase(), () => goTo(CH, b))); });
     }
     $('#toc-list').replaceChildren(...rows);
+    $('#toc-q').value = ''; showHits('');
     toc.showModal();
+    if (document.activeElement === $('#toc-q')) $('#toc-q').blur();   // 開いただけでキーボードが出ないようにする
     const cur = toc.querySelector('.cur'); if (cur) cur.scrollIntoView({ block: 'center' });
   };
+  // 本文の検索。章ごとの段落の文字（数式は TeX）を一度だけ作って覚えておく。段落の番号は #doc の子要素の番号（先頭は出典の行）
+  const searchText = new Map();   // '<本>:<章>' -> { html, texts }
+  async function chapterTexts(id) {
+    const html = await chapterHtml(id);
+    if (html == null) return null;
+    const k = bookKey() + ':' + id, hit = searchText.get(k);
+    if (hit && hit.html === html) return hit.texts;
+    const t = document.createElement('template'); t.innerHTML = html;
+    const texts = [...t.content.children].map((el) => blockMd(el).replace(/^#+ /, '').replace(/\s+/g, ' '));
+    searchText.set(k, { html, texts });
+    return texts;
+  }
+  let searchSeq = 0, searchT = 0;
+  async function showHits(q) {
+    const my = ++searchSeq;
+    q = q.trim();
+    $('#toc-hits').hidden = !q; $('#toc-main').hidden = !!q;
+    if (!q) return;
+    const ql = q.toLowerCase(), hits = [];
+    for (const c of book.chapters) {
+      const texts = await chapterTexts(c.id);
+      if (my !== searchSeq) return;
+      (texts || []).forEach((t, i) => {
+        const at = t.toLowerCase().indexOf(ql);
+        if (at >= 0 && hits.length < 200) hits.push({ c, b: i + 1, t, at });
+      });
+    }
+    const rows = hits.map((h) => {
+      const s = Math.max(0, h.at - 18), frag = document.createElement('span'), m = document.createElement('mark');
+      m.textContent = h.t.slice(h.at, h.at + q.length);
+      frag.append((s ? '…' : '') + h.t.slice(s, h.at), m, h.t.slice(h.at + q.length, h.at + q.length + 60));
+      const li = tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
+      li.querySelector('.bm-at').className = 'at';
+      return li;
+    });
+    if (!rows.length) { const li = document.createElement('li'); li.className = 'none'; li.textContent = '見つかりませんでした'; rows.push(li); }
+    else if (hits.length >= 200) { const li = document.createElement('li'); li.className = 'none'; li.textContent = '200件まで表示しています'; rows.push(li); }
+    $('#toc-hits').replaceChildren(...rows);
+  }
+  $('#toc-q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(() => showHits($('#toc-q').value), 200); };
+  $('#toc-q').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchT); showHits($('#toc-q').value); $('#toc-q').blur(); } };
+
   // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる（「指で書く」がオフのとき）
   let lp = null;
   const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
