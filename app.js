@@ -889,26 +889,25 @@
 
 
   // ---------- chapters ----------
-  const chapSel = $('#chap');
+  const chapSel = $('#chap');   // 押すと目次・しおりが開く
   const srcLine = doc.firstElementChild;
   let ids = [];
   let opening = null;
   function fillChapters() {
-    chapSel.replaceChildren(...book.chapters.map((c) => new Option(c.label, c.id)));
     ids = book.chapters.map((c) => c.id);
     srcLine.textContent = book.source || book.title || '';
   }
   async function openChapter(id, restore) {
     if (!ids.includes(id)) id = ids.includes('ch1') ? 'ch1' : ids[0];
     const my = opening = {};
-    chapSel.value = id; syncNav(id);
+    syncNav(id);
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs && cs.pending.size) pushChapter(CH);
     doc.classList.add('loading');
     let html = await chapterHtml(id);
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
-    if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) { chapSel.value = CH; syncNav(CH); } return; }
+    if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
     const [saved, ans, wait] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id))]);
     if (my !== opening) return;
     for (const s of strokes) s.el.remove();
@@ -918,7 +917,7 @@
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
-    initBlocks(); layout();
+    initBlocks(); markBm(); layout();
     showBlocks(cs.blocks);
     openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
@@ -930,14 +929,72 @@
   }
   function syncNav(id) {
     const i = ids.indexOf(id);
+    $('#chap-t').textContent = (book.chapters[i] || {}).label || '';
     for (const b of [$('#prev'), $('#prev2')]) b.disabled = i <= 0;
     for (const b of [$('#next'), $('#next2')]) b.disabled = i >= ids.length - 1;
   }
-  const step = (d) => { const i = ids.indexOf(chapSel.value) + d; if (ids[i]) openChapter(ids[i], false); };
-  chapSel.onchange = () => openChapter(chapSel.value, true);
+  const step = (d) => { const i = ids.indexOf(CH) + d; if (ids[i]) openChapter(ids[i], false); };
   $('#prev').onclick = $('#prev2').onclick = () => step(-1);
   $('#next').onclick = $('#next2').onclick = () => step(1);
   addEventListener('pagehide', () => { if (CH) store.set(memKey('pos:' + CH), String(scrollY)); });
+
+  // ---------- 目次・しおり ----------
+  // しおりは本ごとに端末へ保存する: [{ c: 章, b: 段落の番号, t: 段落の書き出し }]
+  const toc = $('#toc');
+  const loadBm = () => { try { return JSON.parse(store.get(memKey('bm')) || '[]'); } catch { return []; } };
+  const blockTitle = (el) => blockMd(el).replace(/^#+ /, '').replace(/\$+/g, '').replace(/\s+/g, ' ').slice(0, 60);
+  function markBm() { for (const m of loadBm()) if (m.c === CH && blocks[m.b]) blocks[m.b].classList.add('bm'); }
+  function toggleBm(b) {
+    if (!CH || !blocks[b]) return;
+    const list = loadBm(), i = list.findIndex((m) => m.c === CH && m.b === b);
+    if (i >= 0) list.splice(i, 1); else list.push({ c: CH, b, t: blockTitle(blocks[b]) });
+    store.set(memKey('bm'), JSON.stringify(list));
+    blocks[b].classList.toggle('bm', i < 0);
+    stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
+  }
+  async function goTo(c, b) {
+    toc.close();
+    if (c !== CH) await openChapter(c, false);
+    if (c !== CH) return;
+    if (!b || !blocks[b]) { scrollTo(0, 0); return; }
+    scrollBy(0, blocks[b].getBoundingClientRect().top - $('#bar').getBoundingClientRect().bottom - 12);
+  }
+  function tocItem(text, cls, go, at) {
+    const li = document.createElement('li'), btn = document.createElement('button');
+    btn.type = 'button'; btn.className = cls; btn.onclick = go;
+    if (at) { const s = document.createElement('span'); s.className = 'bm-at'; s.textContent = at; btn.append(s); }
+    if (text.nodeType) btn.append(...text.childNodes); else btn.append(text);   // 見出しは数式を描いたまま並べる
+    li.append(btn); return li;
+  }
+  chapSel.onclick = () => {
+    if (!book) return;
+    const label = (c) => (book.chapters.find((x) => x.id === c) || {}).label || c;
+    const bms = loadBm().filter((m) => ids.includes(m.c)).sort((x, y) => ids.indexOf(x.c) - ids.indexOf(y.c) || x.b - y.b);
+    $('#toc-bm').hidden = !bms.length;
+    $('#toc-bms').replaceChildren(...bms.map((m) => tocItem(m.t, '', () => goTo(m.c, m.b), label(m.c))));
+    const rows = [];
+    for (const c of book.chapters) {
+      rows.push(tocItem(c.label, c.id === CH ? 'cur' : '', () => goTo(c.id, 0)));
+      // 開いている章だけ、見出しも並べる（章の最初の見出しは章の名前と同じなので飛ばす）
+      if (c.id === CH) blocks.forEach((el, b) => { if (/^H[2-4]$/.test(el.tagName)) rows.push(tocItem(el.cloneNode(true), el.tagName.toLowerCase(), () => goTo(CH, b))); });
+    }
+    $('#toc-list').replaceChildren(...rows);
+    toc.showModal();
+    const cur = toc.querySelector('.cur'); if (cur) cur.scrollIntoView({ block: 'center' });
+  };
+  // 段落を指で長押しすると、しおりを付ける・外す（「指で書く」がオフのとき）
+  let lp = null;
+  const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
+  page.addEventListener('touchstart', (e) => {
+    lpStop();
+    const t = e.touches[0];
+    if (finger || e.touches.length !== 1 || t.touchType === 'stylus') return;
+    const x = t.clientX, y = t.clientY;
+    lp = { x, y, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
+  }, { passive: true });
+  page.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (lp && Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 8) lpStop(); }, { passive: true });
+  page.addEventListener('touchend', lpStop);
+  page.addEventListener('touchcancel', lpStop);
 
   // ---------- 設定画面 ----------
   const dlg = $('#cfg'), msg = $('#cfg-msg');

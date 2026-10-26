@@ -1,6 +1,6 @@
 // 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
-// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小
+// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
@@ -87,13 +87,28 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await touch('touchStart', [[300, 500]]); await touch('touchMove', [[320, 510]]); await touch('touchStart', [[300, 500], [420, 520]]); await touch('touchMove', [[290, 500], [440, 520]]); await touch('touchEnd', []); await p.waitForTimeout(100);
   console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv'));
 
+  // 目次・しおり: 段落を指で長押し → 印が付く → 目次に並ぶ → 別の章から押すと戻ってくる
+  await p.click('#finger');
+  const bmY = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[8]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top + 10; });
+  await touch('touchStart', [[400, bmY]]); await p.waitForTimeout(700); await touch('touchEnd', []);
+  console.log('bookmark', await p.textContent('#stat'), await p.evaluate(() => [...document.querySelectorAll('#doc > *')].findIndex((e) => e.classList.contains('bm'))));
+  await p.click('#chap'); console.log('toc bms', await p.$$eval('#toc-bms button', (o) => o.map((x) => x.textContent.slice(0, 30))), 'toc', await p.$$eval('#toc-list button', (o) => o.map((x) => x.className + ':' + x.textContent.slice(0, 12))));
+  await p.screenshot({ path: path.join(OUT, 'toc.png') });
+  const nCh = await p.$$eval('#toc-list button:not(.h2):not(.h3):not(.h4)', (o) => o.length);
+  if (nCh > 1) { await p.click('#toc-list li:last-child button'); await p.waitForTimeout(500); console.log('jump chapter', await p.textContent('#chap-t')); await p.click('#chap'); }
+  await p.click('#toc-bms button'); await p.waitForTimeout(500);
+  console.log('back to bm', await p.textContent('#chap-t'), await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); const r = el && el.getBoundingClientRect(); return r && Math.round(r.top - document.getElementById('bar').getBoundingClientRect().bottom); }));
+  const hy = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().top + 10; });
+  await touch('touchStart', [[400, hy]]); await p.waitForTimeout(700); await touch('touchEnd', []);
+  console.log('unbookmark', await p.textContent('#stat'), await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
+
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;
   if (MD) {
     const puts = putCount;
     await p.click('#books'); await p.setInputFiles('#shelf .open-file', fs.readdirSync(MD).map((n) => path.join(MD, n)));
     await p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 10000 });
-    console.log('local', await p.textContent('#stat'), [...await p.$$eval('#chap option', (o) => o.map((x) => x.textContent))]);
+    console.log('local', await p.textContent('#stat'), await p.textContent('#chap-t'));
     const ly = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[5]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top; });
     await p.click('#t-pen'); await line(200, ly + 12); await p.waitForTimeout(500);
     await p.click('#t-ls'); await p.mouse.move(90, ly - 5); await p.mouse.down(); for (const q of [[700, ly - 5], [700, ly + 40], [90, ly + 40], [90, ly - 3]]) for (let k = 1; k <= 5; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up();
@@ -101,10 +116,10 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
     console.log('local ask: code hidden', await p.isHidden('#ask-code'), 'sess hidden', await p.isHidden('.sess'), 'open', decodeURIComponent(await p.getAttribute('#ask-open', 'href')).slice(0, 60));
     await p.click('#ask button[value=cancel]');
     await p.reload(); await p.waitForTimeout(1500);
-    console.log('local after reload', await p.textContent('#chap option'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length), 'puts', putCount - puts);
+    console.log('local after reload', await p.textContent('#chap-t'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length), 'puts', putCount - puts);
     await p.click('#books'); console.log('shelf', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent + (x.getAttribute('aria-current') === 'true' ? '*' : ''))));
     await p.click('#shelf-list li:first-child .open'); await p.waitForTimeout(1000);
-    console.log('back to gh', await p.textContent('#chap option'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length));
+    console.log('back to gh', await p.textContent('#chap-t'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length));
     await p.click('#books'); await p.click('#shelf-list li:nth-child(2) .del'); await p.click('#shelf-list li:nth-child(2) .del'); await p.waitForTimeout(300);
     console.log('after delete', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent)));
   }
