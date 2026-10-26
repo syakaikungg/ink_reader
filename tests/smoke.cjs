@@ -1,6 +1,6 @@
 // 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
-// 確認すること: 接続して本を取得 → 線を書く → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存
+// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
@@ -28,6 +28,13 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   const y = await p.evaluate(() => { const el = [...document.querySelectorAll('#doc > p')].find((e) => e.querySelector('.katex')); el.scrollIntoView({ block: 'center' }); el.style.outline = '1px solid #0a0'; return el.getBoundingClientRect().top; });
   const line = async (x, y) => { await p.mouse.move(x, y); await p.mouse.down(); for (let i = 0; i < 20; i++) await p.mouse.move(x + i * 5, y + (i % 2) * 3); await p.mouse.up(); };
   await line(200, y + 12);
+  // ぐちゃぐちゃ消し: 小さな字を3つ書き、縦のギザギザで塗りつぶす → 3画消える。m は消さない
+  const draw = async (pts) => { await p.mouse.move(...pts[0]); await p.mouse.down(); for (const q of pts) await p.mouse.move(q[0], q[1], { steps: 4 }); await p.mouse.up(); };
+  for (let i = 0; i < 3; i++) await draw([[300 + i * 25, y + 80], [310 + i * 25, y + 100], [318 + i * 25, y + 85]]);
+  await draw([[300, y + 120], [300, y + 100], [309, y + 120], [309, y + 100], [318, y + 120]]);
+  console.log('m', await p.textContent('#stat'));
+  await draw([...Array(13)].map((_, i) => [295 + i * 7, i % 2 ? y + 104 : y + 76]));
+  console.log('scribble', await p.textContent('#stat'));
   await p.click('#t-ls');
   const poly = [[90, y - 5], [700, y - 5], [700, y + 40], [90, y + 40], [90, y - 3]];
   await p.mouse.move(...poly[0]); await p.mouse.down(); for (const q of poly) for (let k = 1; k <= 5; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up();
