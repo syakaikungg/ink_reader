@@ -83,8 +83,13 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#toc-bms button'); await p.waitForTimeout(500);
   console.log('back to bm', await p.textContent('#chap-t'), await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); const r = el && el.getBoundingClientRect(); return r && Math.round(r.top - document.getElementById('bar').getBoundingClientRect().bottom); }));
   const hy = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().top + 10; });
-  await touch('touchStart', [[400, hy]]); await p.waitForTimeout(700); await touch('touchEnd', []);
-  console.log('unbookmark', await p.textContent('#stat'), await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
+  await touch('touchStart', [[400, hy]]); await p.waitForTimeout(100); await touch('touchEnd', []);
+  console.log('tap text (keeps)', await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
+  await p.click('#zoomv'); await p.evaluate(() => document.querySelector('#doc > .bm').scrollIntoView({ block: 'center' }));
+  const hy2 = await p.evaluate(() => document.querySelector('#doc > .bm').getBoundingClientRect().top + 10);
+  const mx = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().left - 24; });
+  await touch('touchStart', [[mx, hy2]]); await p.waitForTimeout(100); await touch('touchEnd', []);
+  console.log('tap mark', await p.textContent('#stat'), await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;
