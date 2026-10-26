@@ -38,7 +38,7 @@ GoodNotes の機能を基本的にすべて備えたうえで、AI と一緒に�
 
 ## 未決事項
 
-- [ ] Web アプリのまま続けるか、ネイティブ（Swift・PencilKit・PDFKit）にするか。今のおすすめは、Web のまま保存形式と AI 連携を固め、PDF 対応の前に実機で書き味を測って決める案。
-- [ ] PDF の置き場（今は Google ドライブの sakai_study_pdfs。GitHub には置かない）
+- [x] Web アプリのまま続けるか、ネイティブ（Swift・PencilKit・PDFKit）にするか → **Web のまま**（2026-10-26）。書き味は気にならず、ホーム画面に追加すれば全画面で使える。PC なしで開発できる。PDF は PDF.js で、md と同じ縦スクロール（ページは紙の切れ目として見せる）。GitHub を使わない人も使えるよう、GitHub 同期は任意にする。
+- [ ] PDF の置き場（今は Google ドライブの sakai_study_pdfs。GitHub には置かない）。案：md と同じく iPad の「ファイル」から開いて端末に保存する
 - [ ] 機能を作る順番
 - [ ] アプリの名前（仮に Ink Reader）
