@@ -86,6 +86,8 @@ button:disabled { opacity: .35; }
 #zoomv { font-variant-numeric: tabular-nums; min-width: 56px; }
 /* 文言の長さでツールバーが折り返し直して紙が動かないよう、大きさを固定（2行まで） */
 #stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; width: 14em; height: 2.6em; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; }
+#chap { border-color: var(--rule); background: var(--paper); max-width: 15em; display: inline-flex; align-items: center; gap: 4px; }
+#chap-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 select {
   font: 600 13px/1 var(--f-ui); color: var(--fg); background: var(--paper);
   border: 1px solid var(--rule); border-radius: 8px; height: 38px; padding: 0 8px; max-width: 15em;
@@ -157,8 +159,8 @@ body { font-size: 14px; }
 img { max-width: 100%; }
 [hidden] { display: none !important; }
 #gear { font-weight: 400; }
-dialog#cfg, dialog#ask, dialog#shelf { border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); color: var(--fg); max-width: min(520px, calc(100vw - 32px)); padding: 20px 22px; }
-dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop { background: rgba(10,14,22,.35); }
+dialog#cfg, dialog#ask, dialog#shelf, dialog#toc { border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); color: var(--fg); max-width: min(520px, calc(100vw - 32px)); padding: 20px 22px; }
+dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::backdrop { background: rgba(10,14,22,.35); }
 #cfg h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
 #cfg label { display: grid; gap: 4px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
 #cfg input { font: 14px/1.4 ui-monospace, Menlo, monospace; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; }
@@ -195,6 +197,20 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop { background:
 #shelf p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
 #shelf .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 #shelf .row button { border-color: var(--rule); }
+/* 目次・しおり */
+#toc { width: min(480px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; }
+#toc h2 { font: 600 13px/1.3 var(--f-ui); color: var(--muted); margin: 0 0 6px; }
+#toc ul { list-style: none; margin: 0 0 16px; padding: 0; }
+#toc li button { display: block; width: 100%; text-align: left; font-weight: 400; font-size: 15px; height: auto; min-height: 42px; padding: 8px 10px; line-height: 1.4; border-bottom: 1px solid var(--rule); border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toc li .cur { color: var(--accent); font-weight: 600; }
+#toc li .h2 { padding-left: 26px; font-size: 14px; } #toc li .h3 { padding-left: 42px; font-size: 14px; color: var(--muted); } #toc li .h4 { padding-left: 58px; font-size: 13px; color: var(--muted); }
+#toc li .bm-at { color: var(--muted); font-size: 12px; margin-right: 8px; }
+#toc p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
+#toc .row { display: flex; justify-content: flex-end; }
+#toc .row button { border-color: var(--rule); }
+/* しおりを付けた段落の左の印（レイアウトは変えない） */
+#doc > .bm { position: relative; }
+#doc > .bm::before { content: ""; position: absolute; left: -30px; top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
 #empty .pick { font-size: 15px; height: 44px; padding: 0 16px; }
 </style>
@@ -204,7 +220,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop { background:
   <div class="grp">
     <button id="books" title="本を選ぶ・ファイルから開く">本</button>
     <button id="prev" aria-label="前の章">‹</button>
-    <select id="chap" aria-label="章を選ぶ"><!--CHAPTERS--></select>
+    <button id="chap" aria-label="目次・しおり" title="目次・しおり"><span id="chap-t"></span> ▾</button>
     <button id="next" aria-label="次の章">›</button>
   </div>
   <div class="grp">
@@ -296,6 +312,16 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop { background:
       <button value="cancel">閉じる</button>
       <label class="pick">ファイルから開く<input type="file" class="open-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden></label>
     </div>
+  </form>
+</dialog>
+
+<dialog id="toc">
+  <form method="dialog">
+    <div id="toc-bm" hidden><h2>しおり</h2><ul id="toc-bms"></ul></div>
+    <h2>目次</h2>
+    <ul id="toc-list"></ul>
+    <p>段落を指で長押しすると、しおりを付けたり外したりできます。</p>
+    <div class="row"><button value="cancel">閉じる</button></div>
   </form>
 </dialog>
 
