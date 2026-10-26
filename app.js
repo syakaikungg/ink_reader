@@ -284,9 +284,10 @@
     if (!canSync() || !book) return;
     for (const c of book.chapters) await pushChapter(c.id);
   }
-  async function refreshChapter() {   // GitHub 側の書き込みを取り込む（他の端末・Claude の変更）
+  async function refreshChapter() {   // GitHub 側の書き込みと答えを取り込む（他の端末・Claude の変更）
     if (!canSync() || !cs) return;
     const id = CH, st = cs;
+    pullAnswers(id);
     try {
       const remote = await pullInk(id, st);
       if (id !== CH || remote.sha === st.sha) return;
@@ -301,7 +302,8 @@
   let lastPull = 0;
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { if (cs && cs.pending.size) pushChapter(CH); }
-    else if (Date.now() - lastPull > 60000) { lastPull = Date.now(); refreshChapter(); }
+    // 答えを待っているときは、戻るたびに確かめる
+    else if (Date.now() - lastPull > (asks.length ? 5000 : 60000)) { lastPull = Date.now(); refreshChapter(); }
   });
 
   // ---------- history ----------
@@ -329,7 +331,7 @@
     page.style.transform = `scale(${scale})`;
     $('#zoomv').textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
-    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); }
+    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); placeMarks(); }
     if (sel.length) showSel();
   }
   function fitScale() {
@@ -646,7 +648,7 @@
     }
     return cv;
   }
-  let askImg = null;
+  let askImg = null, askId = '';
   function askText(withImg) {
     const ch = book && book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
@@ -659,6 +661,7 @@
   }
   $('#sel-ask').onclick = () => {
     if (!picked.length) return;
+    askId = Math.random().toString(36).slice(2, 8);
     askImg = inkImage();
     $('#ask-pv').textContent = passage();
     $('#ask-img').hidden = !askImg;
@@ -704,11 +707,13 @@
       `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${cfg.book} ${CH} ${picked.join(' ')}）` : ''),
       '', '該当箇所:', '"""', passage(), '"""', '',
       `質問: ${q || 'この箇所を分かりやすく説明してください'}`,
+      '', `答えは ${cfg.book}/answers/${CH}.md に追記して push してください（質問ID: ${askId}）。`,
     ].join('\n');
   }
   async function askCode(fresh) {
     const t = codeText(), url = fresh ? '' : sessUrl();
     if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
+    addAsk({ id: askId, b: picked.slice(), q: $('#ask-q').value.trim() });
     const ok = await copy(t);
     $('#ask-msg').textContent = (url ? (ok ? '質問文をコピーしました。セッションに貼り付けて送ってください。' : 'コピーできませんでした。') : (ok ? '質問文をコピーしました。' : '') + '開いたセッションのURLを下に入れておくと、次から同じセッションで聞けます。')
       + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
@@ -729,6 +734,91 @@
     }
   };
 
+  // ---------- Claude の答え ----------
+  // 「sakai_studyで聞く」で送った質問に、sakai_study のセッションが <本>/answers/<章>.md へ答えを追記する。
+  // 答えごとに `<!-- ink-answer id=<質問ID> b=<段落番号,…> -->` の行で始め、その下が答えの md（数式つき）。
+  // 質問した段落の右余白に「Q」を出し（答え待ちは薄く）、押すと段落の下に答えを開く。答えの要素は blocks に入れない
+  const ansKey = (id) => 'ans:' + bookKey() + ':' + id, askKey = (id) => 'asks:' + bookKey() + ':' + id;
+  const qs = $('#qs');
+  let answers = [], asks = [], ansMd = null, openQ = new Set();   // 今の章の答え [{id,b,md}]・答え待ち [{id,b,q}]・開いている段落
+  function parseAnswers(md) {
+    const out = []; let cur = null;
+    for (const line of (md || '').split('\n')) {
+      const m = line.match(/^<!--\s*ink-answer\s+(.*?)\s*-->\s*$/);
+      if (m) {
+        const a = Object.fromEntries([...m[1].matchAll(/(\w+)=(\S+)/g)].map((x) => [x[1], x[2]]));
+        cur = { id: a.id || '', b: (a.b || '').split(',').map(Number).filter((n) => n > 0), lines: [] };
+        if (cur.b.length) out.push(cur);
+      } else if (cur) cur.lines.push(line);
+    }
+    return out.map((a) => ({ id: a.id, b: a.b, md: a.lines.join('\n').trim() })).reverse();   // 新しい順
+  }
+  const anchor = (x) => Math.min(...x.b);   // 何段落かにまたがる質問は、最初の段落に付ける
+  function setAnswers(md, list) {
+    ansMd = md; answers = parseAnswers(md); asks = list || asks;
+    const n = asks.length;
+    asks = asks.filter((q) => !answers.some((a) => a.id === q.id));   // 答えが届いた質問は答え待ちから外す
+    if (asks.length !== n) kv.set(askKey(CH), asks).catch(() => {});
+    showMarks();
+  }
+  function addAsk(q) {
+    if (!CH || isLocal() || asks.some((x) => x.id === q.id)) return;
+    asks.push(q); kv.set(askKey(CH), asks).catch(() => {});
+    showMarks();
+  }
+  function showMarks() {
+    for (const el of doc.querySelectorAll('.ans')) el.remove();
+    const g = new Map();
+    for (const x of [...asks].reverse().concat(answers)) { const k = anchor(x); if (blocks[k]) g.set(k, (g.get(k) || 0) + 1); }
+    qs.replaceChildren(...[...g].map(([k, n]) => {
+      const m = document.createElement('button');
+      m.type = 'button'; m.className = 'qm'; m.dataset.b = k; m.textContent = n > 1 ? 'Q' + n : 'Q';
+      m.classList.toggle('wait', !answers.some((a) => anchor(a) === k));
+      m.setAttribute('aria-expanded', String(openQ.has(k)));
+      m.setAttribute('aria-label', 'Claudeの答え');
+      return m;
+    }));
+    for (const k of openQ) if (g.has(k)) openAns(k);
+    placeMarks();
+  }
+  function placeMarks() { for (const m of qs.children) m.style.top = (tops[+m.dataset.b] || 0) + 'px'; }
+  function openAns(k) {
+    const box = document.createElement('aside');
+    box.className = 'ans'; box.dataset.b = k;
+    for (const q of asks.filter((x) => anchor(x) === k).reverse()) {
+      const d = document.createElement('div'); d.className = 'wait';
+      d.textContent = `答えを待っています${q.q ? '：' + q.q : ''}`;
+      const x = document.createElement('button'); x.type = 'button'; x.textContent = '取り消す';
+      x.onclick = () => { asks = asks.filter((a) => a !== q); kv.set(askKey(CH), asks).catch(() => {}); showMarks(); };
+      d.append(x); box.append(d);
+    }
+    for (const a of answers.filter((x) => anchor(x) === k)) {
+      const d = document.createElement('div'); d.className = 'a';
+      d.innerHTML = renderMarkdown(a.md, book && book.images);
+      box.append(d);
+    }
+    blocks[k].after(box);
+  }
+  function toggleAns(k) {
+    if (openQ.has(k)) openQ.delete(k); else openQ.add(k);
+    showMarks();
+  }
+  // Pencil で押したときは click が来ない（書くために touchstart を止めている）ので pointerup で開閉する
+  let qDown = null;
+  qs.addEventListener('pointerdown', (e) => { qDown = e.target.closest('.qm'); });
+  qs.addEventListener('pointerup', (e) => { const m = e.target.closest('.qm'); if (m && m === qDown) toggleAns(+m.dataset.b); qDown = null; });
+  qs.addEventListener('click', (e) => { const m = e.target.closest('.qm'); if (m && e.detail === 0) toggleAns(+m.dataset.b); });   // キーボード
+  async function pullAnswers(id) {
+    if (!canSync()) return;
+    try {
+      const md = (await gh(cfg.book + '/answers/' + id + '.md', { raw: true })) || '';
+      if (id !== CH || md === ansMd) return;
+      kv.set(ansKey(id), md).catch(() => {});
+      setAnswers(md);
+      if (asks.length === 0 && answers.length) stat.textContent = 'Claudeの答えが届いています（右の「Q」）';
+    } catch {}
+  }
+
   function frame() {
     raf = 0; frames++;
     if (!cur) return;
@@ -737,7 +827,7 @@
   }
 
   page.addEventListener('pointerdown', (e) => {
-    if (!accepts(e) || curId !== null || pinch) return;
+    if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans')) return;   // 「Q」と答えの上には書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
@@ -819,7 +909,7 @@
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) { chapSel.value = CH; syncNav(CH); } return; }
-    const saved = await kv.get(inkKey(id));
+    const [saved, ans, wait] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id))]);
     if (my !== opening) return;
     for (const s of strokes) s.el.remove();
     strokes = []; undoStack.length = 0; redoStack.length = 0; syncHist();
@@ -830,6 +920,7 @@
     doc.insertAdjacentHTML('beforeend', html);
     initBlocks(); layout();
     showBlocks(cs.blocks);
+    openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
     scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
@@ -892,7 +983,7 @@
   }
   async function switchBook(v) {
     leaveBook(); setSrc(v);
-    if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); layout(); return; }
+    if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); setAnswers('', []); layout(); return; }
     $('#empty').hidden = true; chapSel.disabled = false;
     fillChapters();
     await openChapter(store.get(memKey('chapter')) || ids[0], true);
