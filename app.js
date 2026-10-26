@@ -476,9 +476,9 @@
     const [a, b0, c, d0] = s.bbox, b = b0 + ty, d = d0 + ty, w = c - a, h = d - b;
     if (Math.max(w, h) < 8) return null;
     const tx = turnsOn(pts, 0, Math.max(3, w * .3)), tz = turnsOn(pts, 1, Math.max(3, h * .3));
-    // 4回以上折り返す（m や w は3回）。細長い範囲を長く往復するなら少なくてよい
+    // 5回以上折り返す（m・w は3回、続け書きの漢字もたいてい4回まで）。横長・縦長の範囲を長く往復するなら3回でよい
     const r = Math.max(w, h) / Math.max(1, Math.min(w, h)), long = w >= h ? tx : tz;
-    if (Math.max(tx, tz) < 4 && !(r >= 2 && long >= 3) && !(r >= 3 && long >= 2)) return null;
+    if (Math.max(tx, tz) < 5 && !(r >= 2 && long >= 3)) return null;
     const pad = Math.max(6, Math.min(w, h) * .2), hit = [];
     for (const o of strokes) {
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
@@ -486,8 +486,9 @@
       let inside = 0;
       for (const [x, y] of o.pts) if (x >= a - pad && x <= c + pad && y + oy >= b - pad && y + oy <= d + pad) inside++;
       if (inside / o.pts.length < .5) continue;
-      // ぐちゃぐちゃが実際にその線の上を通っていること（点のような短い線も含む）
-      const r2 = (Math.max(o.s || 8, s.s) + 6) ** 2, need = Math.min(2, o.pts.length);
+      // ぐちゃぐちゃが実際にその線の上を通っていること。点のような短い線は、インクが重なっているときだけ
+      const dot = Math.max(oc - oa, od - ob) < 4;
+      const r2 = (dot ? Math.max(o.s || 3, s.s) * 1.5 : Math.max(o.s || 8, s.s) + 6) ** 2, need = dot ? 1 : Math.min(2, o.pts.length);
       let near = 0;
       outer: for (const [x, y] of o.pts) for (const [sx, sy] of pts) if ((x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2) { near++; if (near >= need) break outer; break; }
       if (near >= need) hit.push(o);
