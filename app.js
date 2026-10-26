@@ -327,7 +327,7 @@
     sizer.style.width = W * scale + 'px';
     sizer.style.height = h * scale + 'px';
     page.style.transform = `scale(${scale})`;
-    $('#zoomv').textContent = Math.round(scale * 100) + '%';
+    zoomNow.textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
     if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); }
     if (sel.length) showSel();
@@ -348,7 +348,13 @@
     scrollBy(0, r1.top + py * scale - at.y);
     store.set(PREF + ':zoom', mode === 'fit' ? 'fit' : String(scale));
   }
-  $('#zoomv').onclick = () => setScale(fitScale(), 'fit');
+  // 拡大率の一覧。先頭の隠れた項目に今の拡大率を出し、選んだあとはそこに戻す
+  const zoomSel = $('#zoomv'), zoomNow = zoomSel.options[0];
+  zoomSel.onchange = () => {
+    const v = zoomSel.value;
+    zoomSel.selectedIndex = 0;
+    if (v === 'fit') setScale(fitScale(), 'fit'); else if (v) setScale(+v, 'manual');
+  };
 
   // 2本指のピンチ。動かしている間は #sizer を transform で伸ばすだけにして（レイアウトし直さない）、指を離したときに拡大率を決める
   let pinch = null, pinchRaf = 0;
@@ -361,7 +367,7 @@
     const { m0, m, o } = pinch, k = pinchK();
     sizer.style.transformOrigin = `${o.x}px ${o.y}px`;
     sizer.style.transform = `translate(${m.x - m0.x}px, ${m.y - m0.y}px) scale(${k})`;
-    $('#zoomv').textContent = Math.round(scale * k * 100) + '%';
+    zoomNow.textContent = Math.round(scale * k * 100) + '%';
   }
   function pinchEnd() {
     if (pinchRaf) cancelAnimationFrame(pinchRaf), pinchRaf = 0;

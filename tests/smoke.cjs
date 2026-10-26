@@ -61,15 +61,16 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
   const pinchOut = async (cx, cy, d0, d1) => { await touch('touchStart', [[cx - d0, cy], [cx + d0, cy]]); for (let i = 1; i <= 8; i++) { const d = d0 + (d1 - d0) * i / 8; await touch('touchMove', [[cx - d, cy], [cx + d, cy]]); } await touch('touchEnd', []); await p.waitForTimeout(100); };
   const under = (x, y) => p.evaluate(([x, y]) => { const r = document.getElementById('page').getBoundingClientRect(), s = r.width / 680; return [(x - r.left) / s, (y - r.top) / s]; }, [x, y]);
-  const before = await under(400, 600), z0 = await p.textContent('#zoomv');
+  const before = await under(400, 600), z0 = await p.textContent('#zoomv option:first-child');
   await pinchOut(400, 600, 60, 120);
   const after = await under(400, 600);
-  console.log('pinch', z0, '->', await p.textContent('#zoomv'), 'drift', Math.round(Math.hypot(after[0] - before[0], after[1] - before[1])), 'scrollX', await p.evaluate(() => document.getElementById('wrap').scrollLeft > 0), 'bar', await p.evaluate(() => Math.round(document.getElementById('bar').getBoundingClientRect().width)));
+  console.log('pinch', z0, '->', await p.textContent('#zoomv option:first-child'), 'drift', Math.round(Math.hypot(after[0] - before[0], after[1] - before[1])), 'scrollX', await p.evaluate(() => document.getElementById('wrap').scrollLeft > 0), 'bar', await p.evaluate(() => Math.round(document.getElementById('bar').getBoundingClientRect().width)));
   await p.screenshot({ path: path.join(OUT, 'pinch.png') });
-  await p.click('#zoomv'); console.log('fit', await p.textContent('#zoomv'));
+  await p.selectOption('#zoomv', '1.5'); console.log('pick 150', await p.textContent('#zoomv option:first-child'), await p.inputValue('#zoomv'));
+  await p.selectOption('#zoomv', 'fit'); console.log('fit', await p.textContent('#zoomv option:first-child'));
   await p.click('#t-pen'); await p.click('#finger'); const n0 = await p.evaluate(() => document.querySelectorAll('#ink path').length);
   await touch('touchStart', [[300, 500]]); await touch('touchMove', [[320, 510]]); await touch('touchStart', [[300, 500], [420, 520]]); await touch('touchMove', [[290, 500], [440, 520]]); await touch('touchEnd', []); await p.waitForTimeout(100);
-  console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv'));
+  console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv option:first-child'));
 
   // 目次・しおり: 段落を指で長押し → 印が付く → 目次に並ぶ → 別の章から押すと戻ってくる
   await p.click('#finger');
