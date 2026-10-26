@@ -108,6 +108,12 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await touch('touchStart', [[mx, hy2]]); await p.waitForTimeout(100); await touch('touchEnd', []);
   console.log('tap mark', await p.textContent('#stat'), await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
 
+  // 数式だけの段落（横スクロールする）にしおりを付けても、印が見える
+  const dm = await p.evaluate(() => { const el = document.querySelector('#doc > .katex-display'); if (!el) return null; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top + 10; });
+  if (dm) { await touch('touchStart', [[400, dm]]); await p.waitForTimeout(700); await touch('touchEnd', []);
+    console.log('math bookmark mark', await p.evaluate(() => { const i = document.querySelector('#bms i'), el = document.querySelector('#doc > .katex-display.bm'); if (!i || !el) return null; const a = i.getBoundingClientRect(), b = el.getBoundingClientRect(); return [Math.round(a.top - b.top), a.width > 0, a.right < b.left]; }));
+    await touch('touchStart', [[400, dm]]); await p.waitForTimeout(700); await touch('touchEnd', []); console.log('math unbookmark', await p.evaluate(() => document.querySelectorAll('#bms i').length)); }
+
   // 本文の検索: 目次の検索欄 → 別の章の段落も見つかる → 押すとその段落へ飛んで色が付く
   await p.click('#chap'); console.log('search focus', await p.evaluate(() => document.activeElement && document.activeElement.id));
   await p.fill('#toc-q', 'mc^2 + x_3'); await p.waitForTimeout(500);
@@ -117,6 +123,8 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('jump hit', await p.textContent('#chap-t'), await p.evaluate(() => { const el = document.querySelector('#doc > .hit'); return el && [el.textContent.slice(0, 12), Math.round(el.getBoundingClientRect().top - document.getElementById('bar').getBoundingClientRect().bottom)]; }));
   await p.click('#chap'); await p.fill('#toc-q', 'ないことば'); await p.waitForTimeout(400); console.log('no hit', await p.textContent('#toc-hits'), 'main hidden', await p.isHidden('#toc-main'));
   await p.fill('#toc-q', ''); await p.waitForTimeout(400); console.log('cleared: main hidden', await p.isHidden('#toc-main'));
+  await p.mouse.click(20, 1100); console.log('outside tap closes', !(await p.evaluate(() => document.getElementById('toc').open)));
+  await p.click('#chap'); await p.click('#toc-main > h2'); console.log('inside tap keeps', await p.evaluate(() => document.getElementById('toc').open));
   await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る

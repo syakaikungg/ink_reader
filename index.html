@@ -232,9 +232,9 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #doc > .hit { animation: hit 1.8s ease-out; }
 @keyframes hit { from { background: rgba(214,177,0,.3); } to { background: transparent; } }
 #toc .row button { border-color: var(--rule); }
-/* しおりを付けた段落の左の印（レイアウトは変えない） */
-#doc > .bm { position: relative; }
-#doc > .bm::before { content: ""; position: absolute; left: -30px; top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
+/* しおりを付けた段落の左の印。段落の中に描くと数式の段落（横スクロールする）で隠れるので、紙の上の別の層に置く */
+#bms { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+#bms i { position: absolute; left: 18px; margin-top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
 #empty .pick { font-size: 15px; height: 44px; padding: 0 16px; }
 </style>
@@ -301,6 +301,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
     </article>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="qs"></div>
+    <div id="bms" aria-hidden="true"></div>
   </div>
   <div id="selmenu" hidden>
     <span id="sel-n"></span>
