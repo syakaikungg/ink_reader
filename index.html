@@ -224,6 +224,13 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #toc li .bm-at { color: var(--muted); font-size: 12px; margin-right: 8px; }
 #toc p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
 #toc .row { display: flex; justify-content: flex-end; }
+#toc-q { display: block; width: 100%; box-sizing: border-box; font: 15px/1.4 var(--f-ui); padding: 9px 12px; margin: 0 0 14px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); }
+#toc-hits .at { color: var(--muted); font-size: 12px; margin-right: 8px; }
+#toc-hits mark { background: none; color: var(--accent); font-weight: 600; }
+#toc-hits .none { color: var(--muted); font-size: 13px; padding: 8px 10px; }
+/* 検索から飛んだ段落を一瞬だけ色付けする */
+#doc > .hit { animation: hit 1.8s ease-out; }
+@keyframes hit { from { background: rgba(214,177,0,.3); } to { background: transparent; } }
 #toc .row button { border-color: var(--rule); }
 /* しおりを付けた段落の左の印（レイアウトは変えない） */
 #doc > .bm { position: relative; }
@@ -340,10 +347,14 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 
 <dialog id="toc">
   <form method="dialog">
-    <div id="toc-bm" hidden><h2>しおり</h2><ul id="toc-bms"></ul></div>
-    <h2>目次</h2>
-    <ul id="toc-list"></ul>
-    <p>段落を指で長押しすると、しおりを付けたり外したりできます。</p>
+    <input id="toc-q" type="search" placeholder="本文を検索" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+    <ul id="toc-hits" hidden></ul>
+    <div id="toc-main">
+      <div id="toc-bm" hidden><h2>しおり</h2><ul id="toc-bms"></ul></div>
+      <h2>目次</h2>
+      <ul id="toc-list"></ul>
+      <p>段落を指で長押しすると、しおりを付けたり外したりできます。</p>
+    </div>
     <div class="row"><button value="cancel">閉じる</button></div>
   </form>
 </dialog>

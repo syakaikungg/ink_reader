@@ -1,6 +1,6 @@
 // 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
-// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり
+// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり → 本文の検索
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
@@ -107,6 +107,17 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   const mx = await p.evaluate(() => { const el = document.querySelector('#doc > .bm'); return el.getBoundingClientRect().left - 24; });
   await touch('touchStart', [[mx, hy2]]); await p.waitForTimeout(100); await touch('touchEnd', []);
   console.log('tap mark', await p.textContent('#stat'), await p.evaluate(() => document.querySelectorAll('#doc > .bm').length));
+
+  // 本文の検索: 目次の検索欄 → 別の章の段落も見つかる → 押すとその段落へ飛んで色が付く
+  await p.click('#chap'); console.log('search focus', await p.evaluate(() => document.activeElement && document.activeElement.id));
+  await p.fill('#toc-q', 'mc^2 + x_3'); await p.waitForTimeout(500);
+  const hits = await p.$$eval('#toc-hits li', (o) => o.map((x) => x.textContent.slice(0, 40)));
+  console.log('hits', hits.length, hits[0], hits[hits.length - 1]);
+  await p.click('#toc-hits li:last-child button'); await p.waitForTimeout(500);
+  console.log('jump hit', await p.textContent('#chap-t'), await p.evaluate(() => { const el = document.querySelector('#doc > .hit'); return el && [el.textContent.slice(0, 12), Math.round(el.getBoundingClientRect().top - document.getElementById('bar').getBoundingClientRect().bottom)]; }));
+  await p.click('#chap'); await p.fill('#toc-q', 'ないことば'); await p.waitForTimeout(400); console.log('no hit', await p.textContent('#toc-hits'), 'main hidden', await p.isHidden('#toc-main'));
+  await p.fill('#toc-q', ''); await p.waitForTimeout(400); console.log('cleared: main hidden', await p.isHidden('#toc-main'));
+  await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;
