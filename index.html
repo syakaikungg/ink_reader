@@ -255,9 +255,15 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 body.pdf #page { background: transparent; box-shadow: none;
   --ink-k: #15181f; --ink-r: #d0302a; --ink-b: #1d56d8; --hl: #ffd53d; --hl-blend: multiply; --hl-op: .45; }
 body.pdf #doc { padding: 0; }
-body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
-#doc > .pg { position: relative; margin: 0 0 14px; background: #fff; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 6px 20px rgba(20,30,60,.08); }
-#doc > .pg canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+body.pdf #doc > .src, body.pdf #foot { display: none; }
+/* ページの紙は ::before（高さ --ph）。後ろに入れた白紙（.blank）は同じ大きさで、その下に並ぶ */
+#doc > .pg { position: relative; margin: 0 0 14px; }
+#doc > .pg::before, #doc > .pg .blank { content: ""; position: absolute; left: 0; width: 100%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 3px 10px rgba(20,30,60,.06); }
+#doc > .pg::before { top: 0; height: var(--ph); }
+#doc > .pg canvas { position: absolute; left: 0; top: 0; width: 100%; height: var(--ph); }
+#doc > .pg canvas.hd { z-index: 1; }   /* 拡大したとき、見えている部分だけ細かく描いて重ねる絵 */
+#doc > .pg .hitbox { position: absolute; z-index: 2; border-radius: 3px; background: rgba(255,200,0,.45); mix-blend-mode: multiply; pointer-events: none; animation: hitbox 2s ease-out forwards; }
+@keyframes hitbox { 0%, 45% { opacity: 1; } to { opacity: 0; } }
 #pgno { position: fixed; z-index: 15; right: max(12px, env(safe-area-inset-right, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px));
   display: flex; align-items: center; gap: 2px; padding: 3px 12px 3px 3px; border: 1px solid var(--rule); border-radius: 18px;
   background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(20,30,60,.1);
@@ -333,6 +339,8 @@ body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
   <div id="selmenu" hidden>
     <span id="sel-n"></span>
     <button id="sel-ask">Claudeに聞く</button>
+    <button id="sel-gap">下に余白</button>
+    <button id="sel-ungap">余白を消す</button>
     <button id="sel-del">削除</button>
     <button id="sel-x">解除</button>
   </div>
