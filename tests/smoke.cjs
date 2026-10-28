@@ -1,6 +1,6 @@
 // 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
-// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり → 本文の検索
+// 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり → 本文の検索 → ペン（色・太さ・図形補正）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
@@ -126,6 +126,32 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.mouse.click(20, 1100); console.log('outside tap closes', !(await p.evaluate(() => document.getElementById('toc').open)));
   await p.click('#chap'); await p.click('#toc-main > h2'); console.log('inside tap keeps', await p.evaluate(() => document.getElementById('toc').open));
   await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
+
+  // ペン: 選んでいる色をもう一度押すと色の一覧 → 選んだ色で描ける。太さも同じ。ペンを止めて押さえると図形に直る
+  await p.click('#t-pen'); await p.click('#colors button:nth-child(2)'); await p.click('#colors button:nth-child(2)');
+  console.log('palette open', await p.isVisible('#pop-colors')); await p.screenshot({ path: path.join(OUT, 'palette.png'), clip: { x: 0, y: 0, width: 820, height: 260 } });
+  await p.click('#pop-colors button:nth-child(4)');
+  console.log('palette pick', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), 'closed', await p.isHidden('#pop'));
+  const py = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[3]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top; });
+  await line(150, py + 10); await p.waitForTimeout(200);
+  console.log('custom color fill', await p.evaluate(() => { const ps = [...document.querySelectorAll('#ink path')]; return ps[ps.length - 1].style.fill; }));
+  await p.click('#sizes button:nth-child(2)'); console.log('size pop', await p.isVisible('#pop-size'));
+  await p.evaluate(() => { const r = document.querySelector('#pop-size input'); r.value = '8'; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); });
+  await p.mouse.click(400, 1150); console.log('size', await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), 'closed', await p.isHidden('#pop'));
+  await p.click('#sizes button:nth-child(1)'); await p.click('#colors button:nth-child(1)');
+  const hold = async (pts) => { await p.mouse.move(...pts[0]); await p.mouse.down(); for (const q of pts) await p.mouse.move(q[0], q[1]); await p.waitForTimeout(650); const s = await p.textContent('#stat'); await p.mouse.up(); await p.waitForTimeout(100); return s; };
+  const wob = []; for (let i = 0; i <= 30; i++) wob.push([150 + i * 10, py + 200 + (i % 3) * 1.5]);
+  console.log('shape line', await hold(wob));
+  const circ = []; for (let i = 0; i <= 40; i++) { const t = i / 40 * 2 * Math.PI; circ.push([400 + 60 * Math.cos(t) + (i % 2) * 2, py + 330 + 60 * Math.sin(t)]); }
+  console.log('shape circle', await hold(circ));
+  const sq = []; for (const [x0, y0, x1, y1] of [[200, 0, 320, 3], [320, 3, 318, 120], [318, 120, 202, 118], [202, 118, 200, 2]]) for (let i = 0; i < 12; i++) sq.push([x0 + (x1 - x0) * i / 12, py + 420 + y0 + (y1 - y0) * i / 12]);
+  sq.push([200, py + 422]); console.log('shape square', await hold(sq));
+  const tri = []; for (const [x0, y0, x1, y1] of [[500, 120, 560, 0], [560, 0, 620, 120], [620, 120, 500, 118]]) for (let i = 0; i < 14; i++) tri.push([x0 + (x1 - x0) * i / 14, py + 420 + y0 + (y1 - y0) * i / 14]);
+  tri.push([502, py + 540]); console.log('shape triangle', await hold(tri));
+  const sq2 = sq.map(([x, y]) => [x, y + 160]); await p.mouse.move(...sq2[0]); await p.mouse.down(); for (const q of sq2) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(100);
+  console.log('no hold keeps freehand', await p.textContent('#stat'));
+  await p.reload(); await p.waitForTimeout(1500);
+  console.log('pens after reload', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), await p.evaluate(() => [...document.querySelectorAll('#ink path')].some((x) => x.style.fill === 'rgb(31, 138, 76)')));
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;

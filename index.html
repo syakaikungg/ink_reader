@@ -134,7 +134,17 @@ html, body, body * { touch-action: manipulation; }
 #sel-del { color: var(--ink-r); }
 #ink { position: absolute; left: 0; top: 0; width: 100%; overflow: visible; pointer-events: none; }
 #ink path { stroke: none; }
-#ink .k { fill: var(--ink-k); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
+#ink .k { fill: var(--ink-k); }
+/* 色・太さを変える小窓（選んでいるボタンをもう一度押すと出る） */
+#pop { position: fixed; z-index: 40; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
+#pop[hidden] { display: none; }
+#pop-colors { display: grid; grid-template-columns: repeat(6, 36px); gap: 6px; }
+#pop-colors button { min-width: 0; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+#pop-colors button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+#pop-colors .sw { width: 24px; height: 24px; }
+#pop-size { display: flex; align-items: center; gap: 10px; }
+#pop-size input { width: 200px; }
+#pop-size .dot { background: var(--fg); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
 #ink .hl { fill: var(--hl); opacity: var(--hl-op); mix-blend-mode: var(--hl-blend); }
 
 #doc {
@@ -266,12 +276,12 @@ body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
     <button id="t-er" aria-pressed="false" title="消しゴム">消しゴム</button>
     <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・色変更・削除）">投げ縄</button>
   </div>
-  <div class="grp" id="colors">
+  <div class="grp" id="colors" title="選んでいる色をもう一度押すと、色を変えられます">
     <button data-c="k" aria-pressed="true" aria-label="黒"><span class="sw k"></span></button>
     <button data-c="r" aria-pressed="false" aria-label="赤"><span class="sw r"></span></button>
     <button data-c="b" aria-pressed="false" aria-label="青"><span class="sw b"></span></button>
   </div>
-  <div class="grp" id="sizes">
+  <div class="grp" id="sizes" title="選んでいる太さをもう一度押すと、太さを変えられます">
     <button data-s="2.2" aria-pressed="false" aria-label="細"><span class="dot" style="width:4px;height:4px"></span></button>
     <button data-s="3.4" aria-pressed="true" aria-label="中"><span class="dot" style="width:7px;height:7px"></span></button>
     <button data-s="5.5" aria-pressed="false" aria-label="太"><span class="dot" style="width:11px;height:11px"></span></button>
@@ -297,7 +307,7 @@ body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります。選んでいる色・太さをもう一度押すと、色や太さを変えられます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -359,6 +369,11 @@ body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
     </div>
   </form>
 </dialog>
+
+<div id="pop" hidden>
+  <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
+  <label id="pop-size"><span class="dot"></span><input type="range" min="1" max="12" step="0.2" aria-label="太さ"></label>
+</div>
 
 <dialog id="toc">
   <form method="dialog">
