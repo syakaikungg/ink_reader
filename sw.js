@@ -1,7 +1,7 @@
 // Copyright (C) 2026 syakaikungg. All rights reserved.
 // アプリ本体をキャッシュして、通信なしでも起動できるようにする。
 // 本文と書き込みは IndexedDB 側（app.js）。アプリを更新したら VERSION を上げる（app.js の APP_VERSION も同じ値にする）
-const VERSION = 'ink-reader-v47';
+const VERSION = 'ink-reader-v48';
 const FILES = [
   './',
   'index.html',
@@ -17,6 +17,9 @@ const FILES = [
   // PDF.js。cmaps・standard_fonts・wasm は使ったものだけ、初めて読んだときにキャッシュされる
   'vendor/pdfjs/pdf.min.mjs',
   'vendor/pdfjs/pdf.worker.min.mjs',
+  // 書き出し（PDF）のときだけ読み込む。export.js はドライブにも ink_export.mjs として置く
+  'export.js',
+  'vendor/pdf-lib/pdf-lib.esm.min.js',
   'vendor/fonts/KaTeX_AMS-Regular.woff2',
   'vendor/fonts/KaTeX_Caligraphic-Bold.woff2',
   'vendor/fonts/KaTeX_Caligraphic-Regular.woff2',

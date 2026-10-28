@@ -317,6 +317,19 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 #th-menu { position: fixed; z-index: 5; display: grid; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
 #th-menu button { text-align: left; font-weight: 400; font-size: 14px; }
 #th-del { color: var(--ink-r); }
+/* 書き出すページを選ぶ: 縮小画像を押すと右下に印（もう一度押すと外れる）。選んでいる間は「…」を出さない */
+#ex-on, #ex-bar button { border-color: var(--rule); }
+#ex-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#ex-n { min-width: 4.5em; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#ex-go.primary { background: var(--accent); color: var(--paper); border-color: var(--accent); font-variant-numeric: tabular-nums; }
+#ex-msg { flex-basis: 100%; margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+#toc.picking .th-m { visibility: hidden; }
+#toc.picking .cur .im { outline: none; }
+#toc.picking .cur .lb { color: var(--muted); font-weight: 400; }
+#toc.picking #pg-grid .im::after { content: ""; position: absolute; z-index: 1; right: 6px; bottom: 6px; width: 22px; height: 22px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid #fff; background: rgba(20,30,60,.18); box-shadow: 0 0 0 1px rgba(20,30,60,.25); font: 700 13px/18px var(--f-ui); color: #fff; text-align: center; }
+#toc.picking #pg-grid .on .im { outline: 3px solid var(--accent); outline-offset: 2px; }
+#toc.picking #pg-grid .on .im::after { content: "✓"; background: var(--accent); }
 </style>
 </head>
 <body>
@@ -364,7 +377,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -452,6 +465,9 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <div id="toc-head" hidden>
       <div id="toc-tabs" role="tablist"><button type="button" role="tab" data-t="pages">ページ</button><button type="button" role="tab" data-t="main">目次・しおり</button></div>
       <label class="go" id="pg-go">ページ <input id="pg-in" inputmode="numeric" enterkeyhint="go" autocomplete="off" aria-label="飛ぶページの番号" placeholder="番号"> / <span id="pg-all"></span></label>
+      <button type="button" id="ex-on" hidden title="ページを選んで、書き込みごと PDF にする">書き出す</button>
+      <div id="ex-bar" hidden><span id="ex-n"></span><button type="button" id="ex-all">すべて選択</button><button type="button" id="ex-x">やめる</button><button type="button" id="ex-go" class="primary">PDF にする</button></div>
+      <p id="ex-msg" hidden aria-live="polite"></p>
     </div>
     <div id="toc-tab-main">
       <input id="toc-q" type="search" placeholder="本文を検索" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
@@ -465,7 +481,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     </div>
     <div id="toc-pages" hidden>
       <div id="pg-grid"></div>
-      <p>縮小画像を押すとそのページへ飛びます。「…」から、後ろに白紙のページを入れたり、白紙を消したりできます。</p>
+      <p>縮小画像を押すとそのページへ飛びます。「…」から、後ろに白紙のページを入れたり、白紙を消したりできます。「書き出す」では、ページを選んで書き込みごと PDF にできます。</p>
     </div>
     <div id="th-menu" hidden><button type="button" id="th-add">後ろに白紙を入れる</button><button type="button" id="th-del">この白紙を消す</button></div>
     <div class="row"><button value="cancel">閉じる</button></div>

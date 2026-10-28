@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v47';
+  const APP_VERSION = 'ink-reader-v48';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -503,7 +503,7 @@
       async put(path, body, sha) {
         const [d, name] = split(path), pid = await folder(d, true), f = await find(name, pid);
         if ((f ? f.version : null) !== (sha || null)) { const e = new Error('ドライブ 409'); e.status = 409; throw e; }
-        const type = typeof body === 'string' ? (/\.json$/.test(name) ? 'application/json' : 'text/markdown') : body.type;
+        const type = typeof body === 'string' ? (/\.json$/.test(name) ? 'application/json' : /\.m?js$/.test(name) ? 'text/javascript' : 'text/markdown') : body.type;
         const blob = typeof body === 'string' ? new Blob([body], { type }) : body;
         if (f) return (await (await api(`upload/drive/v3/files/${f.id}?uploadType=media&fields=version`, { method: 'PATCH', headers: { 'Content-Type': type }, body: blob })).json()).version;
         const fd = new FormData();
@@ -557,10 +557,12 @@
 iPad の手書きリーダー「Ink Reader」が置いているフォルダです。本ごとにフォルダがあります。
 
 - \`<本>/book.json\`: 題名と章の一覧。PDF の本は \`pdf: true\` と各ページの大きさ。
+- \`<本>/book.pdf\`: PDF の本の元の PDF（10MB までの本だけ。それより大きい本は置かない）。
 - \`<本>/chapters/<章>.md\`: md の本の本文（数式は TeX）。段落番号は、空行で区切った段落・見出し・数式のかたまりを上から 1, 2, … と数えたもの。
 - \`<本>/view/p<ページ>.png\`: PDF の本の、書き込みのあるページ（と質問されたページ）の画像。ページの絵に手書きを重ねてある。
 - \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
-- \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない）。
+- \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。
+- \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「書き出す」と同じもの。使い方は下）。
 
 ## 質問に答えるとき
 
@@ -569,6 +571,18 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 答えはチャットで返したうえで、\`<本>/answers/\` フォルダに **新しいファイル** \`<章>-<質問ID>.md\` を作って保存してください（既存のファイルは書き換えない）。
 ファイルの1行目は \`<!-- ink-answer id=<質問ID> b=<ページか段落の番号,…> -->\`、2行目は \`> 質問: <質問>\`、その下に答えを書きます（数式は \`$…$\` / \`$$…$$\`）。
 アプリはこのファイルを読んで、そのページ（段落）の右に「Q」を出します。
+
+## 書き込みつきの PDF を作るとき（課題の提出など）
+
+PDF の本は、アプリの「書き出す」と同じ PDF（元のページに手書きを重ね、ページの途中の余白・後ろの白紙も入れたもの）を作れます。コマンドを動かせる環境（Claude Code など）で:
+
+1. ドライブから4つをダウンロードする: \`Ink Reader/ink_export.mjs\`、\`<本>/book.json\`、\`<本>/book.pdf\`、\`<本>/ink/pdf.json\`
+2. 作業フォルダに \`ink_export.mjs\` を置き、そこで \`npm i pdf-lib@1.17.1 perfect-freehand@1.2.2\`（鍵のかかった PDF は \`pdfjs-dist@5.7.284\` も）
+3. \`node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <pdf.json> --pages 3-5 --out <名前>.pdf\`
+   - \`--pages\` は書き出すページ（そのページの後ろに入れた白紙も一緒に入る）。省くとすべて
+
+\`book.pdf\` がない本（10MB より大きい）は作れないので、iPad のアプリで、右下のページ番号から開くページの一覧の「書き出す」で作ってもらってください。
+iPad で書いた直後は、ドライブに届くまで少し待ってから（アプリの下に「ドライブに保存しました」と出る）ダウンロードしてください。
 `;
 
   // ---------- 本のダウンロード（端末に保存） ----------
@@ -725,11 +739,12 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     const now = strokes.filter((s) => s.b === b).map((s) => s.id).sort().join();
     return now === Object.keys((sentBlock && sentBlock.strokes) || {}).sort().join();
   }
-  // ファイルから開いた本: 本の情報（md の本は本文も）を、最初に一度だけ置く。ドライブには AI への説明（README.md）も置く
+  // ファイルから開いた本: 本の情報（md の本は本文も）を、最初に一度だけ置く。ドライブには AI への説明（README.md）と道具も置く
   async function upBook(dir, bk, meta, R) {
+    if (R === drive) await upTools().catch((e) => { if (e.drive) throw e; });
     if (!meta || await kv.get('up:' + tag(R) + bk)) return;
     const put = async (path, text) => { if (!await R.sha(path)) await R.put(path, text, null, `book: ${dir.split('/').pop()}`); };
-    if (R === drive) { await put('README.md', README); await drive.mkdir(dir + '/answers'); }   // 答えを置くフォルダを先に作っておく
+    if (R === drive) await drive.mkdir(dir + '/answers');   // 答えを置くフォルダを先に作っておく
     const chapters = meta.chapters.map((c) => meta.pdf ? c : { ...c, file: 'chapters/' + c.id + '.md' });
     for (const c of meta.pdf ? [] : meta.chapters) {
       const v = await kv.get('md:' + bk + ':' + c.id);
@@ -737,6 +752,34 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     }
     await put(dir + '/book.json', JSON.stringify({ title: meta.title, from: 'file', pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}) }, null, 1));
     await kv.set('up:' + tag(R) + bk, true);
+  }
+  // ドライブの「Ink Reader」の直下に、AI への説明（README.md）と、書き込みつきの PDF を作る道具（ink_export.mjs。中身は export.js）を置く。
+  // アプリの版が変わったら置き直す。二つ同時に走って同じファイルを二つ作らないよう、走っている間は同じものを待つ
+  let toolsUp = null;
+  function upTools() {
+    return toolsUp ||= (async () => {
+      if (await kv.get('tools:drive') === APP_VERSION) return;
+      const r = await fetch('export.js');
+      if (!r.ok) throw new Error('export.js ' + r.status);
+      for (const [path, text] of [['README.md', README], ['ink_export.mjs', await r.text()]]) await drive.put(path, text, await drive.sha(path));
+      await kv.set('tools:drive', APP_VERSION);
+    })().finally(() => { toolsUp = null; });
+  }
+  // PDF の本の元の PDF を、一度だけ <本>/book.pdf に置く（クラウドの Claude が ink_export.mjs で「書き出す」と同じ PDF を作れるように）。
+  // ドライブ連携で Claude が読めるのは 10MB までなので、それより大きい本は置かない。GitHub には置かない
+  const PDF_MAX = 10 * 1048576;
+  let pdfUp = null;
+  function upPdf() {
+    if (!isPdf() || where() !== drive || pdfUp) return;
+    const dir = bookDir(), bk = bookKey();
+    pdfUp = (async () => {
+      await upTools();
+      if (await kv.get('pdfup:drive:' + bk)) return;
+      const v = await kv.get('pdf:' + bk), f = v && new Blob([v], { type: 'application/pdf' });
+      if (!f) return;
+      if (f.size <= PDF_MAX && !await drive.sha(dir + '/book.pdf')) await drive.put(dir + '/book.pdf', f, null);
+      await kv.set('pdfup:drive:' + bk, true);
+    })().catch(() => {}).finally(() => { pdfUp = null; });   // つながっていないときは、次に章を開いたとき・アプリに戻ったときに
   }
   // PDF のページ n を、余白・白紙と書き込みごと画像にする（紙の幅 680px の 2 倍）。
   // たたんだ余白も開いた形にする（線の座標は余白をすべて開いたときの位置なので、そのまま描ける）
@@ -792,7 +835,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   async function refreshChapter() {   // 置き場所の書き込みと答えを取り込む（他の端末・Claude の変更）
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
-    pullAnswers(id);
+    pullAnswers(id); upPdf();
     if (isLocal() && (st.at || (st.sha ? hub.name : null)) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
       const remote = await pullInk(id);
@@ -2294,13 +2337,15 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   }
   function showTab(tab) {
     for (const b of $('#toc-tabs').children) b.setAttribute('aria-selected', String(b.dataset.t === tab));
-    $('#toc-tab-main').hidden = tab !== 'main'; $('#toc-pages').hidden = $('#pg-go').hidden = tab !== 'pages';
+    $('#toc-tab-main').hidden = tab !== 'main'; $('#toc-pages').hidden = tab !== 'pages';
     toc.classList.toggle('pages', tab === 'pages');
+    if (tab !== 'pages') pick = null;
+    exShow();
     if (tab === 'pages') buildPages(); else stopThumbs();
     const cur = toc.querySelector(tab === 'pages' ? '.th.cur' : '#toc-list .cur'); if (cur) cur.scrollIntoView({ block: 'center' });
   }
   $('#toc-tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) showTab(b.dataset.t); };
-  toc.addEventListener('close', () => { stopThumbs(); thMenu.hidden = true; });
+  toc.addEventListener('close', () => { stopThumbs(); thMenu.hidden = true; pick = null; exShow(); });
 
   // ---------- ページの一覧（PDF） ----------
   // ページと白紙の縮小画像を並べる。画像は一覧で見えているものだけ作り、離れたら捨てる。
@@ -2331,7 +2376,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   }
   function thItem(n, i, k, cur) {
     const el = document.createElement('div'), [w, h] = book.sizes[n - 1];
-    el.className = 'th' + (i ? ' blank' : '') + (cur ? ' cur' : ''); el.dataset.n = n; el.dataset.i = i;
+    el.className = 'th' + (i ? ' blank' : '') + (cur ? ' cur' : '') + (pick && pick.has(n + ':' + i) ? ' on' : ''); el.dataset.n = n; el.dataset.i = i;
     const im = document.createElement('button'); im.type = 'button'; im.className = 'im'; im.style.aspectRatio = `${w} / ${h}`;
     im.setAttribute('aria-label', i ? `${n}ページの後ろの白紙へ` : `${n}ページへ`);
     const lb = document.createElement('div'); lb.className = 'lb';
@@ -2368,6 +2413,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     const th = e.target.closest('.th');
     if (!th) return;
     const n = +th.dataset.n, i = +th.dataset.i;
+    if (pick) { if (!exBusy && e.target.closest('.im')) { const k = n + ':' + i; if (!pick.delete(k)) pick.add(k); th.classList.toggle('on', pick.has(k)); exFile = null; exShow(); } return; }   // 書き出すページを選んでいる
     if (e.target.closest('.th-m')) {
       thAt = { n, i };
       $('#th-del').hidden = !i;
@@ -2386,6 +2432,75 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   const thKeep = () => { const t = toc.scrollTop; buildPages(); toc.scrollTop = t; };
   $('#th-add').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, true); stat.textContent = `${thAt.n}ページの後ろに白紙を入れました`; thKeep(); };
   $('#th-del').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, false); stat.textContent = '白紙を消しました'; thKeep(); };
+
+  // ---------- 書き出し（PDF） ----------
+  // ページの一覧の「書き出す」を押すと、縮小画像を押して書き出すページ（白紙も1枚ずつ）を選べる。選んだページを、書き込みを重ねた PDF にする。
+  // 作り方は export.js（ドライブに置いて、クラウドの Claude も同じものを使う）。export.js と pdf-lib は書き出すときだけ読み込む（ふだんは重くしない）
+  let pick = null, exFile = null, exBusy = false;   // 選んでいるとき: Set('<ページ>:<白紙の番号（0 はページそのもの）>') / 作った PDF（選び直すと捨てる。それまでは、もう一度共有できる）/ 作っている
+  const exMsg = (t) => { $('#ex-msg').textContent = t; };
+  const mb = (f) => f.size < 1048576 ? Math.ceil(f.size / 1024) + 'KB' : (f.size / 1048576).toFixed(1) + 'MB';
+  function exShow() {
+    const on = !!pick, pages = isPdf() && !$('#toc-pages').hidden;
+    toc.classList.toggle('picking', on);
+    $('#pg-go').hidden = !pages || on; $('#ex-on').hidden = !pages || on; $('#ex-bar').hidden = $('#ex-msg').hidden = !on;
+    if (!on) return;
+    const all = grid.children.length && pick.size === grid.children.length;
+    $('#ex-n').textContent = `${pick.size}ページ`;
+    $('#ex-all').textContent = all ? '選択を解除' : 'すべて選択';
+    const go = $('#ex-go');
+    if (!go.classList.contains('busy')) { go.disabled = !pick.size; go.textContent = exFile ? '共有する' : 'PDF にする'; }
+  }
+  $('#ex-on').onclick = () => { pick = new Set(); exFile = null; exMsg('書き出すページを押して選んでください。後ろの白紙も1枚ずつ選べます。'); exShow(); };
+  $('#ex-x').onclick = () => { pick = null; exFile = null; exShow(); };
+  $('#ex-all').onclick = () => {
+    const ths = [...grid.children], all = pick.size === ths.length;
+    pick = new Set(all ? [] : ths.map((th) => th.dataset.n + ':' + th.dataset.i));
+    for (const th of ths) th.classList.toggle('on', !all);
+    exFile = null; exShow();
+  };
+  $('#ex-go').onclick = async () => {
+    const go = $('#ex-go'), job = pick;
+    if (exFile) return shareFile(exFile);
+    if (!job || !job.size || exBusy) return;
+    exBusy = true; go.classList.add('busy'); go.disabled = $('#ex-all').disabled = true;
+    try {
+      const f = await exportPdf(new Set(job), (t) => { if (pick === job) go.textContent = t; });
+      if (pick === job) {   // 作っている間に「やめる」を押したり閉じたりしていなければ渡す
+        exFile = f; exMsg(`できました（${mb(f)}）`);
+        await shareFile(f);
+      }
+    } catch (e) { if (pick === job) exMsg('書き出せませんでした: ' + (e && e.message || e)); }
+    exBusy = false; go.classList.remove('busy'); $('#ex-all').disabled = false; exShow();
+  };
+  // iPad の共有シート（ファイルに保存・AirDrop・ほかのアプリ）で渡す。共有シートは押した直後しか開けないので、作るのに時間がかかったときはもう一度押してもらう
+  async function shareFile(f) {
+    try {
+      if (!navigator.canShare || !navigator.canShare({ files: [f] })) return save(f);
+      await navigator.share({ files: [f] });
+    } catch (e) {
+      if (e && e.name === 'NotAllowedError') exMsg(`できました（${mb(f)}）。「共有する」を押してください`);
+      else if (!e || e.name !== 'AbortError') save(f);
+    }
+  }
+  function save(f) {   // 共有できない端末（パソコンなど）はダウンロード
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+  const PDFLIB = 'vendor/pdf-lib/pdf-lib.esm.min.js';
+  async function exportPdf(keys, say) {
+    say('準備しています');
+    const [{ exportPdf: make }, L] = await Promise.all([import('./export.js'), import('./' + PDFLIB)]);
+    // 今の書き込みと余白を写しておく（作っている間に書いても混ざらない）。線は画面に描いた輪郭をそのまま使う
+    const ink = strokes.filter((s) => s.b > 0 && s.el).map((s) => ({ b: s.b, d: s.el.getAttribute('d'), hl: s.tool === 'hl', c: s.c, y0: s.bbox[1] - 10, y1: s.bbox[3] + 10 }));
+    const spl = {};
+    for (const b in sps) spl[b] = sps[b].map((p) => ({ ...p }));
+    const { bytes, name } = await make({
+      L, pdf: await pdfBytes(await kv.get('pdf:' + src)), unlock: () => pdfDoc,
+      sizes: book.sizes, title: book.title, ink, gaps: { ...gaps }, sps: spl, keys, say,
+      viewT: async (n) => (await pdfDoc.getPage(n)).getViewport({ scale: 1 }).transform,   // 画面で見ていたページの向き・範囲
+    });
+    return new File([bytes], name, { type: 'application/pdf' });
+  }
 
   // 本文の検索。章ごとの段落の文字（数式は TeX）を一度だけ作って覚えておく。段落の番号は #doc の子要素の番号（先頭は出典の行）
   const searchText = new Map();   // '<本>:<章>' -> { html, texts }

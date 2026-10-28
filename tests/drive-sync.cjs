@@ -1,8 +1,9 @@
 // Google ドライブ連携の確認（Playwright）。Google のログインとドライブ API はモックする
 // 使い方: node tests/drive-sync.cjs
 // 確認すること: 設定から「Google ドライブにつなぐ」→ 前に書いた分も「Ink Reader/<本>/」に送る（README・book.json・ink・ページの画像）
+// → PDF 本体（book.pdf）と書き出しの道具（ink_export.mjs）を置き、ドライブのものだけで書き込みつき PDF を作れる
 // → 「Claudeに聞く」の質問文と、囲んだ範囲・ページの画像 → Claude が置いた答えのファイルが Q 印になる → 接続が切れたら下の表示を押してつなぎ直す
-const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
+const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os'), { execFileSync } = require('child_process');
 const APP = path.resolve(__dirname, '..'), N = 4;
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
 const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8770);
@@ -90,7 +91,17 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   check('前に書いた分を送る', ink && Object.keys(JSON.parse(ink.content).blocks).join() === '1');
   const png = byPath(dir + '/view/p1.png');
   check('1ページの画像（PNG）', png && png.content.slice(1, 4).toString() === 'PNG' && png.mimeType === 'image/png');
-  check('PDF 本体は送らない', !Object.values(files).some((f) => /\.pdf$/.test(f.name)));
+  // PDF 本体（10MB まで）と書き出しの道具を置く。クラウドの Claude がドライブのものだけで、書き込みつきの PDF を作れる
+  const bpdf = byPath(dir + '/book.pdf'), tool = byPath('Ink Reader/ink_export.mjs');
+  check('PDF 本体を一度だけ置く', bpdf && bpdf.mimeType === 'application/pdf' && Buffer.compare(bpdf.content, fs.readFileSync(pdfPath)) === 0 && Object.values(files).filter((f) => /\.pdf$/.test(f.name)).length === 1);
+  check('書き出しの道具（export.js）と、その使い方を README に', tool && tool.mimeType === 'text/javascript' && tool.content.toString() === fs.readFileSync(path.join(APP, 'export.js'), 'utf8') && /node ink_export\.mjs/.test(byPath('Ink Reader/README.md').content));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ink-cloud-'));
+  fs.symlinkSync(path.join(APP, 'vendor'), path.join(work, 'vendor'));   // npm i の代わりにアプリの pdf-lib・perfect-freehand を使う
+  for (const [f, n] of [[tool, 'ink_export.mjs'], [bpdf, 'book.pdf'], [meta, 'book.json'], [ink, 'pdf.json']]) fs.writeFileSync(path.join(work, n), f.content);
+  let made = '';
+  try { made = execFileSync('node', ['ink_export.mjs', '--pdf', 'book.pdf', '--book', 'book.json', '--ink', 'pdf.json', '--pages', '1', '--out', 'out.pdf'], { cwd: work, encoding: 'utf8' }); } catch (e) { made = String(e.stderr || e.message); }
+  console.log('  ' + made.trim().split('\n').pop());
+  check('ドライブのものだけで、書き込みつきの PDF を作れる', /できました: out\.pdf（1枚/.test(made) && fs.readFileSync(path.join(work, 'out.pdf')).slice(0, 5).toString() === '%PDF-');
   check('GitHub には送らない', !calls.some((c) => /GITHUB/.test(c)));
   const twins = () => { const k = Object.values(files).filter((f) => !f.trashed).map((f) => (f.parents || []).join() + '/' + f.name); return k.length !== new Set(k).size; };
   check('同じフォルダ・ファイルを二つ作らない', !twins());
@@ -100,6 +111,11 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   await line(260, await pageY(1, 400));
   await p.waitForTimeout(6000);
   check('書き足すと上書きする', byPath(dir + '/ink/pdf.json').version > v0 && Object.keys(JSON.parse(byPath(dir + '/ink/pdf.json').content).blocks['1'].strokes).length === 2);
+  // アプリを新しくしたら（版が変わったら）、README と道具を置き直す。PDF 本体は置き直さない
+  const tv = byPath('Ink Reader/ink_export.mjs').version, pv = byPath(dir + '/book.pdf').version;
+  await p.evaluate(() => new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').put('ink-reader-v1', 'tools:drive'); t.oncomplete = res; }; }));
+  await p.reload(); await p.waitForTimeout(3000);
+  check('版が変わると道具を置き直す（PDF 本体はそのまま）', byPath('Ink Reader/ink_export.mjs').version === tv + 1 && byPath(dir + '/book.pdf').version === pv && !twins());
 
   // Claudeに聞く: ドライブの場所と答えの置き方を書いた質問文。囲んだ範囲とページの画像を置く
   await p.click('#t-ls');
