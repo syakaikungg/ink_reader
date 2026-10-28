@@ -99,6 +99,29 @@ const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = 
   await p.reload(); await p.waitForTimeout(2500);
   check('答えが Q 印になる', await p.evaluate(() => [...document.querySelectorAll('#qs .qm:not(.wait)')].map((m) => m.dataset.b).includes('3')));
 
+  // ページの途中のたたんだ余白に書いた線も、画像では余白を開いて写す（画像の作り方の版が上がったら作り直す）
+  const before = dims(remote[dir + '/view/p1.png'].content);
+  await p.evaluate(() => new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => {
+    const st = r.result.transaction('kv', 'readwrite').objectStore('kv'), q = st.getAllKeys();
+    q.onsuccess = () => {
+      const k = q.result.find((x) => /^ink:local:.*:pdf$/.test(x)), vk = q.result.find((x) => /^viewv:/.test(x)), g = st.get(k);
+      g.onsuccess = () => { const v = g.result, b1 = v.blocks[1];
+        b1.sp = [[300, 400, 1]];
+        b1.strokes.zz = { t: 'pen', c: 'r', s: 4, pen: true, p: [1000, 4000, 50, 5000, 4500, 50, 1000, 5000, 50, 5000, 6500, 50] };
+        st.put(v, k); if (vk) st.delete(vk); st.transaction.oncomplete = res; };
+    }; }; }));
+  await p.reload(); await p.waitForTimeout(7000);
+  const after = dims(remote[dir + '/view/p1.png'].content);
+  console.log('p1.png', before, '->', after);
+  check('たたんだ余白は開いて画像にする', after[1] >= before[1] + 790);
+  const redPx = await p.evaluate(async (b64) => {
+    const im = new Image(); im.src = 'data:image/png;base64,' + b64; await im.decode();
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data; let n = 0; for (let k = 0; k < d.length; k += 4) if (d[k] > 150 && d[k + 1] < 90) n++;
+    return n;
+  }, remote[dir + '/view/p1.png'].content.toString('base64'));
+  check('余白に書いた線が画像に写る', redPx > 200);
+
   // md の本も本文ごと送る
   await p.click('#books'); await p.setInputFiles('#shelf .open-file', mdPath); await p.waitForTimeout(1500);
   await line(200, await p.evaluate(() => { const el = document.querySelector('#doc > p'); return el.getBoundingClientRect().top + 10; }));
