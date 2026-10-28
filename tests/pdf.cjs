@@ -1,7 +1,7 @@
 // PDF の確認（Playwright）。300ページの PDF を Chromium で作り、「ファイルから開く」で開いて書き込む。GitHub は使わない。
 // 使い方: node tests/pdf.cjs [スクリーンショットの出力先]
 // 確認すること: 開く → ページが縦に並ぶ・ページ番号 → 描くのは近くのページだけ → 書く → ページ番号で飛ぶ → 再読み込みで残る
-// → 目次（PDF のしおり）→ 投げ縄で「Claudeに聞く」の画像 → 拡大で描き直す → 削除
+// → 目次（PDF のしおり）→ 投げ縄で「Claudeに聞く」の画像 → 拡大で描き直す（300% は見えている部分だけ細かく）→ 本文の検索 → 削除
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..'), OUT = process.argv[2] || os.tmpdir(), N = 300;
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
@@ -25,7 +25,7 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await p.waitForFunction(() => document.querySelector('#doc > .pg canvas'), null, { timeout: 20000 });
   console.log('open', (Date.now() - t0) + 'ms', await p.textContent('#stat'), '|', await p.textContent('#chap-t'));
   const pg = () => p.evaluate(() => document.getElementById('pg-in').value + ' / ' + document.getElementById('pg-n').textContent);
-  const canv = () => p.evaluate(() => [...document.querySelectorAll('#doc > .pg canvas')].filter((c) => c.width).map((c) => +c.parentNode.dataset.n));
+  const canv = () => p.evaluate(() => [...document.querySelectorAll('#doc > .pg canvas:not(.hd)')].filter((c) => c.width).map((c) => +c.parentNode.dataset.n));
   await p.waitForTimeout(800);
   console.log('pgno', await pg(), 'visible', await p.isVisible('#pgno'), 'drawn', await canv(), 'foot hidden', await p.isHidden('#foot'));
   await p.screenshot({ path: path.join(OUT, 'pdf.png') });
@@ -75,15 +75,33 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   const r0 = await res();
   await p.selectOption('#zoomv', '2'); await p.waitForTimeout(2500);
   console.log('zoom', await p.textContent('#zoomv option:first-child'), 'canvas width', r0, '->', await res(), 'drawn', (await canv()).length);
+  // 300% では、見えている部分だけを画面の画素どおりに細かく描いて重ねる（スクロールして止まると描き直す）
+  const hdInfo = () => p.evaluate(() => [...document.querySelectorAll('#doc > .pg canvas.hd')].map((c) => [+c.parentNode.dataset.n, Math.round(c.width / parseFloat(c.style.width) * 100) / 100, c.width * c.height]));
+  await p.selectOption('#zoomv', '3'); await p.waitForTimeout(2500);
+  console.log('zoom 300 hd [page, 画素/紙px, 画素数]', JSON.stringify(await hdInfo()));
+  await p.mouse.wheel(0, 2500); await p.waitForTimeout(2500);
+  console.log('after scroll hd', JSON.stringify(await hdInfo()), await pg());
+  await p.screenshot({ path: path.join(OUT, 'pdf-zoom.png') });
   await p.selectOption('#zoomv', 'fit'); await p.waitForTimeout(800);
+  console.log('fit hd', (await hdInfo()).length);
 
   // ぐちゃぐちゃ消し・消しゴムは md と同じ
   const n0 = await p.evaluate(() => document.querySelectorAll('#ink path').length);
-  const sy = await p.evaluate(() => document.querySelector('#doc > .pg[data-n="150"]').getBoundingClientRect().top + 500);
+  const sy = await p.evaluate(() => { const el = document.querySelector('#doc > .pg[data-n="150"]'); el.scrollIntoView(); return el.getBoundingClientRect().top + 500; });
   const draw = async (pts) => { await p.mouse.move(...pts[0]); await p.mouse.down(); for (const q of pts) await p.mouse.move(q[0], q[1], { steps: 4 }); await p.mouse.up(); };
   await draw([[300, sy], [310, sy + 20], [318, sy + 5]]);
   await draw([...Array(13)].map((_, i) => [295 + i * 4, i % 2 ? sy + 24 : sy - 4]));
   console.log('scribble', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#stat'));
+
+  // 本文の検索: 目次の検索欄 → 見つかったページへ飛び、その文字に一瞬色が付く
+  await p.click('#chap'); await p.fill('#toc-q', 'ページ 237 の'); await p.waitForTimeout(400);
+  await p.waitForFunction(() => document.querySelector('#toc-hits button'), null, { timeout: 30000 });
+  console.log('search', await p.$$eval('#toc-hits li', (o) => o.map((x) => x.textContent.slice(0, 40))));
+  await p.click('#toc-hits li:first-child button'); await p.waitForTimeout(500);
+  console.log('search jump', await pg(), 'hitbox', await p.evaluate(() => { const m = document.querySelector('.hitbox'); if (!m) return null; const r = m.getBoundingClientRect(); return [+m.parentNode.dataset.n, Math.round(r.top), Math.round(r.left), Math.round(r.width), r.top > 0 && r.bottom < innerHeight]; }));
+  await p.screenshot({ path: path.join(OUT, 'pdf-search.png') });
+  await p.click('#chap'); await p.fill('#toc-q', 'mc^2'); await p.waitForTimeout(600); console.log('search all', (await p.$$('#toc-hits li')).length, await p.textContent('#toc-hits li:last-child'));
+  await p.click('#toc button[value=cancel]');
 
   // 削除すると PDF も消える
   await p.click('#books'); await p.click('#shelf-list li:first-child .del'); await p.click('#shelf-list li:first-child .del'); await p.waitForTimeout(500);
