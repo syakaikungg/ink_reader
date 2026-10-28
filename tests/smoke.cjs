@@ -140,8 +140,24 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.mouse.click(400, 1150); console.log('size', await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), 'closed', await p.isHidden('#pop'));
   await p.click('#sizes button:nth-child(1)'); await p.click('#colors button:nth-child(1)');
   const hold = async (pts) => { await p.mouse.move(...pts[0]); await p.mouse.down(); for (const q of pts) await p.mouse.move(q[0], q[1]); await p.waitForTimeout(650); const s = await p.textContent('#stat'); await p.mouse.up(); await p.waitForTimeout(100); return s; };
-  const wob = []; for (let i = 0; i <= 30; i++) wob.push([150 + i * 10, py + 200 + (i % 3) * 1.5]);
-  console.log('shape line', await hold(wob));
+  // 直線: 書き始めに小さなはね、止めている間のぶれがあっても直線になる
+  const wob = [[150, py + 206], [146, py + 203]]; for (let i = 0; i <= 30; i++) wob.push([150 + i * 10, py + 200 + (i % 3) * 2]);
+  await p.mouse.move(...wob[0]); await p.mouse.down(); for (const q of wob) await p.mouse.move(q[0], q[1]);
+  for (let i = 0; i < 12; i++) { await p.mouse.move(450 + (i % 2), py + 200 + (i % 3) * .8); await p.waitForTimeout(50); }
+  console.log('shape line (jitter)', await p.textContent('#stat'));
+  // 離さずに動かすと向きと長さが変わる
+  for (let i = 1; i <= 10; i++) await p.mouse.move(450 - i * 10, py + 200 + i * 15);
+  await p.mouse.up(); await p.waitForTimeout(150);
+  const hd = () => p.evaluate(() => [...document.querySelectorAll('#ink .hd circle')].map((c) => [Math.round(+c.getAttribute('cx')), Math.round(+c.getAttribute('cy'))]));
+  const toPg = (x, y) => p.evaluate(([x, y]) => { const r = document.getElementById('page').getBoundingClientRect(), s = r.width / 680; return [Math.round((x - r.left) / s), Math.round((y - r.top) / s)]; }, [x, y]);
+  console.log('live adjust: handles', JSON.stringify(await hd()), 'pen end at', JSON.stringify(await toPg(350, py + 350)));
+  // つまみを動かすと形が変わり、戻すで元に戻る
+  const toScr = (x, y) => p.evaluate(([x, y]) => { const r = document.getElementById('page').getBoundingClientRect(), s = r.width / 680; return [r.left + x * s, r.top + y * s]; }, [x, y]);
+  const h1 = (await hd())[1], s1 = await toScr(...h1);
+  await p.mouse.move(...s1); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(s1[0] + i * 10, s1[1] - i * 3); await p.mouse.up(); await p.waitForTimeout(150);
+  console.log('handle drag', await p.textContent('#stat'), JSON.stringify(await hd()));
+  await p.click('#undo'); await p.waitForTimeout(100); console.log('undo shape edit: handles', (await hd()).length, 'paths', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length));
+  await p.click('#redo'); await p.waitForTimeout(100);
   const circ = []; for (let i = 0; i <= 40; i++) { const t = i / 40 * 2 * Math.PI; circ.push([400 + 60 * Math.cos(t) + (i % 2) * 2, py + 330 + 60 * Math.sin(t)]); }
   console.log('shape circle', await hold(circ));
   const sq = []; for (const [x0, y0, x1, y1] of [[200, 0, 320, 3], [320, 3, 318, 120], [318, 120, 202, 118], [202, 118, 200, 2]]) for (let i = 0; i < 12; i++) sq.push([x0 + (x1 - x0) * i / 12, py + 420 + y0 + (y1 - y0) * i / 12]);
@@ -151,6 +167,10 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   const sq2 = sq.map(([x, y]) => [x, y + 160]); await p.mouse.move(...sq2[0]); await p.mouse.down(); for (const q of sq2) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(100);
   console.log('no hold keeps freehand', await p.textContent('#stat'));
   await p.reload(); await p.waitForTimeout(1500);
+  await p.click('#t-ls'); const lc = await toScr(400, 0); const cy0 = await p.evaluate(() => { const c = [...document.querySelectorAll('#ink path')]; return 0; });
+  const circY = py + 330; const cp = [[320, circY - 80], [480, circY - 80], [480, circY + 80], [320, circY + 80], [320, circY - 78]];
+  await p.mouse.move(...cp[0]); await p.mouse.down(); for (const q of cp) for (let k = 1; k <= 4; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(150);
+  console.log('lasso shape after reload', await p.textContent('#sel-n'), 'handles', (await hd()).length); await p.click('#sel-x'); await p.click('#t-pen');
   console.log('pens after reload', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), await p.evaluate(() => [...document.querySelectorAll('#ink path')].some((x) => x.style.fill === 'rgb(31, 138, 76)')));
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
