@@ -4,6 +4,8 @@
 // どちらも本・書き込みを IndexedDB に保存してオフラインで使い、GitHub の本だけ書き込みを GitHub と同期する
 (() => {
   const W = 680;
+  // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
+  const APP_VERSION = 'ink-reader-v35';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2373,6 +2375,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     msg.textContent = cfg.token ? '接続先を変えるときだけ書き換えてください' : '';
     dlg.showModal();
   }
+  $('#cfg-ver').textContent = APP_VERSION.replace('ink-reader-', '');
   $('#gear').onclick = openCfg;
   async function connect(force) {
     msg.textContent = '接続中…';
