@@ -709,7 +709,10 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   const blobB64 = (bl) => new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = ng; r.readAsDataURL(bl); });
   const pngOf = (cv) => new Promise((r) => cv.toBlob(r, 'image/png'));
   // <本>/view/p<ページ>.png を作り直す。書き込みがなくなったページの画像は消す（all: 書き込みがなくても置く）
-  async function upPages(dir, bk, pages, all, R = where()) {
+  // 同時に二つ走ると、どちらも「まだない」と見て同じ画像を二つ作るので、順番に一つずつ
+  let pagesQ = Promise.resolve();
+  function upPages(...a) { return pagesQ = pagesQ.then(() => upPages1(...a)).catch(() => {}); }
+  async function upPages1(dir, bk, pages, all, R = where()) {
     const key = 'view:' + tag(R) + bk, shas = (await kv.get(key)) || {};
     for (const n of pages) {
       const path = dir + '/view/p' + n + '.png', msg = `ink: ${dir.split('/').pop()} p${n}`;
