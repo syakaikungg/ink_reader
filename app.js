@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v38';
+  const APP_VERSION = 'ink-reader-v39';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -112,9 +112,13 @@
     });
   }
   function render(s, pts, last) {
-    const o = opts(s, last);
-    const list = pts || s.pts;   // 図形に直した線は角を丸めないよう、ならさない
-    s.el.setAttribute('d', pathD(getStroke(trimTail(s.g ? list : smooth(list, Math.min(o.size * .75, 3)), Math.min(o.size, 3)), o)));
+    const o = opts(s, last), list = pts || s.pts;
+    let q = s.g ? list : smooth(list, Math.min(o.size * .75, 3));   // 図形に直した線は角を丸めないよう、ならさない
+    if (last) q = trimTail(q, Math.min(o.size, 3));   // 書いている途中に削ると、ペン先の手前が直線になる
+    // perfect-freehand は線の終わりの長さ 3（座標の単位）を直線でつなぐ。紙の px のまま渡すと、拡大して書いたときに
+    // ペン先の後ろについてくる短い棒に見えるので、10 倍して渡して戻す
+    const out = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, pr]), { ...o, size: o.size * 10 });
+    s.el.setAttribute('d', pathD(out.map(([x, y]) => [x / 10, y / 10])));
   }
   function bbox(s) {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
