@@ -431,11 +431,11 @@
     async list(dir) { const l = await gh(dir); return Array.isArray(l) ? l.map((f) => ({ name: f.name, path: dir + '/' + f.name })) : []; },
   };
   // ドライブは、利用者のマイドライブの「Ink Reader」フォルダの下に置く（パスはその中から）。
-  // ログインは Google のポップアップ（ボタンを押したときだけ）。トークンは 1 時間で切れるので、切れたら #stat を押してつなぎ直す
+  // ログインは Google のポップアップ（押した操作の中でしか開けない）。トークンは 1 時間で切れるので、切れる前後に画面に触れたとき、自動でつなぎ直す
   const drive = (() => {
     const API = 'https://www.googleapis.com/', ROOT = 'Ink Reader', FOLDER = 'application/vnd.google-apps.folder';
-    let tok = null, exp = 0, gis = null;
-    try { ({ tok, exp } = JSON.parse(store.get(PREF + ':dtok')) || {}); } catch {}
+    let tok = null, exp = 0, gis = null, who = '';
+    try { ({ tok, exp, who = '' } = JSON.parse(store.get(PREF + ':dtok')) || {}); } catch {}
     const prep = () => gis ||= new Promise((ok, ng) => {
       const s = document.createElement('script');
       s.src = 'https://accounts.google.com/gsi/client'; s.onload = ok;
@@ -443,17 +443,20 @@
       document.head.append(s);
     });
     // ポップアップを止められないように、押した操作の中で（待たずに）呼ぶ。先に prep で読み込んでおく
-    const login = () => new Promise((ok, ng) => {
+    // again: 2回目からは同意の画面を出さず、同じアカウントで（一瞬開いて閉じるだけ）
+    const login = (again) => new Promise((ok, ng) => {
       if (!window.google || !google.accounts) { prep(); return ng(new Error('準備中です。もう一度押してください')); }
       google.accounts.oauth2.initTokenClient({
         client_id: cfg.dcid, scope: 'https://www.googleapis.com/auth/drive',
-        callback: (r) => {
+        ...(again && who ? { login_hint: who } : {}),
+        callback: async (r) => {
           if (r.error) return ng(new Error(r.error));
           tok = r.access_token; exp = Date.now() + (r.expires_in - 60) * 1000;
-          store.set(PREF + ':dtok', JSON.stringify({ tok, exp })); ok();
+          if (!who) try { who = (await (await api('drive/v3/about?fields=user(emailAddress)')).json()).user.emailAddress; } catch {}
+          store.set(PREF + ':dtok', JSON.stringify({ tok, exp, who })); ok();
         },
         error_callback: (e) => ng(new Error(e.type === 'popup_closed' ? 'ログインを閉じました' : 'ログインできませんでした')),
-      }).requestAccessToken();
+      }).requestAccessToken(again ? { prompt: '' } : {});
     });
     async function api(path, opt = {}) {
       const no = () => { const e = new Error('ドライブにつながっていません'); e.status = 401; e.drive = true; return e; };
@@ -486,7 +489,7 @@
     async function file(path) { const [d, name] = split(path), pid = await folder(d, false); return pid ? find(name, pid) : null; }
     const texts = new Map();   // ファイルの id -> { v, text }（変わっていなければ取り直さない）
     return {
-      name: 'ドライブ', prep, login, ok: () => !!tok && Date.now() < exp, mkdir: (path) => folder(ROOT + '/' + path, true),
+      name: 'ドライブ', prep, login, ok: () => !!tok && Date.now() < exp, soon: () => !tok || Date.now() > exp - 10 * 60000, mkdir: (path) => folder(ROOT + '/' + path, true),
       async get(path) {
         const f = await file(path);
         if (!f) return null;
@@ -524,17 +527,30 @@
   const driveOn = () => !!(cfg.drive && cfg.dcid);
   const where = () => isLocal() && driveOn() ? drive : hub;
   const hasRemote = () => isLocal() && driveOn() || !!cfg.token;
-  // ドライブのトークンが切れた: 下の表示を押すとつなぎ直す（Google のポップアップは押した操作の中でしか開けない）
-  let relogin = false;
+  // ドライブのトークンが切れる（10分前から）・切れた: 次に画面に触れたとき（ペンを離したときも）自動でつなぎ直す。
+  // うまくいかなければ 2 分おいて、また触れたときに。下の表示を押してもつなぎ直せる
+  let relogin = false, logging = false, nextTry = 0;
   function needLogin() {
     relogin = true; drive.prep().catch(() => {});
     stat.textContent = 'ドライブとの接続が切れました。ここを押すとつなぎ直します';
   }
-  stat.addEventListener('click', () => {
-    if (!relogin) return;
-    drive.login().then(() => { relogin = false; stat.textContent = 'ドライブにつなぎ直しました'; pushAll(); refreshChapter(); })
-      .catch((e) => { stat.textContent = e.message; });
-  });
+  function reconnect(by) {
+    if (logging) return;
+    logging = true;
+    drive.login(true).then(() => {
+      if (relogin) stat.textContent = 'ドライブにつなぎ直しました';
+      relogin = false; pushAll(); refreshChapter();
+    }).catch((e) => { nextTry = Date.now() + 120000; if (by) stat.textContent = e.message; else if (!drive.ok()) needLogin(); })
+      .finally(() => { logging = false; });
+  }
+  stat.addEventListener('click', () => { if (relogin) reconnect(true); });
+  const autoLogin = () => {
+    if (logging || !cfg.drive || !driveOn() || !isLocal() || !online() || !drive.soon() || Date.now() < nextTry) return;
+    if (!window.google || !google.accounts) { drive.prep().catch(() => {}); return; }
+    reconnect(false);
+  };
+  for (const t of ['pointerup', 'touchend', 'click']) document.addEventListener(t, autoLogin, true);
+  if (cfg.drive && driveOn()) setTimeout(() => drive.prep().catch(() => {}), 3000);   // 触れたときにすぐ開けるように、先に読み込んでおく
   // ドライブの「Ink Reader」フォルダに置く、AI（Claude などのドライブ連携）への説明
   const README = `# Ink Reader のフォルダ
 
