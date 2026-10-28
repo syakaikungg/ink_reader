@@ -148,6 +148,15 @@ html, body, body * { touch-action: manipulation; }
 #ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 #pop-size { display: flex; align-items: center; gap: 10px; }
 #pop-size input { width: 200px; }
+#pop-er[hidden] { display: none; }
+#pop-er .seg { display: flex; gap: 6px; margin-bottom: 10px; }
+#pop-er .seg button { flex: 1; white-space: nowrap; }
+#pop-er .seg button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+#pop-er label { display: flex; align-items: center; gap: 10px; }
+#pop-er .ring-box { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; }
+#pop-er .ring { border: 1.5px solid var(--fg); border-radius: 50%; }
+#pop-er input { width: 160px; }
+#ink .er-ring { fill: none; stroke: var(--fg); stroke-opacity: .45; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 #pop-size .dot { background: var(--fg); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
 #ink .hl { fill: var(--hl); opacity: var(--hl-op); mix-blend-mode: var(--hl-blend); }
 
@@ -347,7 +356,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -416,6 +425,10 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 <div id="pop" hidden>
   <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
   <label id="pop-size"><span class="dot"></span><input type="range" min="1" max="12" step="0.2" aria-label="太さ"></label>
+  <div id="pop-er">
+    <div class="seg" role="group" aria-label="消し方"><button type="button" data-m="stroke">線ごと</button><button type="button" data-m="part">なぞった所</button></div>
+    <label><span class="ring-box"><span class="ring"></span></span><input type="range" min="4" max="30" step="1" aria-label="消しゴムの大きさ"></label>
+  </div>
 </div>
 
 <dialog id="toc">

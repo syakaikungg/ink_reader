@@ -193,6 +193,34 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('marker line', await hold(hl), 'handles', JSON.stringify(await hd()));
   console.log('marker circle stays', await hold(circ.map(([x, y]) => [x, y - py + qy + 160])));
   await p.click('#t-pen');
+  // 丸で囲んで長押し: 囲んだ線をペンで押さえると投げ縄になり、そのまま動かせる。外を押すとペンに戻る
+  const ry = await p.evaluate(() => { const ps = document.querySelectorAll('#doc > p'), el = ps[ps.length - 3]; el.scrollIntoView({ block: 'start' }); return el.getBoundingClientRect().top + 120; });
+  const npath = () => p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length);
+  await line(380, ry + 60);
+  const loop = []; for (let i = 0; i <= 40; i++) { const t = i / 40 * 2 * Math.PI; loop.push([420 + 110 * Math.cos(t), ry + 60 + 70 * Math.sin(t)]); }
+  await p.mouse.move(...loop[0]); await p.mouse.down(); for (const q of loop) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(100);
+  const nl0 = await npath();
+  await p.mouse.move(420, ry - 10); await p.mouse.down(); await p.waitForTimeout(650);
+  console.log('circle to lasso', await p.textContent('#stat'), 'lasso tool', await p.getAttribute('#t-ls', 'aria-pressed'), 'paths', nl0, '->', await npath());
+  for (let i = 1; i <= 5; i++) await p.mouse.move(420 + i * 6, ry - 10 + i * 4); await p.mouse.up(); await p.waitForTimeout(150);
+  console.log('dragged', await p.textContent('#stat'));
+  await p.mouse.click(150, ry + 400); await p.waitForTimeout(100);
+  console.log('back to pen', await p.getAttribute('#t-pen', 'aria-pressed'), 'menu hidden', await p.isHidden('#selmenu'));
+  // 押さえずに輪の上で書くと、ふつうに書ける
+  await line(300, ry + 125); console.log('tap on loop draws', await p.getAttribute('#t-pen', 'aria-pressed'));
+  // 消しゴム: もう一度押すと種類と大きさ。なぞった所だけ消すと、線が2つに分かれ、戻すで元に戻る
+  await p.click('#t-er'); await p.click('#t-er'); console.log('eraser pop', await p.isVisible('#pop-er')); await p.screenshot({ path: path.join(OUT, 'eraser.png'), clip: { x: 0, y: 0, width: 820, height: 260 } });
+  await p.click('#pop-er [data-m=part]'); console.log('eraser mode closed', await p.isHidden('#pop'));
+  await p.click('#t-pen');
+  const ly2 = ry + 250; await p.mouse.move(150, ly2); await p.mouse.down(); for (let i = 1; i <= 30; i++) await p.mouse.move(150 + i * 15, ly2); await p.mouse.up(); await p.waitForTimeout(100);
+  const nl1 = await npath();
+  await p.click('#t-er'); await p.mouse.move(375, ly2 - 40); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(375, ly2 - 40 + i * 10); await p.mouse.up(); await p.waitForTimeout(150);
+  console.log('partial erase', nl1, '->', await npath());
+  await p.click('#undo'); await p.waitForTimeout(100); console.log('undo partial', await npath());
+  await p.click('#t-er'); await p.click('#pop-er [data-m=stroke]');
+  await p.mouse.move(375, ly2 - 40); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(375, ly2 - 40 + i * 10); await p.mouse.up(); await p.waitForTimeout(150);
+  console.log('stroke erase', await npath(), 'saved', await p.evaluate(() => Object.keys(localStorage).filter((k) => /eraser/.test(k)).map((k) => localStorage[k])));
+  await p.click('#t-pen');
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;
