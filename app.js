@@ -508,7 +508,7 @@
       }
       await kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] });
       // PDF は座標だけでは AI に分からないので、書き込みを変えたページを画像にして送る
-      if (meta && meta.pdf && id === CH && bk === bookKey()) await upPages(dir, bk, [...sent]);
+      if (meta && meta.pdf && id === CH && bk === bookKey()) { await upPages(dir, bk, [...sent]); kv.set('viewv:' + bk, VIEWV).catch(() => {}); }
       if (id === CH && !st.pending.size) stat.textContent = 'GitHubに保存しました';
     } catch (e) {
       stat.textContent = e.status === 401 || e.status === 403 ? 'GitHubに保存できません（トークンを確認してください）' : 'GitHubに送れませんでした（iPadには保存済み）';
@@ -534,22 +534,29 @@
     await put(dir + '/book.json', b64.from(JSON.stringify({ title: meta.title, from: 'file', pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}) }, null, 1)));
     await kv.set('up:' + bk, true);
   }
-  // PDF のページ n を、余白・白紙と書き込みごと画像にする（紙の幅 680px の 2 倍）
+  // PDF のページ n を、余白・白紙と書き込みごと画像にする（紙の幅 680px の 2 倍）。
+  // たたんだ余白も開いた形にする（線の座標は余白をすべて開いたときの位置なので、そのまま描ける）
   async function pageImage(n) {
     const k = 2, pg = await pdfDoc.getPage(n), w1 = pg.getViewport({ scale: 1 }).width, pc = document.createElement('canvas');
     pc.width = W * k; pc.height = Math.ceil(pageH(n) * k);
     await pg.render({ canvas: pc, viewport: pg.getViewport({ scale: k * W / w1 }) }).promise;
-    const list = strokes.filter((s) => s.b === n && !s.hid), t0 = tops[n] || 0, ty = (s) => top(s) - t0;
-    let h = sheet(n) + (gaps[n] || 0);
-    for (const s of list) h = Math.max(h, s.bbox[3] + ty(s) + 20);
+    const list = strokes.filter((s) => s.b === n);
+    let h = pageH(n) + spSum(n) + (gaps[n] || 0);
+    for (const s of list) h = Math.max(h, s.bbox[3] + 20);
     const cv = document.createElement('canvas'), g = cv.getContext('2d');
     cv.width = W * k; cv.height = Math.ceil(h * k);
     g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
-    for (const s of segs(n)) g.drawImage(pc, 0, s.c0 * k, pc.width, (s.c1 - s.c0) * k, 0, s.v * k, cv.width, (s.c1 - s.c0) * k);
+    let c0 = 0, v = 0;
+    for (const c1 of (sps[n] || []).map((p) => p.at).concat(pageH(n))) {
+      g.drawImage(pc, 0, c0 * k, pc.width, (c1 - c0) * k, 0, v * k, cv.width, (c1 - c0) * k);
+      const p = (sps[n] || []).find((x) => x.at === c1);
+      v += c1 - c0 + (p ? p.h : 0); c0 = c1;
+    }
     pc.width = pc.height = 0;
-    g.scale(k, k); drawInk(g, list, ty);
+    g.scale(k, k); drawInk(g, list, () => 0);
     return cv;
   }
+  const VIEWV = 2;   // ページの画像の作り方の版（変えたら上げる）
   const blobB64 = (bl) => new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = ng; r.readAsDataURL(bl); });
   // <本>/view/p<ページ>.png を作り直す。書き込みがなくなったページの画像は消す（all: 書き込みがなくても置く）
   async function upPages(dir, bk, pages, all) {
@@ -1855,6 +1862,15 @@
     if (document.fonts) document.fonts.ready.then(layout);
     // ファイルから開いた本で、まだ GitHub に送っていない書き込み（トークンを入れる前に書いたもの）を送る
     if (isLocal() && cfg.token && !cs.sha && !cs.pending.size && Object.keys(cs.blocks).length) { for (const b in cs.blocks) cs.pending.add(+b); persist(); schedulePush(1500); }
+    // ページの画像の作り方を変えたときは、書き込みのあるページの画像を作り直す
+    if (isPdf() && isLocal() && canPush()) {
+      const bk = bookKey();
+      kv.get('viewv:' + bk).then((v) => v === VIEWV || setTimeout(async () => {
+        if (bk !== bookKey() || !pdfDoc || await kv.get('viewv:' + bk) === VIEWV) return;
+        await upPages(bookDir(), bk, [...new Set(strokes.map((x) => x.b))]);
+        kv.set('viewv:' + bk, VIEWV);
+      }, 3000));
+    }
     showPending();
     lastPull = Date.now(); refreshChapter();
   }
