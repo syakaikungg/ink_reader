@@ -1,3 +1,4 @@
+// Copyright (C) 2026 syakaikungg. All rights reserved.
 // Ink Reader: md の本を章ごとに表示し、Apple Pencil で書き込む。
 // 本は iPad の「ファイル」から開くか、非公開リポジトリ（既定 syakaikungg/sakai_study）から取る。
 // どちらも本・書き込みを IndexedDB に保存してオフラインで使い、GitHub の本だけ書き込みを GitHub と同期する
@@ -57,8 +58,8 @@
   function opts(s, last) {
     if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last,
       start: { cap: false }, end: { cap: false } };
-    return { size: s.s, thinning: .62, smoothing: .55, streamline: .28, simulatePressure: !s.pen, last,
-      easing: (t) => t };
+    // ペンは太さ一定（筆圧で太さを変えない）。点の筆圧は保存したままなので、筆圧で変わるペンを足すときに使える
+    return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
   }
   function pathD(outline) {
     const n = outline.length;

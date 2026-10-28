@@ -1,3 +1,4 @@
+// Copyright (C) 2026 syakaikungg. All rights reserved.
 // md（$…$ / $$…$$ の数式つき）を HTML にする。
 // 書き込みは「何番目の段落か」で結びつけているので、段落の分け方を変えると既存の書き込みがずれる。変えるときは注意
 window.renderMarkdown = function renderMarkdown(md, images) {

@@ -28,3 +28,9 @@ GitHub の Settings → Developer settings → Fine-grained tokens で、対象�
 - `render.js`: md → HTML（KaTeX）。段落の分け方を変えると既存の書き込みがずれるので注意
 - `sw.js`: アプリ本体のキャッシュ（更新したら `VERSION` を上げる）
 - `vendor/`: KaTeX 0.16.11、marked 12.0.2、perfect-freehand 1.2.2、Source Serif 4
+
+## 著作権
+
+Copyright (C) 2026 syakaikungg. All rights reserved.
+
+`vendor/` のライブラリは、それぞれのライセンス（KaTeX・marked・perfect-freehand は MIT、PDF.js は Apache 2.0）に従います。
