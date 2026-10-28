@@ -79,9 +79,15 @@
     for (const [x, y] of s.pts) { if (x < a) a = x; if (y < b) b = y; if (x > c) c = x; if (y > d) d = y; }
     s.bbox = [a, b, c, d];
   }
+  // 色は 'k'/'r'/'b'（画面の明暗で色が変わる既定の3色）か '#rrggbb'（自分で選んだ色）
+  function paint(el, s) {
+    const hex = s.tool !== 'hl' && /^#/.test(s.c);
+    el.setAttribute('class', s.tool === 'hl' ? 'hl' : hex ? 'x' : s.c);
+    if (hex) el.style.fill = s.c; else el.style.removeProperty('fill');
+  }
   function mount(s) {
     if (!s.el) {
-      s.el = document.createElementNS(NS, 'path'); s.el.setAttribute('class', s.tool === 'hl' ? 'hl' : s.c);
+      s.el = document.createElementNS(NS, 'path'); paint(s.el, s);
       render(s, null, true);
     }
     place(s);
@@ -459,11 +465,54 @@
     page.classList.toggle('lassoing', tool === 'ls');
     if (tool !== 'ls') clearSel();
   });
-  // 投げ縄で選んでいるときは、色・太さボタンで選んだ線を変える
+  // 投げ縄で選んでいるときは、色・太さボタンで選んだ線を変える。
+  // 選んでいるボタンをもう一度押すと、そのボタンの色・太さを変える小窓が出る（ボタンは3つのまま。端末に覚える）
+  const PALETTE = ['k', 'r', 'b', '#1f8a4c', '#e07b00', '#7b3fc4', '#8a5a2b', '#0f8b8d', '#d6338a', '#6b7280', '#c9a100', '#0b2f6b'];
   const colorBtns = [...document.querySelectorAll('#colors button')];
-  colorBtns.forEach((b) => b.onclick = () => { color = b.dataset.c; press(colorBtns, b); if (sel.length) restyle({ c: color }); else if (tool !== 'pen') toolBtns[0].click(); });
   const sizeBtns = [...document.querySelectorAll('#sizes button')];
-  sizeBtns.forEach((b) => b.onclick = () => { size = +b.dataset.s; press(sizeBtns, b); if (sel.length) restyle({ s: size }); else if (tool !== 'pen') toolBtns[0].click(); });
+  const pop = $('#pop'), popColors = $('#pop-colors'), popSize = $('#pop-size'), popRange = popSize.querySelector('input');
+  let popFor = null;
+  const pens = (() => { try { return JSON.parse(store.get(PREF + ':pens')) || {}; } catch { return {}; } })();
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: colorBtns.map((b) => b.dataset.c), s: sizeBtns.map((b) => +b.dataset.s) }));
+  const swatch = (el, c) => { el.className = 'sw' + (/^#/.test(c) ? '' : ' ' + c); el.style.background = /^#/.test(c) ? c : ''; };
+  const dotSize = (el, s) => { const w = Math.max(3, Math.min(16, s * 2)) + 'px'; el.style.width = el.style.height = w; };
+  function setColorBtn(b, c) { b.dataset.c = c; swatch(b.firstElementChild, c); }
+  function setSizeBtn(b, s) { b.dataset.s = String(s); dotSize(b.firstElementChild, s); }
+  (pens.c || []).forEach((c, i) => colorBtns[i] && setColorBtn(colorBtns[i], c));
+  (pens.s || []).forEach((s, i) => sizeBtns[i] && setSizeBtn(sizeBtns[i], s));
+  for (const b of sizeBtns) if (b.getAttribute('aria-pressed') === 'true') size = +b.dataset.s;
+  for (const b of colorBtns) if (b.getAttribute('aria-pressed') === 'true') color = b.dataset.c;
+  function closePop() { pop.hidden = true; popFor = null; }
+  function openPop(btn, kind) {
+    popFor = btn;
+    popColors.hidden = kind !== 'c'; popSize.hidden = kind !== 's';
+    if (kind === 'c') popColors.replaceChildren(...PALETTE.map((c) => {
+      const x = document.createElement('button'); x.type = 'button'; x.setAttribute('aria-pressed', String(c === btn.dataset.c));
+      const s = document.createElement('span'); swatch(s, c); x.append(s);
+      x.onclick = () => { setColorBtn(btn, c); savePens(); closePop(); color = c; press(colorBtns, btn); };
+      return x;
+    }));
+    else { popRange.value = btn.dataset.s; dotSize(popSize.firstElementChild, +btn.dataset.s); }
+    pop.hidden = false;
+    const r = btn.getBoundingClientRect(), w = pop.offsetWidth;
+    pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+    pop.style.top = r.bottom + 6 + 'px';
+  }
+  popRange.oninput = () => { const s = +popRange.value; setSizeBtn(popFor, s); dotSize(popSize.firstElementChild, s); size = s; };
+  popRange.onchange = () => { savePens(); if (sel.length) restyle({ s: size }); };
+  document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target.closest('button') !== popFor) closePop(); }, true);
+  colorBtns.forEach((b) => b.onclick = () => {
+    const again = color === b.dataset.c && b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
+    color = b.dataset.c; press(colorBtns, b);
+    if (sel.length) restyle({ c: color }); else if (tool !== 'pen') toolBtns[0].click();
+    if (again && popFor !== b) openPop(b, 'c'); else closePop();
+  });
+  sizeBtns.forEach((b) => b.onclick = () => {
+    const again = b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
+    size = +b.dataset.s; press(sizeBtns, b);
+    if (sel.length) restyle({ s: size }); else if (tool !== 'pen') toolBtns[0].click();
+    if (again && popFor !== b) openPop(b, 's'); else closePop();
+  });
   $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); };
   let armT = 0;
   $('#clear').onclick = (e) => {
@@ -491,6 +540,7 @@
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
   const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (finger && e.pointerType === 'touch');
+  let hold = null, holdT = 0;   // ペンを止めた位置と、図形に直すまでのタイマー
   let cur = null, curId = null, curType = '', curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
   let t0 = 0, samples = 0, frames = 0;
 
@@ -708,7 +758,7 @@
   function drawInk(g, list) {
     for (const s of [...list].sort((x, y) => (y.tool === 'hl') - (x.tool === 'hl'))) {
       g.save(); g.translate(0, top(s));
-      g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || INK.k;
+      g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || (/^#/.test(s.c) ? s.c : INK.k);
       g.fill(new Path2D(s.el.getAttribute('d')));
       g.restore();
     }
@@ -913,6 +963,66 @@
     render(cur, predicted.length ? cur.pts.concat(predicted) : cur.pts, false);
   }
 
+  // 手書きの線を図形に直す。点の列 [[x,y,p]] から、直線・円（楕円）・三角形・四角形のどれかに近ければその形の点の列を返す
+  function fitShape(pts) {
+    if (pts.length < 6) return null;
+    let len = 0; for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (len < 24) return null;
+    const ps = pts.map((q) => q[2]).sort((x, y) => x - y), p = ps[ps.length >> 1];
+    const A = pts[0], B = pts[pts.length - 1], chord = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    const along = (list, closed) => {   // 角の点を 3px おきの点の列にする
+      const out = [], n = closed ? list.length : list.length - 1;
+      for (let i = 0; i < n; i++) {
+        const [x0, y0] = list[i], [x1, y1] = list[(i + 1) % list.length], k = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 3));
+        for (let j = 0; j < k; j++) out.push([x0 + (x1 - x0) * j / k, y0 + (y1 - y0) * j / k, p]);
+      }
+      const last = closed ? list[0] : list[list.length - 1]; out.push([last[0], last[1], p]);
+      return out;
+    };
+    const dist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return Math.abs((q[0] - a[0]) * dy - (q[1] - a[1]) * dx) / l; };
+    // 直線: 始点と終点を結んだ線から大きく外れない。水平・垂直に近ければそろえる
+    if (chord > len * .85) {
+      let dev = 0; for (const q of pts) dev = Math.max(dev, dist(q, A, B));
+      if (dev < Math.max(4, chord * .06)) {
+        let [x1, y1] = B; const ang = Math.atan2(y1 - A[1], x1 - A[0]) * 180 / Math.PI;
+        if (Math.abs(Math.sin(ang * Math.PI / 180)) < .07) y1 = A[1]; else if (Math.abs(Math.cos(ang * Math.PI / 180)) < .07) x1 = A[0];
+        return { name: '直線', pts: along([A.slice(0, 2), [x1, y1]], false) };
+      }
+      return null;
+    }
+    if (chord > len * .2) return null;   // 閉じていない曲線はそのまま
+    // 閉じた形: 角を探す（ダグラス・ポイカー法）。3つなら三角形、4つなら四角形、角がなければ円
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const [x, y] of pts) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+    const size = Math.max(c - a, d - b);
+    if (size < 12) return null;
+    const simplify = (list, eps) => {
+      let far = 0, at = 0;
+      for (let i = 1; i < list.length - 1; i++) { const h = dist(list[i], list[0], list[list.length - 1]); if (h > far) { far = h; at = i; } }
+      if (far <= eps) return [list[0], list[list.length - 1]];
+      return simplify(list.slice(0, at + 1), eps).slice(0, -1).concat(simplify(list.slice(at), eps));
+    };
+    // 始点から一番遠い点で2つに分けてから角を探す（閉じた線のまま探すと始点と終点が重なって探せない）
+    let fi = 0, fd = 0; pts.forEach((q, i) => { const h = Math.hypot(q[0] - A[0], q[1] - A[1]); if (h > fd) { fd = h; fi = i; } });
+    const eps = size * .1;
+    const corners = simplify(pts.slice(0, fi + 1), eps).slice(0, -1).concat(simplify(pts.slice(fi), eps).slice(0, -1));
+    // 角どうしが近すぎるものはまとめる
+    const cs = []; for (const q of corners) if (!cs.some((r) => Math.hypot(r[0] - q[0], r[1] - q[1]) < size * .2)) cs.push(q);
+    if (cs.length === 3) return { name: '三角形', pts: along(cs.map((q) => q.slice(0, 2)), true) };
+    if (cs.length === 4) {
+      // 辺がほぼ水平・垂直なら、きれいな長方形にする
+      const axis = cs.every((q, i) => { const r = cs[(i + 1) % 4], ang = Math.atan2(r[1] - q[1], r[0] - q[0]); return Math.min(Math.abs(Math.sin(ang)), Math.abs(Math.cos(ang))) < .17; });
+      const quad = axis ? [[a, b], [c, b], [c, d], [a, d]] : cs.map((q) => q.slice(0, 2));
+      return { name: '四角形', pts: along(quad, true) };
+    }
+    const cx = (a + c) / 2, cy = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2;
+    let err = 0; for (const [x, y] of pts) err += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
+    if (err / pts.length > .14) return null;
+    const round = Math.abs(rx - ry) < Math.max(rx, ry) * .12, r = (rx + ry) / 2, out = [];
+    for (let i = 0; i <= 72; i++) { const t = i / 72 * 2 * Math.PI; out.push([cx + (round ? r : rx) * Math.cos(t), cy + (round ? r : ry) * Math.sin(t), p]); }
+    return { name: round ? '円' : '楕円', pts: out };
+  }
+
   page.addEventListener('pointerdown', (e) => {
     if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans')) return;   // 「Q」と答えの上には書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -925,7 +1035,8 @@
     const b = blockAt(toPage(e)[1]);
     curTop = tops[b];
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
-    cur.el = document.createElementNS(NS, 'path'); cur.el.setAttribute('class', tool === 'hl' ? 'hl' : color);
+    cur.el = document.createElementNS(NS, 'path'); paint(cur.el, cur);
+    hold = null; holdT = 0;
     mount(cur); render(cur, null, false);
   });
   page.addEventListener('pointermove', (e) => {
@@ -935,14 +1046,28 @@
     samples += list.length;
     if (tool === 'er' && erased) { for (const ev of list) eraseAt(toPage(ev)); return; }
     if (tool === 'ls') { lassoMove(list); return; }
-    if (!cur) return;
+    if (!cur || cur.shape) return;
     for (const ev of list) pending.push(toRel(ev));
     predicted = e.getPredictedEvents ? e.getPredictedEvents().map(toRel) : [];
     if (!raf) raf = requestAnimationFrame(frame);
+    // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角）
+    if (cur.tool === 'pen') {
+      const q = pending[pending.length - 1];
+      if (!hold || Math.hypot(q[0] - hold[0], q[1] - hold[1]) > 3) { hold = q; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
+    }
   });
+  function snapShape() {
+    if (!cur || cur.shape || curId === null) return;
+    if (pending.length) { cur.pts.push(...pending); pending = []; }
+    const fit = fitShape(cur.pts);
+    if (!fit) return;
+    cur.pts = fit.pts; cur.shape = fit.name; predicted = [];
+    render(cur, null, false);
+    stat.textContent = fit.name + 'に直しました';
+  }
   function end(e) {
     if (e.pointerId !== curId) return;
-    curId = null; penDown = false;
+    curId = null; penDown = false; clearTimeout(holdT);
     if (pdfDoc) pdfPump();
     const dt = (e.timeStamp - t0) / 1000;
     if (erased) { if (erased.length) push({ type: 'erase', list: erased }); erased = null; return; }
@@ -951,7 +1076,7 @@
     if (pending.length) { cur.pts.push(...pending); pending = []; }
     predicted = [];
     bbox(cur);
-    const victims = cur.tool === 'pen' ? scribbleTargets(cur) : null;
+    const victims = cur.tool === 'pen' && !cur.shape ? scribbleTargets(cur) : null;
     if (victims) {
       cur.el.remove(); removeAll(victims); push({ type: 'erase', list: victims });
       stat.textContent = `ぐちゃぐちゃ消し: ${victims.length}画を消しました`;
@@ -960,11 +1085,12 @@
     render(cur, null, true); strokes.push(cur);
     push({ type: 'add', list: [cur] });
     const tag = cur.pen ? 'Pencil入力' : '入力';
-    if (dt > .25) stat.textContent = `${tag} ${Math.round(samples / dt)}Hz・描画 ${Math.round(frames / dt)}fps`;
-    cur = null;
+    if (dt > .25 && !cur.shape) stat.textContent = `${tag} ${Math.round(samples / dt)}Hz・描画 ${Math.round(frames / dt)}fps`;
+    delete cur.shape; cur = null;
   }
   // 書いている途中でやめる（指で書いているときにピンチが始まったとき）。消しゴムで消した分はそのまま残す
   function abortInput() {
+    clearTimeout(holdT);
     try { page.releasePointerCapture(curId); } catch {}
     curId = null; penDown = false;
     if (erased) { if (erased.length) push({ type: 'erase', list: erased }); erased = null; }
