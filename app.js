@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v43';
+  const APP_VERSION = 'ink-reader-v44';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1139,22 +1139,22 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     const r = Math.max(w, h) / Math.max(1, Math.min(w, h)), long = w >= h ? tx : tz;
     if (Math.max(tx, tz) < 5 && !(r >= 2 && long >= 3)) return null;
     // 消すのは、ぐちゃぐちゃの線が囲む範囲（点の凸包）の中に半分以上ある線。凸包の外へは、ぐちゃぐちゃの太さの半分と画面 2px だけ広げる
-    const hull = convexHull(pts.map(([x, y]) => [x, y + ty])), m = s.s / 2 + 2 * u, hit = [];
-    const inHull = (x, y) => inPoly(x, y, hull) || hull.some((q, k) => segDist(x, y, q, hull[(k + 1) % hull.length]) < m);
+    // 小さな線（画面 10px 未満か、ぐちゃぐちゃの幅の半分未満。添え字・濁点など）は、2割入っていれば消す
+    // 範囲のすぐ外（画面 6px まで）にある小さな線（濁点・点・はね）は、消える字にくっついていれば一緒に消す
+    const hull = convexHull(pts.map(([x, y]) => [x, y + ty])), m = s.s / 2 + 2 * u, m2 = m + 6 * u, hit = [], bits = [];
+    const near = (x, y, r) => inPoly(x, y, hull) || hull.some((q, k) => segDist(x, y, q, hull[(k + 1) % hull.length]) < r);
     for (const o of strokes) {
       if (o.hid) continue;
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
-      if (oc < a - m || oa > c + m || od + oy < b - m || ob + oy > d + m) continue;
+      if (oc < a - m2 || oa > c + m2 || od + oy < b - m2 || ob + oy > d + m2) continue;
+      const small = Math.max(oc - oa, od - ob) < Math.max(10 * u, Math.min(w, h) * .5);
       let inside = 0;
-      for (const [x, y] of o.pts) if (inHull(x, y + oy)) inside++;
-      if (inside / o.pts.length < .5) continue;
-      // 点のような短い線は、ぐちゃぐちゃのインクが実際に重なるときだけ（字の中の点を巻き込まない）
-      if (Math.max(oc - oa, od - ob) < 4 * u) {
-        const r2 = (Math.max(o.s || 3, s.s) * 1.5) ** 2;
-        if (!o.pts.some(([x, y]) => pts.some(([sx, sy]) => (x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2))) continue;
-      }
-      hit.push(o);
+      for (const [x, y] of o.pts) if (near(x, y + oy, m)) inside++;
+      if (inside / o.pts.length >= (small ? .2 : .5)) hit.push(o);
+      else if (small && o.pts.filter(([x, y]) => near(x, y + oy, m2)).length / o.pts.length >= .5) bits.push(o);
     }
+    const g = 5 * u, touch = (o, v) => o.bbox[0] < v.bbox[2] + g && o.bbox[2] > v.bbox[0] - g && o.bbox[1] + top(o) < v.bbox[3] + top(v) + g && o.bbox[3] + top(o) > v.bbox[1] + top(v) - g;
+    for (const o of bits) if (hit.some((v) => touch(o, v))) hit.push(o);
     return hit.length ? hit : null;
   }
   // ---------- 投げ縄 ----------
