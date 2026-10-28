@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v40';
+  const APP_VERSION = 'ink-reader-v41';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1104,12 +1104,14 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (pts.length < 12) return null;
     const ty = top(s);
     const [a, b0, c, d0] = s.bbox, b = b0 + ty, d = d0 + ty, w = c - a, h = d - b;
-    if (Math.max(w, h) < 8) return null;
-    const tx = turnsOn(pts, 0, Math.max(3, w * .3)), tz = turnsOn(pts, 1, Math.max(3, h * .3));
+    // 決まった幅（px）は画面の px で考える。紙の px のままだと、拡大したときに周りの字まで巻き込む
+    const u = 1 / scale;
+    if (Math.max(w, h) < 8 * u) return null;
+    const tx = turnsOn(pts, 0, Math.max(3 * u, w * .3)), tz = turnsOn(pts, 1, Math.max(3 * u, h * .3));
     // 5回以上折り返す（m・w は3回、続け書きの漢字もたいてい4回まで）。横長・縦長の範囲を長く往復するなら3回でよい
     const r = Math.max(w, h) / Math.max(1, Math.min(w, h)), long = w >= h ? tx : tz;
     if (Math.max(tx, tz) < 5 && !(r >= 2 && long >= 3)) return null;
-    const pad = Math.max(6, Math.min(w, h) * .2), hit = [];
+    const pad = Math.max(6 * u, Math.min(w, h) * .2), hit = [];
     for (const o of strokes) {
       if (o.hid) continue;
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
@@ -1118,8 +1120,8 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
       for (const [x, y] of o.pts) if (x >= a - pad && x <= c + pad && y + oy >= b - pad && y + oy <= d + pad) inside++;
       if (inside / o.pts.length < .5) continue;
       // ぐちゃぐちゃが実際にその線の上を通っていること。点のような短い線は、インクが重なっているときだけ
-      const dot = Math.max(oc - oa, od - ob) < 4;
-      const r2 = (dot ? Math.max(o.s || 3, s.s) * 1.5 : Math.max(o.s || 8, s.s) + 6) ** 2, need = dot ? 1 : Math.min(2, o.pts.length);
+      const dot = Math.max(oc - oa, od - ob) < 4 * u;
+      const r2 = (dot ? Math.max(o.s || 3, s.s) * 1.5 : Math.max(o.s || 8, s.s) + 6 * u) ** 2, need = dot ? 1 : Math.min(2, o.pts.length);
       let near = 0;
       outer: for (const [x, y] of o.pts) for (const [sx, sy] of pts) if ((x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2) { near++; if (near >= need) break outer; break; }
       if (near >= need) hit.push(o);
