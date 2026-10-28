@@ -34,11 +34,14 @@ async function driveRoute(route) {
   }
   if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; f.content = req.postDataBuffer(); f.version++; return json({ version: String(f.version) }); }
   if (m === 'PATCH' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) { Object.assign(files[mm[1]], JSON.parse(req.postData())); return json({}); }
+  if (m === 'GET' && u.pathname === '/drive/v3/about') return json({ user: { emailAddress: 'me@example.com' } });
   if (m === 'GET' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) return route.fulfill({ status: 200, body: files[mm[1]].content });
   return route.fulfill({ status: 404, body: '{}' });
 }
 // Google のログイン（GIS）のモック: 押すとすぐ tok-ok を返す
-const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: () => { window.__logins = (window.__logins || 0) + 1; setTimeout(() => o.callback({ access_token: 'tok-ok', expires_in: 3600 }), 10); } }) } } };`;
+// window.__fail を立てると、ポップアップを閉じたことにする
+const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
+  setTimeout(() => window.__fail ? o.error_callback({ type: 'popup_closed' }) : o.callback({ access_token: 'tok-ok', expires_in: 3600 }), 10); } }) } } };`;
 
 (async () => {
   const b = await chromium.launch();
@@ -125,15 +128,30 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   await p.reload(); await p.waitForTimeout(3000);
   check('答えが Q 印になる', await p.evaluate(() => [...document.querySelectorAll('#qs .qm:not(.wait)')].map((m) => m.dataset.b).includes('2')));
 
-  // 接続が切れたら、下の表示を押してつなぎ直す
-  await p.evaluate(() => { const t = JSON.parse(localStorage.getItem('ink:dtok')); t.exp = Date.now() - 1000; localStorage.setItem('ink:dtok', JSON.stringify(t)); });
-  await p.reload(); await p.waitForTimeout(1500);
+  // 接続が切れたら、次に画面に触れたとき（ペンを離したとき）に自動でつなぎ直す。2回目からは同意の画面なし・同じアカウントで
+  const expire = () => p.evaluate(() => { const t = JSON.parse(localStorage.getItem('ink:dtok')); t.exp = Date.now() - 1000; localStorage.setItem('ink:dtok', JSON.stringify(t)); });
+  check('アカウントを覚える', JSON.parse(await p.evaluate(() => localStorage.getItem('ink:dtok'))).who === 'me@example.com');
+  await expire(); await p.reload(); await p.waitForTimeout(3800);
+  const n0 = await p.evaluate(() => window.__logins || 0);
   await line(200, await pageY(3, 200));
+  await p.waitForTimeout(6000);
+  check('触れると自動でつなぎ直す', await p.evaluate(() => window.__logins || 0) === n0 + 1);
+  check('同意の画面なし・同じアカウント', await p.evaluate(() => JSON.stringify(window.__last)) === JSON.stringify({ hint: 'me@example.com', prompt: '' }));
+  check('つなぎ直して送る', !!JSON.parse(byPath(dir + '/ink/pdf.json').content).blocks['3']);
+
+  // 自動でつなげなかったら（ポップアップを閉じた等）、下の表示を押してつなぎ直す
+  await expire(); await p.reload(); await p.waitForTimeout(3800);
+  await p.evaluate(() => { window.__fail = true; });
+  await line(200, await pageY(4, 200));
   await p.waitForTimeout(5500);
   console.log('stat', await p.textContent('#stat'));
   check('切れたことを知らせる', /つなぎ直します/.test(await p.textContent('#stat')));
-  await p.click('#stat'); await p.waitForTimeout(4000);
-  check('押すとつなぎ直して送る', !!JSON.parse(byPath(dir + '/ink/pdf.json').content).blocks['3']);
+  const n1 = await p.evaluate(() => window.__logins);
+  await line(220, await pageY(4, 260)); await p.waitForTimeout(500);
+  check('失敗したらすぐには繰り返さない', await p.evaluate(() => window.__logins) === n1);
+  await p.evaluate(() => { window.__fail = false; });
+  await p.click('#stat'); await p.waitForTimeout(5000);
+  check('押すとつなぎ直して送る', !!JSON.parse(byPath(dir + '/ink/pdf.json').content).blocks['4']);
   check('最後まで同じファイルを二つ作らない', !twins());
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);
   await b.close(); srv.close();
