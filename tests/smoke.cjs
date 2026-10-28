@@ -178,6 +178,13 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('tilted line', await hold(tl), 'handles', JSON.stringify(await hd()));
   const tq = sq.map(([x, y]) => { const dx = x - 260, dy = y - (py + 480), r = 9 * Math.PI / 180; return [260 + dx * Math.cos(r) - dy * Math.sin(r), qy + 260 + dx * Math.sin(r) + dy * Math.cos(r)]; });
   console.log('tilted square', await hold(tq), 'handles', JSON.stringify(await hd()));
+  // 四角形の辺のつまみを動かすと、辺ごと平行に動く
+  { const h = await hd(), m = await toScr(...h[4]); await p.mouse.move(...m); await p.mouse.down(); for (let i = 1; i <= 6; i++) await p.mouse.move(m[0] + i * 4, m[1] - i * 5); await p.mouse.up(); await p.waitForTimeout(150);
+    console.log('edge drag', await p.textContent('#stat'), JSON.stringify((await hd()).slice(0, 4))); }
+  // 斜めの線は、書き終わりにはねがあっても、その向きのまま直線になる
+  const dg = []; for (let i = 0; i <= 25; i++) dg.push([200 + i * 8, qy + 300 + i * 8 * Math.tan(35 * Math.PI / 180) + 3 * Math.sin(i)]);
+  for (let i = 1; i <= 4; i++) dg.push([400 - i * 4, qy + 440 + i * 3]);
+  console.log('diagonal hooked', await hold(dg), 'handles', JSON.stringify(await hd()));
   const arc = []; for (let i = 0; i <= 30; i++) { const t = Math.PI * (.15 + .7 * i / 30); arc.push([400 - 150 * Math.cos(t), qy + 600 - 150 * Math.sin(t)]); }
   console.log('arc stays freehand', await hold(arc));
   // マーカーも止めると直線になる（円などにはならない）
