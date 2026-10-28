@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ink Reader ドライブ試験</title>
+<style>
+  body { font: 16px/1.7 -apple-system, "Hiragino Sans", sans-serif; max-width: 640px; margin: 0 auto; padding: 20px 16px 60px; color: #1b2233; background: #f7f8fa; }
+  h1 { font-size: 20px; }
+  section { background: #fff; border: 1px solid #dfe3eb; border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+  label { display: block; font-size: 13px; color: #5d6578; margin: 8px 0 2px; }
+  input { width: 100%; box-sizing: border-box; font: 14px ui-monospace, Menlo, monospace; padding: 8px; border: 1px solid #dfe3eb; border-radius: 6px; }
+  button { font: 600 15px -apple-system, sans-serif; padding: 10px 14px; border-radius: 8px; border: 1px solid #23468f; background: #23468f; color: #fff; margin: 8px 8px 0 0; }
+  button:disabled { opacity: .4; }
+  pre { white-space: pre-wrap; word-break: break-all; font: 12.5px/1.6 ui-monospace, Menlo, monospace; background: #f1f3f7; border-radius: 6px; padding: 10px; }
+  .ok { color: #1f6f4a; font-weight: 700; } .ng { color: #b3261e; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Ink Reader ドライブ試験</h1>
+<p>Google Picker でフォルダを選んだとき、そのフォルダの中にある「ほかのアプリ（Claude）が作ったファイル」まで読めるかを確かめるページです。権限は drive.file（アプリが作った・選ばれたファイルだけ）を使います。</p>
+
+<section>
+  <b>1. 設定</b>（端末に保存されます）
+  <label for="cid">OAuth クライアント ID</label><input id="cid" placeholder="xxxx.apps.googleusercontent.com" autocapitalize="off" spellcheck="false">
+  <label for="key">API キー</label><input id="key" placeholder="AIza..." autocapitalize="off" spellcheck="false">
+  <label for="app">プロジェクト番号</label><input id="app" placeholder="123456789012" inputmode="numeric">
+  <button id="save">保存</button>
+</section>
+
+<section>
+  <b>2. 試す</b><br>
+  <label style="display:flex;gap:8px;align-items:center;color:#1b2233;font-size:15px"><input type="checkbox" id="wide" style="width:auto"> ドライブ全体の権限（drive）で試す</label>
+  <button id="login">Google でログイン</button>
+  <button id="pick" disabled>フォルダを選ぶ</button>
+  <button id="write" disabled>フォルダに書いてみる</button>
+</section>
+
+<section>
+  <b>結果</b>
+  <pre id="log">（ここに結果が出ます）</pre>
+</section>
+
+<script src="https://accounts.google.com/gsi/client"></script>
+<script src="https://apis.google.com/js/api.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const K = 'ink-drive-test';
+  let conf = {};
+  try { conf = JSON.parse(localStorage.getItem(K) || '{}'); } catch {}
+  $('cid').value = conf.cid || ''; $('key').value = conf.key || ''; $('app').value = conf.app || '';
+  $('save').onclick = () => {
+    conf = { cid: $('cid').value.trim(), key: $('key').value.trim(), app: $('app').value.trim() };
+    localStorage.setItem(K, JSON.stringify(conf));
+    log('設定を保存しました');
+  };
+
+  const out = [];
+  function log(s, cls) { out.push(cls ? `[${cls === 'ok' ? 'OK' : 'NG'}] ${s}` : s); $('log').textContent = out.join('\n'); }
+
+  let token = '', folder = null;
+  $('login').onclick = () => {
+    if (!conf.cid) return log('先にクライアント ID を保存してください', 'ng');
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: conf.cid,
+      scope: 'https://www.googleapis.com/auth/' + ($('wide').checked ? 'drive' : 'drive.file'),
+      callback: (r) => {
+        if (r.error) return log('ログインできませんでした: ' + r.error, 'ng');
+        token = r.access_token;
+        log(`ログインできました（権限: ${$('wide').checked ? 'drive' : 'drive.file'}）`, 'ok');
+        $('pick').disabled = false;
+      },
+    });
+    client.requestAccessToken();
+  };
+
+  $('pick').onclick = () => gapi.load('picker', () => {
+    const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      .setSelectFolderEnabled(true).setIncludeFolders(true)
+      .setMimeTypes('application/vnd.google-apps.folder');
+    new google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(token)
+      .setDeveloperKey(conf.key)
+      .setAppId(conf.app)
+      .setTitle('Ink Reader のフォルダを選んでください')
+      .setCallback(onPick)
+      .build().setVisible(true);
+  });
+
+  async function api(path, opt = {}) {
+    const r = await fetch('https://www.googleapis.com/' + path, { ...opt, headers: { Authorization: 'Bearer ' + token, ...(opt.headers || {}) } });
+    return r;
+  }
+
+  async function onPick(d) {
+    if (d.action !== google.picker.Action.PICKED) return;
+    folder = d.docs[0];
+    log(`\n選んだフォルダ: ${folder.name}（${folder.id}）`);
+    $('write').disabled = false;
+    // 中身の一覧
+    const q = encodeURIComponent(`'${folder.id}' in parents and trashed = false`);
+    const r = await api(`drive/v3/files?q=${q}&fields=files(id,name,mimeType,size)&pageSize=100`);
+    if (!r.ok) return log(`中身の一覧を取れませんでした（${r.status}）: ` + await r.text(), 'ng');
+    const files = (await r.json()).files || [];
+    log(`中身の一覧: ${files.length} 件見えました`, files.length ? 'ok' : 'ng');
+    if (!files.length) log('→ フォルダを選んでも、中のファイルは見えない（drive.file では足りない）可能性が高いです');
+    // それぞれの中身を読んでみる
+    for (const f of files) {
+      if (f.mimeType.startsWith('application/vnd.google-apps')) { log(`  ${f.name}: Google 形式なので読み込みは省略`); continue; }
+      const c = await api(`drive/v3/files/${f.id}?alt=media`);
+      if (!c.ok) { log(`  ${f.name}: 読めない（${c.status}）`, 'ng'); continue; }
+      const b = await c.blob();
+      const head = f.mimeType.startsWith('text') || f.mimeType.includes('json') ? '「' + (await b.text()).slice(0, 40).replace(/\n/g, ' ') + '…」' : `${b.size} バイト`;
+      log(`  ${f.name}: 読めた ${head}`, 'ok');
+    }
+  }
+
+  $('write').onclick = async () => {
+    const meta = { name: `app-test-${Date.now()}.md`, parents: [folder.id], mimeType: 'text/markdown' };
+    const body = new FormData();
+    body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+    body.append('file', new Blob(['# アプリから書いた試験ファイル\n'], { type: 'text/markdown' }));
+    const r = await api('upload/drive/v3/files?uploadType=multipart&fields=id,name', { method: 'POST', body });
+    if (!r.ok) return log(`書けませんでした（${r.status}）: ` + await r.text(), 'ng');
+    const f = await r.json();
+    log(`\nフォルダに書けました: ${f.name}`, 'ok');
+  };
+</script>
+</body>
+</html>
