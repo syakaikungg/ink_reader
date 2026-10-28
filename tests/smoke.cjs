@@ -243,5 +243,8 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
     await p.click('#books'); await p.click('#shelf-list li:nth-child(2) .del'); await p.click('#shelf-list li:nth-child(2) .del'); await p.waitForTimeout(300);
     console.log('after delete', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent)));
   }
+  // 設定の見出しの版が sw.js の VERSION と同じ
+  { const v = fs.readFileSync(path.join(APP, 'sw.js'), 'utf8').match(/VERSION = 'ink-reader-(v\d+)'/)[1], shown = await p.textContent('#cfg-ver');
+    console.log('version', shown, v === shown ? 'ok' : 'MISMATCH'); if (v !== shown) errs.push('APP_VERSION と sw.js の VERSION が違う'); }
   console.log('errs', errs); await b.close(); srv.close(); process.exit(errs.length ? 1 : 0);
 })();
