@@ -1044,11 +1044,21 @@
     const ps = pts.map((q) => q[2]).sort((x, y) => x - y), p = ps[ps.length >> 1];
     const A = pts[0], B = pts[pts.length - 1], chord = Math.hypot(B[0] - A[0], B[1] - A[1]);
     const dist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return Math.abs((q[0] - a[0]) * dy - (q[1] - a[1]) * dx) / l; };
-    // 直線: 始点と終点を結んだ線から大きく外れない（書き始めと書き終わりの小さなはねは見ない）
+    // 直線: 書き始めと書き終わりのはね（長さの1割ずつ）を除いた点に線を当てはめ、そこから大きく外れなければ直線にする。
+    // 向きは当てはめた線から決め、両端は始点・終点をその線に下ろした位置にする
     if (chord > len * .6) {
-      const end = Math.min(16, chord * .15);
-      let dev = 0; for (const q of ds) if (Math.hypot(q[0] - A[0], q[1] - A[1]) > end && Math.hypot(q[0] - B[0], q[1] - B[1]) > end) dev = Math.max(dev, dist(q, A, B));
-      if (dev < Math.max(10, chord * .14)) return { k: 'line', v: [A.slice(0, 2), snapAngle(A, B)], p };
+      const mid = []; let at = 0;
+      for (let i = 0; i < ds.length; i++) { if (i) at += Math.hypot(ds[i][0] - ds[i - 1][0], ds[i][1] - ds[i - 1][1]); if (at >= len * .1 && at <= len * .9) mid.push(ds[i]); }
+      if (mid.length >= 2) {
+        let mx = 0, my = 0; for (const q of mid) { mx += q[0] / mid.length; my += q[1] / mid.length; }
+        let sxx = 0, sxy = 0, syy = 0; for (const q of mid) { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+        const th = Math.atan2(2 * sxy, sxx - syy) / 2, ux = Math.cos(th), uy = Math.sin(th);
+        let dev = 0; for (const q of mid) dev = Math.max(dev, Math.abs((q[0] - mx) * uy - (q[1] - my) * ux));
+        if (dev < Math.max(6, chord * .07)) {
+          const on = (q) => { const t = (q[0] - mx) * ux + (q[1] - my) * uy; return [mx + t * ux, my + t * uy]; };
+          const a0 = on(A); return { k: 'line', v: [a0, snapAngle(a0, on(B))], p };
+        }
+      }
       if (chord > len * .7) return null;
     }
     if (chord > len * .25) return null;   // 閉じていない曲線はそのまま
@@ -1105,7 +1115,9 @@
   const hdG = document.createElementNS(NS, 'g'); hdG.setAttribute('class', 'hd');
   function handlePts(s) {
     const g = s.g, ty = top(s);
-    if (g.k === 'line' || g.k === 'poly') return g.v.map(([x, y]) => [x, y + ty]);
+    if (g.k === 'line') return g.v.map(([x, y]) => [x, y + ty]);
+    // 四角形は頂点のあとに辺のまん中のつまみ（辺ごと平行に動かす）
+    if (g.k === 'poly') return g.v.map(([x, y]) => [x, y + ty]).concat(g.v.length === 4 ? g.v.map((q, i) => { const r = g.v[(i + 1) % 4]; return [(q[0] + r[0]) / 2, (q[1] + r[1]) / 2 + ty]; }) : []);
     const [[cx, cy], [rx, ry]] = g.v, a = g.a || 0;
     const pts = [[cx + rx * Math.cos(a), cy + rx * Math.sin(a) + ty]];
     if (g.k === 'ellipse') pts.push([cx - ry * Math.sin(a), cy + ry * Math.cos(a) + ty]);
@@ -1113,8 +1125,8 @@
   }
   function showHandles() {
     if (!edit || !strokes.includes(edit)) { edit = null; hdG.remove(); return; }
-    hdG.replaceChildren(...handlePts(edit).map(([x, y]) => {
-      const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', 7 / scale); return c;
+    hdG.replaceChildren(...handlePts(edit).map(([x, y], i) => {
+      const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', (i >= edit.g.v.length ? 5 : 7) / scale); return c;
     }));
     svg.appendChild(hdG);
   }
@@ -1127,6 +1139,13 @@
   function dragHandle(x, y) {   // x, y は紙の座標
     const s = edit, g = hdrag.g, ty = top(s), q = [x, y - ty];
     if (g.k === 'line') { g.v[hdrag.i] = snapAngle(g.v[1 - hdrag.i], q); }
+    else if (g.k === 'poly' && hdrag.i >= g.v.length) {
+      // 辺のつまみ: 辺の両端を、辺に垂直な向きにだけ動かす
+      const k = hdrag.i - g.v.length, a = hdrag.g0.v[k], b = hdrag.g0.v[(k + 1) % 4];
+      const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / l, ny = (b[0] - a[0]) / l;
+      const t = (q[0] - (a[0] + b[0]) / 2) * nx + (q[1] - (a[1] + b[1]) / 2) * ny;
+      g.v[k] = [a[0] + nx * t, a[1] + ny * t]; g.v[(k + 1) % 4] = [b[0] + nx * t, b[1] + ny * t];
+    }
     else if (g.k === 'poly') {
       // となりの頂点との辺が水平・垂直に近ければそろえる
       const n = g.v.length;

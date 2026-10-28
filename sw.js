@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュして、通信なしでも起動できるようにする。
 // 本文と書き込みは IndexedDB 側（app.js）。アプリを更新したら VERSION を上げる
-const VERSION = 'ink-reader-v23';
+const VERSION = 'ink-reader-v24';
 const FILES = [
   './',
   'index.html',
