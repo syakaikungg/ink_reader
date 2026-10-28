@@ -118,8 +118,14 @@
     // 図形に直した線は、あとで形を変えられるよう図形の形も残す（k: line・poly・ellipse・circle、v: 頂点か [中心, 半径]、a: 傾き）
     ...(s.g ? { g: { k: s.g.k, v: s.g.v.flatMap(([x, y]) => [Math.round(x * 10), Math.round(y * 10)]), a: Math.round((s.g.a || 0) * 1000), p: Math.round(s.g.p * 100) } } : {}) });
   function de(id, b, d) {
-    const pts = [];
-    for (let i = 0; i + 2 < d.p.length; i += 3) pts.push([d.p[i] / 10, d.p[i + 1] / 10, d.p[i + 2] / 100]);
+    // 前の版で重なって届いた点（少し前と同じ位置）がそのまま入っている線は、読み込むときに除く（線の途切れ・ねじれのもと）
+    const pts = [], seen = [];
+    for (let i = 0; i + 2 < d.p.length; i += 3) {
+      const k = d.p[i] + ',' + d.p[i + 1];
+      if (!d.g && seen.includes(k)) continue;
+      seen.push(k); if (seen.length > 16) seen.shift();
+      pts.push([d.p[i] / 10, d.p[i + 1] / 10, d.p[i + 2] / 100]);
+    }
     const s = { id, b, tool: d.t, c: d.c, s: d.s, pen: d.pen, pts };
     if (d.g) { const v = []; for (let i = 0; i + 1 < d.g.v.length; i += 2) v.push([d.g.v[i] / 10, d.g.v[i + 1] / 10]); s.g = { k: d.g.k, v, a: d.g.a / 1000, p: d.g.p / 100 }; }
     bbox(s); return s;
@@ -1691,7 +1697,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
-    curId = e.pointerId; curType = e.pointerType; penDown = true;
+    curId = e.pointerId; curType = e.pointerType; penDown = true; seen = [e.clientX + ',' + e.clientY];
     t0 = e.timeStamp; samples = 1; frames = 0;
     if (edit && tool !== 'er') {
       const [x, y] = toPage(e), i = hitHandle(x, y);
@@ -1709,10 +1715,19 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     clearTimeout(loopT); loopT = 0;
     if (tool === 'pen' && loopCand) { loopAt = toPage(e); if (onLoop(...loopAt)) loopT = setTimeout(loopToLasso, 450); }
   });
+  let seen = [];   // 最近受け取った点の位置（重なって届いた点を捨てるため）
   page.addEventListener('pointermove', (e) => {
     if (e.pointerId !== curId) return;
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
-    const list = evs.length ? evs : [e];
+    // iPad の Safari は、前に送った点をもう一度まとめて送ってくることがある（線が行ったり来たりになり、長さが倍になる）。
+    // 少し前に受け取ったのと同じ位置の点は捨てる
+    const list = (evs.length ? evs : [e]).filter((ev) => {
+      const k = ev.clientX + ',' + ev.clientY;
+      if (seen.includes(k)) return false;
+      seen.push(k); if (seen.length > 16) seen.shift();
+      return true;
+    });
+    if (!list.length) return;
     samples += list.length;
     if (hdrag) { const [x, y] = toPage(list[list.length - 1]); dragHandle(x, y); return; }
     if (tool === 'er' && erased) { for (const ev of list) eraseAt(toPage(ev)); return; }
