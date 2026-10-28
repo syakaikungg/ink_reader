@@ -209,6 +209,9 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #cfg .row button { border-color: var(--rule); }
 #cfg .row button.primary { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 #cfg-msg { min-height: 1.5em; }
+#cfg h3 { font: 600 14px/1.3 var(--f-ui); margin: 0 0 8px; }
+#drv { border-bottom: 1px solid var(--rule); margin: 0 0 14px; padding-bottom: 2px; }
+#drv-msg { min-height: 1.5em; margin-top: 8px !important; }
 #ask { width: min(560px, calc(100vw - 32px)); }
 #ask h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
 #ask pre { white-space: pre-wrap; font: 12px/1.6 ui-monospace, Menlo, monospace; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; max-height: 30vh; overflow: auto; }
@@ -400,6 +403,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 <dialog id="cfg">
   <form method="dialog" id="cfg-form">
     <h2>設定</h2>
+    <section id="drv">
+      <h3>Google ドライブ</h3>
+      <p>ファイルから開いた本の書き込みを、ドライブの「Ink Reader」フォルダに置きます。Claude のドライブ連携で、本と手書きを読んで答えられるようになります。</p>
+      <label>クライアント ID<input id="cfg-dcid" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="….apps.googleusercontent.com"></label>
+      <div class="row"><button type="button" class="primary" id="cfg-drive">Google ドライブにつなぐ</button></div>
+      <p id="drv-msg" aria-live="polite"></p>
+    </section>
+    <h3>GitHub</h3>
     <p>sakai_study の中身を読み書きできる GitHub のトークン（fine-grained、Contents: Read and write）を入れてください。トークンはこのiPadの中だけに保存されます。</p>
     <label>トークン<input id="cfg-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_..."></label>
     <label>リポジトリ<input id="cfg-repo" autocapitalize="off" spellcheck="false"></label>
