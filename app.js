@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v46';
+  const APP_VERSION = 'ink-reader-v47';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1019,17 +1019,17 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     for (const t of e.changedTouches) if (t.touchType === 'stylus' && page.contains(e.target)) { e.preventDefault(); return; }
     if (e.type === 'touchmove' && [...e.touches].some((t) => palms.has(t.identifier))) e.preventDefault();
   };
-  // 手のひら・小指: ペンを使っている間と、ペンを離してから 1 秒の間に触れた指は、離すまでスクロール・ピンチ・タップに使わない
-  const palms = new Set();
+  // 手のひら・小指: ペンを使っている間と、ペンを離してから PALM_MS（0.3 秒）の間に触れた指は、離すまでスクロール・ピンチ・タップに使わない
+  const palms = new Set(), PALM_MS = 300;
   let penAt = -1e9;
-  // ペンより先に小指が触れたとき: 触れてから 1 秒以内にペンが来たら、その指も手のひらとみなし、指で動いた分の紙を元に戻す
+  // ペンより先に小指が触れたとき: 触れてから 1 秒以内に（指をつけたままペンを置くことはあまりないので長めでよい）ペンが来たら、その指も手のひらとみなし、指で動いた分の紙を元に戻す
   const touchAt = new Map();   // 指 → 触れた時刻と、そのときのスクロール位置
   const palmWatch = (e) => {
     const now = performance.now(), se = document.scrollingElement;
     for (const t of e.changedTouches) {
       if (t.touchType === 'stylus') penAt = now;
       else if (e.type === 'touchstart') {
-        if (penDown || now - penAt < 1000) palms.add(t.identifier);
+        if (penDown || now - penAt < PALM_MS) palms.add(t.identifier);
         else touchAt.set(t.identifier, { t: now, x: wrap.scrollLeft, y: se.scrollTop });
       }
       else if (e.type !== 'touchmove') { palms.delete(t.identifier); touchAt.delete(t.identifier); if (!palms.size) pin = null; }
