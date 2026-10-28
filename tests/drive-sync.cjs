@@ -89,8 +89,8 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   check('1ページの画像（PNG）', png && png.content.slice(1, 4).toString() === 'PNG' && png.mimeType === 'image/png');
   check('PDF 本体は送らない', !Object.values(files).some((f) => /\.pdf$/.test(f.name)));
   check('GitHub には送らない', !calls.some((c) => /GITHUB/.test(c)));
-  const folders = Object.values(files).filter((f) => f.mimeType === FOLDER).map((f) => f.name);
-  check('同じフォルダを二つ作らない', folders.length === new Set(folders).size);
+  const twins = () => { const k = Object.values(files).filter((f) => !f.trashed).map((f) => (f.parents || []).join() + '/' + f.name); return k.length !== new Set(k).size; };
+  check('同じフォルダ・ファイルを二つ作らない', !twins());
 
   // 書き足すと上書き（版が上がる）
   const v0 = ink.version;
@@ -134,6 +134,7 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   check('切れたことを知らせる', /つなぎ直します/.test(await p.textContent('#stat')));
   await p.click('#stat'); await p.waitForTimeout(4000);
   check('押すとつなぎ直して送る', !!JSON.parse(byPath(dir + '/ink/pdf.json').content).blocks['3']);
+  check('最後まで同じファイルを二つ作らない', !twins());
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);
   await b.close(); srv.close();
   console.log(ok ? 'OK' : 'NG'); process.exit(ok ? 0 : 1);
