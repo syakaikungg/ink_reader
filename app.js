@@ -1,3 +1,4 @@
+// Copyright (C) 2026 syakaikungg. All rights reserved.
 // Ink Reader: md の本を章ごとに表示し、Apple Pencil で書き込む。
 // 本は iPad の「ファイル」から開くか、非公開リポジトリ（既定 syakaikungg/sakai_study）から取る。
 // どちらも本・書き込みを IndexedDB に保存してオフラインで使い、GitHub の本だけ書き込みを GitHub と同期する
