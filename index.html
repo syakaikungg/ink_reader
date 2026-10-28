@@ -256,16 +256,20 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 @keyframes hit { from { background: rgba(214,177,0,.3); } to { background: transparent; } }
 #toc .row button { border-color: var(--rule); }
 /* しおりを付けた段落の左の印。段落の中に描くと数式の段落（横スクロールする）で隠れるので、紙の上の別の層に置く */
-/* 横線で入れた余白。点線で囲み、下の端のつまみ（押すとたたむ・長押しして上下に動かすと高さが変わる）。たたんだ余白は細い帯（押すと開く） */
-#sps { position: absolute; z-index: 3; left: 0; top: 0; width: 100%; height: 0; }
-#sps .sp { position: absolute; left: 8px; right: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; pointer-events: none; }
+/* 横線で入れた余白。点線で囲み、下の端のつまみ（押すとたたむ・長押しして上下に動かすと高さが変わる）。
+   たたんだ余白は、紙を横切る細い点線と、まん中の小さな文字だけにする（押すと開く）。
+   md は画面の明暗に合わせた色、PDF はページが白いことが多いので、明暗によらず白い紙に目立たない灰色にする */
+#sps { position: absolute; z-index: 3; left: 0; top: 0; width: 100%; height: 0;
+  --sp-line: var(--rule); --sp-text: var(--muted); --sp-bg: var(--paper); --sp-knob: var(--bar); }
+body.pdf #sps { --sp-line: rgba(0,0,0,.16); --sp-text: rgba(0,0,0,.42); --sp-bg: #fff; --sp-knob: rgba(255,255,255,.94); }
+#sps .sp { position: absolute; left: 8px; right: 8px; border: 1px dashed var(--sp-line); border-radius: 6px; pointer-events: none; }
 #sps .sph { position: absolute; left: calc(50% - 24px); width: 48px; height: 22px; margin-top: -11px; padding: 0; min-width: 0;
-  border: 1px solid var(--rule); border-radius: 11px; background: var(--bar); color: var(--muted); touch-action: none; }
+  border: 1px solid var(--sp-line); border-radius: 11px; background: var(--sp-knob); color: var(--sp-text); touch-action: none; }
 #sps .sph::before { content: ""; display: block; width: 18px; height: 6px; margin: 0 auto; border-top: 2px solid currentColor; border-bottom: 2px solid currentColor; }
 #sps .sph.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-#sps .sph.fold { left: 8px; width: calc(100% - 16px); height: 28px; margin-top: 0; border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--paper)); font: 12px/1 var(--f-ui); }
-#sps .sph.fold::before { display: none; }
+#sps .sph.fold { left: 0; width: 100%; height: 28px; margin-top: 0; border: 0; border-radius: 0; background: none; color: var(--sp-text); font: 11px/1 var(--f-ui); }
+#sps .sph.fold::before { position: absolute; left: 8px; right: 8px; top: 50%; width: auto; height: 0; margin: 0; border-top: 1px dashed var(--sp-line); border-bottom: 0; }
+#sps .sph.fold span { position: relative; padding: 2px 8px; background: var(--sp-bg); }
 #bms { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
 #bms i { position: absolute; left: 18px; margin-top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
