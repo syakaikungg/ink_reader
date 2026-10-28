@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v35';
+  const APP_VERSION = 'ink-reader-v36';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -88,7 +88,17 @@
     const h = !!spans[s.b] && inFold(s.b, sy(s));   // たたんだ余白の中の線は隠す
     if (h !== !!s.hid) { s.hid = h; s.el.style.display = h ? 'none' : ''; }
   }
-  function render(s, pts, last) { s.el.setAttribute('d', pathD(getStroke(pts || s.pts, opts(s, last)))); }
+  // 線の終わりの細かいぶれ（離す瞬間のわずかな動き）は除いて描く。残すと終わりの丸が横を向き、線がくびれて途切れたように見える
+  function trimTail(pts, r) {
+    const n = pts.length, L = pts[n - 1];
+    let k = n - 2;
+    while (k > 0 && Math.hypot(pts[k][0] - L[0], pts[k][1] - L[1]) < r) k--;
+    return k >= n - 2 ? pts : pts.slice(0, k + 1).concat([L]);
+  }
+  function render(s, pts, last) {
+    const o = opts(s, last);
+    s.el.setAttribute('d', pathD(getStroke(trimTail(pts || s.pts, Math.min(o.size / 2, 3)), o)));
+  }
   function bbox(s) {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
     for (const [x, y] of s.pts) { if (x < a) a = x; if (y < b) b = y; if (x > c) c = x; if (y > d) d = y; }
