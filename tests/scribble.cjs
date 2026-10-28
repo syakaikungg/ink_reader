@@ -3,8 +3,8 @@
 // 2026-10 時点: 53/70。残りは「小さい字の上の3〜4往復」「3往復だけ」「斜めの往復」「mm・eee を字の上に書く」で、続け書きの誤爆を避けるための割り切り
 const fs = require('fs');
 const src = (f) => { const t = fs.readFileSync(f, 'utf8'); const i = t.indexOf('  // 往復の多い線'); const j = t.indexOf('// ---------- 投げ縄', i); return t.slice(i, j); };
-const make = (code) => { let strokes = []; const top = () => 0; const fn = new Function('strokes', 'top', code + '; return scribbleTargets;');
-  return (scr, others) => { strokes = others; return fn(strokes, top)(scr); }; };
+const make = (code) => { let strokes = []; const top = () => 0; const fn = new Function('strokes', 'top', 'scale', code + '; return scribbleTargets;');
+  return (scr, others, scale = 1) => { strokes = others; return fn(strokes, top, scale)(scr); }; };
 const bbox = (s) => { let a=1e9,b=1e9,c=-1e9,d=-1e9; for (const [x,y] of s.pts){a=Math.min(a,x);b=Math.min(b,y);c=Math.max(c,x);d=Math.max(d,y);} s.bbox=[a,b,c,d]; return s; };
 let seed = 1; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - .5);
 const S = (pts, s = 3.4) => bbox({ tool: 'pen', s, pts: pts.map(([x,y]) => [x + rnd()*0.8, y + rnd()*0.8, .5]) });
