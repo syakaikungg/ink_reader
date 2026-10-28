@@ -1,0 +1,39 @@
+# main に入ったら、アプリのファイルだけを公開用リポジトリ（syakaikungg/ink_reader）に送る。
+# 開発の履歴・メモ・テストは送らない。公開側は毎回「デプロイ」コミット1つだけにする。
+# 鍵は Secrets の DEPLOY_TOKEN（公開用リポジトリの Contents を読み書きできる fine-grained PAT）。
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    # 公開用リポジトリ自身では動かさない（名前を変える前の今のリポジトリを上書きしないため）
+    if: github.repository != 'syakaikungg/ink_reader'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: アプリのファイルだけを集める
+        run: |
+          mkdir site
+          git ls-files | grep -vE '^(\.github/|docs/|tests/|labs/|CLAUDE\.md$|README\.md$)' \
+            | xargs -d '\n' cp --parents -t site
+          touch site/.nojekyll
+          printf '# Ink Reader\n\niPad と Apple Pencil で、数式つきの本に手書きで書き込める Web アプリです。\n\nhttps://syakaikungg.github.io/ink_reader/\n' > site/README.md
+
+      - name: 公開用リポジトリに送る
+        env:
+          TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          cd site
+          git init -q -b main
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "デプロイ"
+          git push -f "https://x-access-token:${TOKEN}@github.com/syakaikungg/ink_reader.git" main

@@ -23,4 +23,4 @@ iPad と Apple Pencil で、md（数式つき）の本に手書きで書き込�
 - ビルドはない。`vendor/` のライブラリはそのまま読み込む（KaTeX 0.16.11、marked 12.0.2、perfect-freehand 1.2.2、PDF.js 5.7.284）。
 - アプリのファイルを変えたら `sw.js` の `VERSION` を上げる（上げないと、iPad に古い版が残る）。
 - 確認：`node tests/smoke.cjs <sakai_study のパス>`（Playwright で GitHub API をモック）。ぐちゃぐちゃ消しの判定を変えたら `node tests/scribble.cjs` でも確かめる。PDF は `node tests/pdf.cjs`（300ページの PDF を作って確かめる。sakai_study は要らない）。`MD_DIR=<md のフォルダ>` を付けると「ファイルから開く」も確かめる。書き味やカクつきは、実機でしか分からない。利用者に試してもらい、入力の Hz と描画の fps（画面上部に表示される）を聞く。
-- ブランチを切って PR を作り、利用者がマージする。main にマージすると Pages に反映される。
+- ブランチを切って PR を作り、利用者がマージする。main にマージすると `.github/workflows/deploy.yml` がアプリのファイルだけ（`docs/`・`tests/`・`labs/`・`CLAUDE.md` などは除く）を公開用リポジトリ `syakaikungg/ink_reader` に送り、そこの GitHub Pages に反映される。開発用リポジトリは非公開にし、履歴・メモはそちらだけに置く。アプリに新しいフォルダを足して公開側に出したくないときは、このワークフローの除外に加える。
