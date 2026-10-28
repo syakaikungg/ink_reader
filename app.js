@@ -58,8 +58,8 @@
   function opts(s, last) {
     if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last,
       start: { cap: false }, end: { cap: false } };
-    return { size: s.s, thinning: .62, smoothing: .55, streamline: .28, simulatePressure: !s.pen, last,
-      easing: (t) => t };
+    // ペンは太さ一定（筆圧で太さを変えない）。点の筆圧は保存したままなので、筆圧で変わるペンを足すときに使える
+    return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
   }
   function pathD(outline) {
     const n = outline.length;
