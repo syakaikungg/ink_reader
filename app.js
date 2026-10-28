@@ -1,3 +1,4 @@
+// Copyright (C) 2026 syakaikungg. All rights reserved.
 // Ink Reader: md の本を章ごとに表示し、Apple Pencil で書き込む。
 // 本は iPad の「ファイル」から開くか、非公開リポジトリ（既定 syakaikungg/sakai_study）から取る。
 // どちらも本・書き込みを IndexedDB に保存してオフラインで使い、GitHub の本だけ書き込みを GitHub と同期する
@@ -57,8 +58,8 @@
   function opts(s, last) {
     if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last,
       start: { cap: false }, end: { cap: false } };
-    return { size: s.s, thinning: .62, smoothing: .55, streamline: .28, simulatePressure: !s.pen, last,
-      easing: (t) => t };
+    // ペンは太さ一定（筆圧で太さを変えない）。点の筆圧は保存したままなので、筆圧で変わるペンを足すときに使える
+    return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
   }
   function pathD(outline) {
     const n = outline.length;
@@ -287,7 +288,8 @@
     for (const r of spaceRects()) {
       const k = document.createElement('button'); k.type = 'button'; k.dataset.b = r.b; k.dataset.i = r.i;
       if (r.c) {
-        k.className = 'sph fold'; k.style.top = r.y0 + 'px'; k.textContent = `たたんだ余白${r.n ? `（${r.n}画）` : ''}`;
+        k.className = 'sph fold'; k.style.top = r.y0 + 'px';
+        const t = document.createElement('span'); t.textContent = `余白${r.n ? ` ${r.n}画` : ''} ▾`; k.append(t);
         k.setAttribute('aria-label', '余白を開く');
         els.push(k); continue;
       }
@@ -358,6 +360,8 @@
   let src = store.get(PREF + ':book') || 'gh';
   const isLocal = () => src !== 'gh';
   const canSync = () => !isLocal() && !!cfg.token && online();
+  // 書き込みを送れるか。ファイルから開いた本は、ドライブにつないでいればドライブ、トークンがあれば GitHub の <リポジトリ>/books/files/<本>/ に送る（Claude が読めるように）
+  const canPush = () => online() && hasRemote();
 
   // ---------- GitHub ----------
   const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
@@ -374,11 +378,152 @@
     return blob ? r.blob() : raw ? r.text() : r.json();
   }
 
+  // ---------- 置き場所（GitHub・Google ドライブ） ----------
+  // どちらも get / sha / put / del / list を持つ。sha は版（GitHub は sha、ドライブは version）で、put は sha が今と違えば 409
+  const hub = {
+    name: 'GitHub',
+    async get(path) { const m = await gh(path); return m && { sha: m.sha, text: m.content ? b64.to(m.content) : await gh(path, { raw: true }) }; },
+    async sha(path) { const m = await gh(path); return m ? m.sha : null; },
+    async put(path, body, sha, message) {
+      const content = typeof body === 'string' ? b64.from(body) : await blobB64(body);
+      return (await gh(path, { method: 'PUT', body: { message, branch: cfg.branch, content, ...(sha ? { sha } : {}) } })).content.sha;
+    },
+    async del(path, sha, message) { await gh(path, { method: 'DELETE', body: { message, branch: cfg.branch, sha } }); },
+    async list(dir) { const l = await gh(dir); return Array.isArray(l) ? l.map((f) => ({ name: f.name, path: dir + '/' + f.name })) : []; },
+  };
+  // ドライブは、利用者のマイドライブの「Ink Reader」フォルダの下に置く（パスはその中から）。
+  // ログインは Google のポップアップ（ボタンを押したときだけ）。トークンは 1 時間で切れるので、切れたら #stat を押してつなぎ直す
+  const drive = (() => {
+    const API = 'https://www.googleapis.com/', ROOT = 'Ink Reader', FOLDER = 'application/vnd.google-apps.folder';
+    let tok = null, exp = 0, gis = null;
+    try { ({ tok, exp } = JSON.parse(store.get(PREF + ':dtok')) || {}); } catch {}
+    const prep = () => gis ||= new Promise((ok, ng) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.onload = ok;
+      s.onerror = () => { gis = null; s.remove(); ng(new Error('Google に接続できません')); };
+      document.head.append(s);
+    });
+    // ポップアップを止められないように、押した操作の中で（待たずに）呼ぶ。先に prep で読み込んでおく
+    const login = () => new Promise((ok, ng) => {
+      if (!window.google || !google.accounts) { prep(); return ng(new Error('準備中です。もう一度押してください')); }
+      google.accounts.oauth2.initTokenClient({
+        client_id: cfg.dcid, scope: 'https://www.googleapis.com/auth/drive',
+        callback: (r) => {
+          if (r.error) return ng(new Error(r.error));
+          tok = r.access_token; exp = Date.now() + (r.expires_in - 60) * 1000;
+          store.set(PREF + ':dtok', JSON.stringify({ tok, exp })); ok();
+        },
+        error_callback: (e) => ng(new Error(e.type === 'popup_closed' ? 'ログインを閉じました' : 'ログインできませんでした')),
+      }).requestAccessToken();
+    });
+    async function api(path, opt = {}) {
+      const no = () => { const e = new Error('ドライブにつながっていません'); e.status = 401; e.drive = true; return e; };
+      if (!tok || Date.now() > exp) throw no();
+      const r = await fetch(API + path, { ...opt, cache: 'no-store', headers: { Authorization: 'Bearer ' + tok, ...(opt.headers || {}) } });
+      if (r.status === 401) { tok = null; throw no(); }
+      if (!r.ok) { const e = new Error('ドライブ ' + r.status); e.status = r.status; throw e; }
+      return r;
+    }
+    const qs = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    async function find(name, pid, folder) {
+      const q = `name='${qs(name)}' and '${pid}' in parents and trashed=false` + (folder ? ` and mimeType='${FOLDER}'` : '');
+      return (await (await api('drive/v3/files?' + new URLSearchParams({ q, fields: 'files(id,version)', pageSize: '5' }))).json()).files[0] || null;
+    }
+    const dirs = new Map();   // フォルダのパス -> id の Promise（同じフォルダを二つ作らないように）
+    function folder(path, make) {
+      if (dirs.has(path)) return dirs.get(path);
+      const p = (async () => {
+        const i = path.lastIndexOf('/'), pid = i < 0 ? 'root' : await folder(path.slice(0, i), make), name = path.slice(i + 1);
+        if (!pid) return null;
+        let f = await find(name, pid, true);
+        if (!f && make) f = await (await api('drive/v3/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: FOLDER, parents: [pid] }) })).json();
+        return f ? f.id : null;
+      })();
+      dirs.set(path, p);
+      p.then((id) => { if (!id) dirs.delete(path); }, () => dirs.delete(path));
+      return p;
+    }
+    const split = (path) => { const full = ROOT + '/' + path, i = full.lastIndexOf('/'); return [full.slice(0, i), full.slice(i + 1)]; };
+    async function file(path) { const [d, name] = split(path), pid = await folder(d, false); return pid ? find(name, pid) : null; }
+    const texts = new Map();   // ファイルの id -> { v, text }（変わっていなければ取り直さない）
+    return {
+      name: 'ドライブ', prep, login, ok: () => !!tok && Date.now() < exp, mkdir: (path) => folder(ROOT + '/' + path, true),
+      async get(path) {
+        const f = await file(path);
+        if (!f) return null;
+        const c = texts.get(f.id);
+        if (c && c.v === f.version) return { sha: f.version, text: c.text };
+        const text = await (await api(`drive/v3/files/${f.id}?alt=media`)).text();
+        texts.set(f.id, { v: f.version, text });
+        return { sha: f.version, text };
+      },
+      async sha(path) { const f = await file(path); return f ? f.version : null; },
+      async put(path, body, sha) {
+        const [d, name] = split(path), pid = await folder(d, true), f = await find(name, pid);
+        if ((f ? f.version : null) !== (sha || null)) { const e = new Error('ドライブ 409'); e.status = 409; throw e; }
+        const type = typeof body === 'string' ? (/\.json$/.test(name) ? 'application/json' : 'text/markdown') : body.type;
+        const blob = typeof body === 'string' ? new Blob([body], { type }) : body;
+        if (f) return (await (await api(`upload/drive/v3/files/${f.id}?uploadType=media&fields=version`, { method: 'PATCH', headers: { 'Content-Type': type }, body: blob })).json()).version;
+        const fd = new FormData();
+        fd.append('metadata', new Blob([JSON.stringify({ name, parents: [pid], mimeType: type })], { type: 'application/json' }));
+        fd.append('file', blob);
+        return (await (await api('upload/drive/v3/files?uploadType=multipart&fields=version', { method: 'POST', body: fd })).json()).version;
+      },
+      async del(path) {
+        const f = await file(path);
+        if (f) await api(`drive/v3/files/${f.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+      },
+      async list(dir) {
+        const pid = await folder(ROOT + '/' + dir, false);
+        if (!pid) return [];
+        const q = `'${pid}' in parents and trashed=false`;
+        const r = await api('drive/v3/files?' + new URLSearchParams({ q, fields: 'files(name)', orderBy: 'modifiedTime', pageSize: '200' }));
+        return (await r.json()).files.map((f) => ({ name: f.name, path: dir + '/' + f.name }));
+      },
+    };
+  })();
+  const driveOn = () => !!(cfg.drive && cfg.dcid);
+  const where = () => isLocal() && driveOn() ? drive : hub;
+  const hasRemote = () => isLocal() && driveOn() || !!cfg.token;
+  // ドライブのトークンが切れた: 下の表示を押すとつなぎ直す（Google のポップアップは押した操作の中でしか開けない）
+  let relogin = false;
+  function needLogin() {
+    relogin = true; drive.prep().catch(() => {});
+    stat.textContent = 'ドライブとの接続が切れました。ここを押すとつなぎ直します';
+  }
+  stat.addEventListener('click', () => {
+    if (!relogin) return;
+    drive.login().then(() => { relogin = false; stat.textContent = 'ドライブにつなぎ直しました'; pushAll(); refreshChapter(); })
+      .catch((e) => { stat.textContent = e.message; });
+  });
+  // ドライブの「Ink Reader」フォルダに置く、AI（Claude などのドライブ連携）への説明
+  const README = `# Ink Reader のフォルダ
+
+iPad の手書きリーダー「Ink Reader」が置いているフォルダです。本ごとにフォルダがあります。
+
+- \`<本>/book.json\`: 題名と章の一覧。PDF の本は \`pdf: true\` と各ページの大きさ。
+- \`<本>/chapters/<章>.md\`: md の本の本文（数式は TeX）。段落番号は、空行で区切った段落・見出し・数式のかたまりを上から 1, 2, … と数えたもの。
+- \`<本>/view/p<ページ>.png\`: PDF の本の、書き込みのあるページ（と質問されたページ）の画像。ページの絵に手書きを重ねてある。
+- \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
+- \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない）。
+
+## 質問に答えるとき
+
+アプリから届く質問文に、本のフォルダ・ページ（段落）番号・質問ID が書いてあります。画像と本文を読んで答えてください。
+
+答えはチャットで返したうえで、\`<本>/answers/\` フォルダに **新しいファイル** \`<章>-<質問ID>.md\` を作って保存してください（既存のファイルは書き換えない）。
+ファイルの1行目は \`<!-- ink-answer id=<質問ID> b=<ページか段落の番号,…> -->\`、2行目は \`> 質問: <質問>\`、その下に答えを書きます（数式は \`$…$\` / \`$$…$$\`）。
+アプリはこのファイルを読んで、そのページ（段落）の右に「Q」を出します。
+`;
+
   // ---------- 本のダウンロード（端末に保存） ----------
   let book = null;
   const isPdf = () => !!(book && book.pdf);
   const bookKey = () => isLocal() ? src : cfg.repo + '@' + cfg.branch + ':' + cfg.book;
   // 章の位置や最後に開いた章は本ごとに覚える（GitHub の本は前からのキーのまま）
+  // 置き場所の上の本のフォルダ。ドライブでは「Ink Reader/<題名> (<id の末尾>)」
+  const bookDir = () => !isLocal() ? cfg.book : driveOn()
+    ? ((book && book.title) || '本').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 60) + ' (' + src.slice(-4) + ')' : 'books/files/' + src.slice(6);
   const memKey = (k) => PREF + ':' + k + (isLocal() ? ':' + src : '');
   async function loadBook() { book = await kv.get('book:' + bookKey()); return book; }
   // 変わったファイルだけ取り直す。図は一度取れば取り直さない
@@ -435,26 +580,29 @@
   }
 
   // ---------- 書き込みの保存と同期 ----------
-  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号] }。GitHub: <本>/ink/<章>.json = { chapter, blocks }
-  // pending の段落は端末側を正とし、それ以外は GitHub 側を正としてまとめる
-  let cs = null;   // 今の章の { blocks, sha, pending:Set }
+  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号], at:置き場所 }。置き場所: <本>/ink/<章>.json = { chapter, blocks }
+  // pending の段落は端末側を正とし、それ以外は置き場所の側を正としてまとめる
+  // 置き場所: GitHub の本は GitHub。ファイルから開いた本は、ドライブにつないでいればドライブ、トークンがあれば GitHub
+  let cs = null;   // 今の章の { blocks, sha, pending:Set, at }
   const inkKey = (id) => 'ink:' + bookKey() + ':' + id;
-  const inkPath = (id) => cfg.book + '/ink/' + id + '.json';
+  const inkPath = (id, dir = bookDir()) => dir + '/ink/' + id + '.json';
+  const tag = (R) => R === hub ? '' : 'drive:';   // 置き場所ごとに覚えること（送った本・画像）のキーの頭
   let saveT = 0;
+  const saved = (st) => ({ blocks: st.blocks, sha: st.sha, pending: [...st.pending], at: st.at });
   function persist() {
     clearTimeout(saveT);
     const key = inkKey(CH), st = cs;
     st.blocks = serialize();
-    saveT = setTimeout(() => kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] }).catch(() => {}), 150);
+    saveT = setTimeout(() => kv.set(key, saved(st)).catch(() => {}), 150);
   }
   function touch(list) {
     if (!cs) return;
-    if (!isLocal()) for (const s of list) cs.pending.add(s.b);
+    if (!isLocal() || hasRemote()) for (const s of list) cs.pending.add(s.b);
     persist(); schedulePush(); showPending();
   }
   function showPending() {
     if (!cs || !cs.pending.size) return;
-    stat.textContent = !cfg.token ? `未送信 ${cs.pending.size}段落（設定でトークンを入れると送れます）`
+    stat.textContent = !hasRemote() ? `未送信 ${cs.pending.size}段落（設定でトークンを入れると送れます）`
       : online() ? `未送信 ${cs.pending.size}段落` : `オフライン: ${cs.pending.size}段落分をiPadに保存中`;
   }
   let pushT = 0;
@@ -465,46 +613,56 @@
     for (const b of st.pending) if (st.blocks[b]) out[b] = st.blocks[b];
     return out;
   }
-  async function pullInk(id, st) {
-    const meta = await gh(inkPath(id));
-    if (!meta) return { sha: null, blocks: {} };
-    const text = meta.content ? b64.to(meta.content) : await gh(inkPath(id), { raw: true });
-    return { sha: meta.sha, blocks: (JSON.parse(text || '{}').blocks) || {} };
+  async function pullInk(id, dir = bookDir(), R = where()) {
+    const f = await R.get(inkPath(id, dir));
+    return f ? { sha: f.sha, blocks: (JSON.parse(f.text || '{}').blocks) || {} } : { sha: null, blocks: {} };
+  }
+  // 置き場所を変えた（GitHub からドライブへ、など）ファイルの本は、書き込みを全部送り直す
+  function moveTo(st, R) {
+    const at = st.at || (st.sha ? hub.name : null);
+    if (!isLocal() || at === R.name) return;
+    st.sha = null; st.at = R.name;
+    for (const b in st.blocks) st.pending.add(+b);
   }
   let pushing = false;
   async function pushChapter(id) {
-    if (pushing || !canSync()) { showPending(); return; }
-    const key = inkKey(id);   // 送信中に本を切り替えても、元の本に保存する
+    if (pushing || !canPush()) { showPending(); return; }
+    const key = inkKey(id), dir = bookDir(), bk = bookKey(), meta = book, R = where();   // 送信中に本を切り替えても、元の本に保存する
     const st = id === CH ? cs : await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
-    if (!st || !st.pending.size) return;
+    if (!st) return;
+    moveTo(st, R);
+    if (!st.pending.size) return;
     pushing = true;
+    let sent = null;
     try {
+      if (isLocal()) await upBook(dir, bk, meta, R);
       for (let tryNo = 0; tryNo < 2; tryNo++) {
-        const sent = new Set(st.pending);
+        sent = new Set(st.pending);
         if (id === CH) st.blocks = serialize();
         const body = JSON.stringify({ chapter: id, blocks: st.blocks }, null, 0);
         try {
-          const r = await gh(inkPath(id), { method: 'PUT', body: { message: `ink: ${cfg.book.split('/').pop()} ${id}`, branch: cfg.branch,
-            content: b64.from(body), ...(st.sha ? { sha: st.sha } : {}) } });
-          st.sha = r.content.sha;
+          st.sha = await R.put(inkPath(id, dir), body, st.sha, `ink: ${dir.split('/').pop()} ${id}`);
           for (const b of sent) if (id !== CH || sameBlock(b, st.blocks[b])) st.pending.delete(b);
           break;
         } catch (e) {
           if (e.status !== 409 && e.status !== 422) throw e;
           // 他の端末が先に保存していた: 取り直してまとめ、もう一度
-          const remote = await pullInk(id, st);
+          const remote = await pullInk(id, dir, R);
           st.sha = remote.sha;
           st.blocks = merge(st, remote.blocks);
           if (id === CH) { showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist(); }
         }
       }
-      await kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] });
-      if (id === CH && !st.pending.size) stat.textContent = 'GitHubに保存しました';
+      await kv.set(key, saved(st));
+      // PDF は座標だけでは AI に分からないので、書き込みを変えたページを画像にして送る
+      if (meta && meta.pdf && id === CH && bk === bookKey()) { await upPages(dir, bk, [...sent], false, R); kv.set('viewv:' + tag(R) + bk, VIEWV).catch(() => {}); }
+      if (id === CH && !st.pending.size) stat.textContent = R.name + 'に保存しました';
     } catch (e) {
-      stat.textContent = e.status === 401 || e.status === 403 ? 'GitHubに保存できません（トークンを確認してください）' : 'GitHubに送れませんでした（iPadには保存済み）';
+      if (e.drive) needLogin();
+      else stat.textContent = e.status === 401 || e.status === 403 ? R.name + 'に保存できません（設定を確かめてください）' : R.name + 'に送れませんでした（iPadには保存済み）';
     } finally {
       pushing = false;
-      if (id === CH && cs.pending.size && canSync()) schedulePush(8000);
+      if (id === CH && cs && cs.pending.size && canPush()) schedulePush(8000);
     }
   }
   // 送信中に書き足された段落は送信済みにしない
@@ -512,22 +670,80 @@
     const now = strokes.filter((s) => s.b === b).map((s) => s.id).sort().join();
     return now === Object.keys((sentBlock && sentBlock.strokes) || {}).sort().join();
   }
+  // ファイルから開いた本: 本の情報（md の本は本文も）を、最初に一度だけ置く。ドライブには AI への説明（README.md）も置く
+  async function upBook(dir, bk, meta, R) {
+    if (!meta || await kv.get('up:' + tag(R) + bk)) return;
+    const put = async (path, text) => { if (!await R.sha(path)) await R.put(path, text, null, `book: ${dir.split('/').pop()}`); };
+    if (R === drive) { await put('README.md', README); await drive.mkdir(dir + '/answers'); }   // 答えを置くフォルダを先に作っておく
+    const chapters = meta.chapters.map((c) => meta.pdf ? c : { ...c, file: 'chapters/' + c.id + '.md' });
+    for (const c of meta.pdf ? [] : meta.chapters) {
+      const v = await kv.get('md:' + bk + ':' + c.id);
+      if (v) await put(dir + '/chapters/' + c.id + '.md', v.md);
+    }
+    await put(dir + '/book.json', JSON.stringify({ title: meta.title, from: 'file', pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}) }, null, 1));
+    await kv.set('up:' + tag(R) + bk, true);
+  }
+  // PDF のページ n を、余白・白紙と書き込みごと画像にする（紙の幅 680px の 2 倍）。
+  // たたんだ余白も開いた形にする（線の座標は余白をすべて開いたときの位置なので、そのまま描ける）
+  async function pageImage(n) {
+    const k = 2, pg = await pdfDoc.getPage(n), w1 = pg.getViewport({ scale: 1 }).width, pc = document.createElement('canvas');
+    pc.width = W * k; pc.height = Math.ceil(pageH(n) * k);
+    await pg.render({ canvas: pc, viewport: pg.getViewport({ scale: k * W / w1 }) }).promise;
+    const list = strokes.filter((s) => s.b === n);
+    let h = pageH(n) + spSum(n) + (gaps[n] || 0);
+    for (const s of list) h = Math.max(h, s.bbox[3] + 20);
+    const cv = document.createElement('canvas'), g = cv.getContext('2d');
+    cv.width = W * k; cv.height = Math.ceil(h * k);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    let c0 = 0, v = 0;
+    for (const c1 of (sps[n] || []).map((p) => p.at).concat(pageH(n))) {
+      g.drawImage(pc, 0, c0 * k, pc.width, (c1 - c0) * k, 0, v * k, cv.width, (c1 - c0) * k);
+      const p = (sps[n] || []).find((x) => x.at === c1);
+      v += c1 - c0 + (p ? p.h : 0); c0 = c1;
+    }
+    pc.width = pc.height = 0;
+    g.scale(k, k); drawInk(g, list, () => 0);
+    return cv;
+  }
+  const VIEWV = 2;   // ページの画像の作り方の版（変えたら上げる）
+  const blobB64 = (bl) => new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = ng; r.readAsDataURL(bl); });
+  const pngOf = (cv) => new Promise((r) => cv.toBlob(r, 'image/png'));
+  // <本>/view/p<ページ>.png を作り直す。書き込みがなくなったページの画像は消す（all: 書き込みがなくても置く）
+  async function upPages(dir, bk, pages, all, R = where()) {
+    const key = 'view:' + tag(R) + bk, shas = (await kv.get(key)) || {};
+    for (const n of pages) {
+      const path = dir + '/view/p' + n + '.png', msg = `ink: ${dir.split('/').pop()} p${n}`;
+      try {
+        if (!pdfDoc || bk !== bookKey() || !blocks[n]) break;
+        if (!shas[n]) shas[n] = await R.sha(path);
+        if (!all && !strokes.some((s) => s.b === n)) {
+          if (shas[n]) { await R.del(path, shas[n], msg); delete shas[n]; }
+          continue;
+        }
+        const cv = await pageImage(n), bl = await pngOf(cv);
+        cv.width = cv.height = 0;
+        shas[n] = await R.put(path, bl, shas[n], msg);
+      } catch (e) { delete shas[n]; if (e.drive) { needLogin(); break; } }
+    }
+    await kv.set(key, shas);
+  }
   async function pushAll() {
-    if (!canSync() || !book) return;
+    if (!canPush() || !book) return;
     for (const c of book.chapters) await pushChapter(c.id);
   }
-  async function refreshChapter() {   // GitHub 側の書き込みと答えを取り込む（他の端末・Claude の変更）
-    if (!canSync() || !cs) return;
+  async function refreshChapter() {   // 置き場所の書き込みと答えを取り込む（他の端末・Claude の変更）
+    if (!canPush() || !cs) return;
     const id = CH, st = cs;
     pullAnswers(id);
+    if (isLocal() && (st.at || (st.sha ? hub.name : null)) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
-      const remote = await pullInk(id, st);
+      const remote = await pullInk(id);
       if (id !== CH || remote.sha === st.sha) return;
       st.sha = remote.sha; st.blocks = merge(st, remote.blocks);
       showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist();
       persist();
       if (st.pending.size) schedulePush(500);
-    } catch {}
+    } catch (e) { if (e.drive) needLogin(); }
   }
   addEventListener('online', () => { pushAll(); refreshChapter(); });
   addEventListener('offline', showPending);
@@ -1065,7 +1281,31 @@
     return cv;
   }
   let askImg = null, askId = '';
+  // ドライブにつないだファイルの本: 本と書き込みはドライブにあるので、場所と答えの置き方を伝える（Claude のドライブ連携で読む）
+  const viaDrive = () => isLocal() && driveOn();
+  function driveText() {
+    const ch = book && book.chapters.find((c) => c.id === CH), q = $('#ask-q').value.trim(), d = 'Ink Reader/' + bookDir();
+    return [
+      `Ink Reader からの質問です。Google ドライブの「${d}」フォルダの本について聞きます（先に「Ink Reader/README.md」を読んでください）。`,
+      isPdf() ? `PDF「${book.title || ''}」の ${pagesText()}。ページの画像（手書き入り）: ${picked.map((n) => d + '/view/p' + n + '.png').join(' ')}`
+        : `本「${book.title || ''}」 ${ch ? ch.label : ''}（${d}/chapters/${CH}.md） 段落番号: ${picked.join(', ')}`,
+      askImg ? `囲んだ範囲の画像（手書き入り）: ${d}/asks/${askId}.png` : null,
+      isPdf() ? null : '\n該当箇所:\n"""\n' + passage() + '\n"""',
+      '', `質問: ${q || 'この箇所を分かりやすく説明してください'}`, '',
+      `答えはチャットで返したうえで、「${d}/answers」に新しいファイル「${CH}-${askId}.md」を作って保存してください。1行目は <!-- ink-answer id=${askId} b=${picked.join(',')} --> にします。`,
+    ].filter((v) => v != null).join('\n');
+  }
+  // 聞く前に、書き込みと画像をドライブに置く
+  async function upAsk() {
+    addAsk({ id: askId, b: picked.slice(), q: $('#ask-q').value.trim() });
+    if (cs && cs.pending.size) pushChapter(CH);
+    try {
+      if (askImg) await drive.put(bookDir() + '/asks/' + askId + '.png', await pngOf(askImg), null);
+      if (isPdf()) await upPages(bookDir(), bookKey(), picked.slice(), true, drive);
+    } catch (e) { if (e.drive) needLogin(); }
+  }
   function askText(withImg) {
+    if (viaDrive()) return driveText();
     const ch = book && book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
     if (isPdf()) return [
@@ -1105,6 +1345,7 @@
   $('#ask-q').addEventListener('input', links);
   $('#ask-open').onclick = async () => {
     const ok = await copy(askText(false));
+    if (viaDrive()) { $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + 'Claude でドライブの連携をオンにして聞いてください'; upAsk(); return; }
     $('#ask-msg').textContent = (ok ? '質問文をコピーしました。' : '') + (askImg ? '手書きの画像も送るときは「共有」を使ってください。' : '');
   };
   // sakai_study のリポジトリで Claude Code のセッションを開く。本文と書き込みはリポジトリにあるので、場所を伝える
@@ -1112,39 +1353,49 @@
   const sessUrl = () => { const v = (cfg.session || '').trim(), m = v.match(/\/code\/([\w-]+)/); const id = m ? m[1] : /^[\w-]+$/.test(v) ? v : ''; return id && id !== 'new' ? 'https://claude.ai/code/' + id : ''; };
   function syncSess() {
     $('#ask-code').textContent = sessUrl() ? 'いつものセッションで聞く' : 'sakai_studyで聞く（新しいセッション）';
-    $('#ask-new').hidden = !sessUrl() || isLocal();
-    // ファイルから開いた本はリポジトリにないので、Claude アプリに渡す方だけ
-    $('#ask-code').hidden = $('.sess').hidden = isLocal();
+    // ファイルから開いた本は、トークンがなければリポジトリにないので、Claude アプリに渡す方だけ
+    const noRepo = isLocal() && (driveOn() || !cfg.token);
+    $('#ask-new').hidden = !sessUrl() || noRepo;
+    $('#ask-code').hidden = $('.sess').hidden = noRepo;
     // PDF は画像がないと伝わらないので、画像を渡せる「共有」を主にする
-    $('#ask-open').classList.toggle('primary', isLocal() && !isPdf());
-    $('#ask-share').classList.toggle('primary', isPdf());
+    $('#ask-open').classList.toggle('primary', viaDrive() || isLocal() && !isPdf());
+    $('#ask-share').classList.toggle('primary', !viaDrive() && isPdf());
   }
   $('#ask-sess').onchange = () => { cfg.session = $('#ask-sess').value.trim(); store.set(PREF + ':cfg', JSON.stringify(cfg)); syncSess(); links(); };
   function codeText() {
     const ch = book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
-    const hasInk = strokes.some((s) => picked.includes(s.b));
-    return [
-      `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照。先に git pull して最新の書き込みを取り込んでください）。`,
-      `本: ${cfg.book}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${cfg.book}/${ch ? ch.file : ''}`,
-      `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${cfg.book} ${CH} ${picked.join(' ')}）` : ''),
+    const hasInk = strokes.some((s) => picked.includes(s.b)), dir = bookDir();
+    const head = `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照。先に git pull して最新の書き込みを取り込んでください）。`;
+    const tail = `答えは ${dir}/answers/${CH}.md に追記して push してください（質問ID: ${askId}${isPdf() ? '。b= にはページ番号を入れる' : ''}）。`;
+    if (isPdf()) return [head,
+      `本: ${dir}（PDF「${book.title || ''}」） ページ: ${picked.join(', ')}`,
+      `ページの画像（手書きの書き込み入り）: ${picked.map((n) => dir + '/view/p' + n + '.png').join(' ')}`,
+      `書き込みの座標: ${inkPath(CH)}（ページ番号ごと。座標は幅 680px の紙の上で、ページ上端からの値×10）`,
+      '', `質問: ${q || 'このページを分かりやすく説明してください'}`, '', tail,
+    ].join('\n');
+    return [head,
+      `本: ${dir}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${dir}/${isLocal() ? 'chapters/' + CH + '.md' : ch ? ch.file : ''}`,
+      `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${dir} ${CH} ${picked.join(' ')}）` : ''),
       '', '該当箇所:', '"""', passage(), '"""', '',
       `質問: ${q || 'この箇所を分かりやすく説明してください'}`,
-      '', `答えは ${cfg.book}/answers/${CH}.md に追記して push してください（質問ID: ${askId}）。`,
+      '', tail,
     ].join('\n');
   }
   async function askCode(fresh) {
     const t = codeText(), url = fresh ? '' : sessUrl();
-    if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
     addAsk({ id: askId, b: picked.slice(), q: $('#ask-q').value.trim() });
     const ok = await copy(t);
+    if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
+    if (isPdf() && canPush()) upPages(bookDir(), bookKey(), picked.slice(), true);   // 書き込みのないページも、聞いたページは画像にして置く
     $('#ask-msg').textContent = (url ? (ok ? '質問文をコピーしました。セッションに貼り付けて送ってください。' : 'コピーできませんでした。') : (ok ? '質問文をコピーしました。' : '') + '開いたセッションのURLを下に入れておくと、次から同じセッションで聞けます。')
-      + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
+      + (cs && cs.pending.size && !canPush() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
   }
   $('#ask-code').onclick = () => askCode(false);
   $('#ask-new').onclick = () => askCode(true);
   $('#ask-share').onclick = async () => {
     const t = askText(!!askImg);
+    if (viaDrive()) upAsk();
     try {
       const files = askImg ? [new File([await new Promise((r) => askImg.toBlob(r, 'image/png'))], 'ink.png', { type: 'image/png' })] : [];
       const data = files.length && navigator.canShare && navigator.canShare({ files }) ? { text: t, files } : { text: t };
@@ -1185,7 +1436,7 @@
     showMarks();
   }
   function addAsk(q) {
-    if (!CH || isLocal() || asks.some((x) => x.id === q.id)) return;
+    if (!CH || (isLocal() && !hasRemote()) || asks.some((x) => x.id === q.id)) return;
     asks.push(q); kv.set(askKey(CH), asks).catch(() => {});
     showMarks();
   }
@@ -1231,10 +1482,13 @@
   qs.addEventListener('pointerdown', (e) => { qDown = e.target.closest('.qm'); });
   qs.addEventListener('pointerup', (e) => { const m = e.target.closest('.qm'); if (m && m === qDown) toggleAns(+m.dataset.b); qDown = null; });
   qs.addEventListener('click', (e) => { const m = e.target.closest('.qm'); if (m && e.detail === 0) toggleAns(+m.dataset.b); });   // キーボード
+  // 答えは <本>/answers/<章>.md（追記していく）と、<本>/answers/<章>-<質問ID>.md（1問1ファイル。ドライブの AI は上書きできないため）
   async function pullAnswers(id) {
-    if (!canSync()) return;
+    if (!canPush()) return;
     try {
-      const md = (await gh(cfg.book + '/answers/' + id + '.md', { raw: true })) || '';
+      const R = where(), dir = bookDir(), one = await R.get(dir + '/answers/' + id + '.md');
+      let md = one ? one.text : '';
+      if (R === drive) for (const f of await R.list(dir + '/answers')) if (f.name.startsWith(id + '-') && /\.md$/.test(f.name)) { const x = await R.get(f.path); if (x) md += '\n' + x.text; }
       if (id !== CH || md === ansMd) return;
       kv.set(ansKey(id), md).catch(() => {});
       setAnswers(md);
@@ -1778,7 +2032,7 @@
     for (const s of strokes) s.el.remove();
     strokes = []; setEdit(null); undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
-    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []) };
+    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []), at: saved && saved.at };
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
@@ -1789,6 +2043,17 @@
     scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
     if (document.fonts) document.fonts.ready.then(layout);
+    // ファイルから開いた本で、今の置き場所にまだ送っていない書き込み（つなぐ前に書いたもの・置き場所を変えたもの）を送る
+    if (isLocal() && hasRemote() && Object.keys(cs.blocks).length) { const n = cs.pending.size; moveTo(cs, where()); if (cs.pending.size !== n) { persist(); schedulePush(1500); } }
+    // ページの画像の作り方を変えたときは、書き込みのあるページの画像を作り直す
+    if (isPdf() && isLocal() && canPush()) {
+      const bk = bookKey(), R = where(), vk = 'viewv:' + tag(R) + bk;
+      kv.get(vk).then((v) => v === VIEWV || setTimeout(async () => {
+        if (bk !== bookKey() || R !== where() || !pdfDoc || await kv.get(vk) === VIEWV) return;
+        await upPages(bookDir(), bk, [...new Set(strokes.map((x) => x.b))], false, R);
+        kv.set(vk, VIEWV);
+      }, 3000));
+    }
     showPending();
     lastPull = Date.now(); refreshChapter();
   }
@@ -2050,7 +2315,26 @@
 
   // ---------- 設定画面 ----------
   const dlg = $('#cfg'), msg = $('#cfg-msg');
+  // Google ドライブ: ファイルから開いた本の置き場所。クライアント ID は、前に試験ページ（labs/drive.html）で入れたものがあれば使う
+  function showDrive(m) {
+    if (!cfg.dcid) try { cfg.dcid = JSON.parse(store.get('ink-drive-test') || '{}').cid || ''; } catch {}
+    $('#cfg-dcid').value = cfg.dcid || '';
+    $('#cfg-drive').textContent = cfg.drive ? (drive.ok() ? 'ドライブとのつながりを切る' : 'ドライブにつなぎ直す') : 'Google ドライブにつなぐ';
+    $('#drv-msg').textContent = m || (cfg.drive ? (drive.ok() ? 'つながっています。ファイルから開いた本の書き込みは、ドライブの「Ink Reader」フォルダに置きます' : 'つながりが切れています（1時間ごとに切れます）') : '');
+  }
+  $('#cfg-drive').onclick = () => {
+    cfg.dcid = $('#cfg-dcid').value.trim();
+    if (cfg.drive && drive.ok()) { cfg.drive = false; store.set(PREF + ':cfg', JSON.stringify(cfg)); return showDrive('切りました（書き込みはこのiPadに残ります）'); }
+    if (!cfg.dcid) return showDrive('クライアント ID を入れてください');
+    drive.login().then(() => {
+      cfg.drive = true; store.set(PREF + ':cfg', JSON.stringify(cfg)); relogin = false;
+      showDrive('つながりました。ファイルから開いた本の書き込みを送ります');
+      if (isLocal()) switchBook(src);
+    }).catch((e) => showDrive(e.message));
+  };
   function openCfg() {
+    drive.prep().catch(() => {});
+    showDrive();
     $('#cfg-token').value = cfg.token; $('#cfg-repo').value = cfg.repo; $('#cfg-branch').value = cfg.branch; $('#cfg-book').value = cfg.book;
     msg.textContent = cfg.token ? '接続先を変えるときだけ書き換えてください' : '';
     dlg.showModal();
@@ -2073,7 +2357,7 @@
     }
   }
   $('#cfg-save').onclick = async () => {
-    cfg = { token: $('#cfg-token').value.trim(), repo: $('#cfg-repo').value.trim() || DEF.repo,
+    cfg = { ...cfg, token: $('#cfg-token').value.trim(), repo: $('#cfg-repo').value.trim() || DEF.repo,
       branch: $('#cfg-branch').value.trim() || DEF.branch, session: cfg.session, book: $('#cfg-book').value.trim().replace(/\/+$/, '') || DEF.book };
     store.set(PREF + ':cfg', JSON.stringify(cfg));
     if (await connect(false)) setTimeout(() => dlg.close(), 600);
