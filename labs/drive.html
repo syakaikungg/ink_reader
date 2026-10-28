@@ -30,6 +30,7 @@
 
 <section>
   <b>2. 試す</b><br>
+  <label style="display:flex;gap:8px;align-items:center;color:#1b2233;font-size:15px"><input type="checkbox" id="wide" style="width:auto"> ドライブ全体の権限（drive）で試す</label>
   <button id="login">Google でログイン</button>
   <button id="pick" disabled>フォルダを選ぶ</button>
   <button id="write" disabled>フォルダに書いてみる</button>
@@ -62,11 +63,11 @@
     if (!conf.cid) return log('先にクライアント ID を保存してください', 'ng');
     const client = google.accounts.oauth2.initTokenClient({
       client_id: conf.cid,
-      scope: 'https://www.googleapis.com/auth/drive.file',
+      scope: 'https://www.googleapis.com/auth/' + ($('wide').checked ? 'drive' : 'drive.file'),
       callback: (r) => {
         if (r.error) return log('ログインできませんでした: ' + r.error, 'ng');
         token = r.access_token;
-        log('ログインできました（権限: drive.file）', 'ok');
+        log(`ログインできました（権限: ${$('wide').checked ? 'drive' : 'drive.file'}）`, 'ok');
         $('pick').disabled = false;
       },
     });
