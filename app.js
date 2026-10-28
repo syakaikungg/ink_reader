@@ -946,11 +946,23 @@
   }
   const NAMES = { line: '直線', poly: '多角形', ellipse: '楕円', circle: '円' };
   const moveG = (g, dx, dy) => ({ ...g, v: g.k === 'ellipse' || g.k === 'circle' ? [[g.v[0][0] + dx, g.v[0][1] + dy], g.v[1]] : g.v.map(([x, y]) => [x + dx, y + dy]) });
-  // 水平・垂直・斜め45度に近い向きはそろえる
+  // 水平・垂直に近い向き（10度まで）と斜め45度に近い向き（4度まで）はそろえる
+  const DEG = Math.PI / 180;
   function snapAngle(a, b) {
-    const dx = b[0] - a[0], dy = b[1] - a[1], ang = Math.atan2(dy, dx), step = Math.PI / 4, r = Math.round(ang / step) * step;
-    if (Math.abs(ang - r) > 4 * Math.PI / 180) return b;
+    const dx = b[0] - a[0], dy = b[1] - a[1], ang = Math.atan2(dy, dx), r = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
+    const axis = Math.round(r / (Math.PI / 4)) % 2 === 0;
+    if (Math.abs(ang - r) > (axis ? 10 : 4) * DEG) return b;
     const l = Math.hypot(dx, dy); return [a[0] + l * Math.cos(r), a[1] + l * Math.sin(r)];
+  }
+  // 傾きを、水平・垂直から tol 以内なら一番近い 90 度の倍数にそろえる
+  const snapRot = (a, tol = 8 * DEG) => { const r = Math.round(a / (Math.PI / 2)) * (Math.PI / 2); return Math.abs(a - r) < tol ? r : a; };
+  // 多角形の辺のどれかが水平・垂直に近ければ、重心のまわりに回してその辺をそろえる
+  function axisPoly(v, tol = 8 * DEG) {
+    let best = Infinity;
+    v.forEach((q, i) => { const r = v[(i + 1) % v.length], a = Math.atan2(r[1] - q[1], r[0] - q[0]), d = snapRot(a, Infinity) - a; if (Math.abs(d) < Math.abs(best)) best = d; });
+    if (!(Math.abs(best) < tol) || !best) return v;
+    const c = v.reduce((m, [x, y]) => [m[0] + x / v.length, m[1] + y / v.length], [0, 0]), cr = Math.cos(best), sr = Math.sin(best);
+    return v.map(([x, y]) => { const dx = x - c[0], dy = y - c[1]; return [c[0] + dx * cr - dy * sr, c[1] + dx * sr + dy * cr]; });
   }
   // 手書きの線を図形に直す。点の列 [[x,y,p]] から、直線・円（楕円）・三角形・四角形のどれかに近ければその図形 g を返す
   function fitShape(pts) {
@@ -963,11 +975,12 @@
     const ps = pts.map((q) => q[2]).sort((x, y) => x - y), p = ps[ps.length >> 1];
     const A = pts[0], B = pts[pts.length - 1], chord = Math.hypot(B[0] - A[0], B[1] - A[1]);
     const dist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return Math.abs((q[0] - a[0]) * dy - (q[1] - a[1]) * dx) / l; };
-    // 直線: 始点と終点を結んだ線から大きく外れない（書き始めの小さなはねは許す）
-    if (chord > len * .7) {
-      let dev = 0; for (const q of ds) dev = Math.max(dev, dist(q, A, B));
-      if (dev < Math.max(7, chord * .1)) return { k: 'line', v: [A.slice(0, 2), snapAngle(A, B)], p };
-      return null;
+    // 直線: 始点と終点を結んだ線から大きく外れない（書き始めと書き終わりの小さなはねは見ない）
+    if (chord > len * .6) {
+      const end = Math.min(16, chord * .15);
+      let dev = 0; for (const q of ds) if (Math.hypot(q[0] - A[0], q[1] - A[1]) > end && Math.hypot(q[0] - B[0], q[1] - B[1]) > end) dev = Math.max(dev, dist(q, A, B));
+      if (dev < Math.max(10, chord * .14)) return { k: 'line', v: [A.slice(0, 2), snapAngle(A, B)], p };
+      if (chord > len * .7) return null;
     }
     if (chord > len * .25) return null;   // 閉じていない曲線はそのまま
     // 閉じた形: 角を探す（ダグラス・ポイカー法）。3つなら三角形、4つなら四角形、角がなければ円
@@ -986,11 +999,11 @@
     const eps = size * .1;
     const corners = simplify(ds.slice(0, fi + 1), eps).slice(0, -1).concat(simplify(ds.slice(fi), eps).slice(0, -1));
     const cs = []; for (const q of corners) if (!cs.some((r) => Math.hypot(r[0] - q[0], r[1] - q[1]) < size * .2)) cs.push(q);   // 近すぎる角はまとめる
-    if (cs.length === 3) return { k: 'poly', v: cs.map((q) => q.slice(0, 2)), p };
+    if (cs.length === 3) return { k: 'poly', v: axisPoly(cs.map((q) => q.slice(0, 2)), 12 * DEG), p };
     if (cs.length === 4) {
       // 辺がほぼ水平・垂直なら、きれいな長方形にする
-      const axis = cs.every((q, i) => { const r = cs[(i + 1) % 4], ang = Math.atan2(r[1] - q[1], r[0] - q[0]); return Math.min(Math.abs(Math.sin(ang)), Math.abs(Math.cos(ang))) < .17; });
-      return { k: 'poly', v: axis ? [[a, b], [c, b], [c, d], [a, d]] : cs.map((q) => q.slice(0, 2)), p };
+      const axis = cs.every((q, i) => { const r = cs[(i + 1) % 4], ang = Math.atan2(r[1] - q[1], r[0] - q[0]); return Math.min(Math.abs(Math.sin(ang)), Math.abs(Math.cos(ang))) < .26; });
+      return { k: 'poly', v: axis ? [[a, b], [c, b], [c, d], [a, d]] : axisPoly(cs.map((q) => q.slice(0, 2)), 12 * DEG), p };
     }
     const cx = (a + c) / 2, cy = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2;
     let err = 0; for (const [x, y] of pts) err += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
@@ -1009,8 +1022,8 @@
       const r0 = Math.hypot(q0[0] - c[0], q0[1] - c[1]);
       if (r0 < 6) return;
       const k = Math.max(.1, Math.hypot(q[0] - c[0], q[1] - c[1]) / r0), rot = g.k === 'circle' ? 0 : Math.atan2(q[1] - c[1], q[0] - c[0]) - Math.atan2(q0[1] - c[1], q0[0] - c[0]);
-      if (g.k === 'poly') { const cr = Math.cos(rot), sr = Math.sin(rot); g.v = g0.v.map(([x, y]) => { const dx = (x - c[0]) * k, dy = (y - c[1]) * k; return [c[0] + dx * cr - dy * sr, c[1] + dx * sr + dy * cr]; }); }
-      else { g.v = [c, [g0.v[1][0] * k, g0.v[1][1] * k]]; g.a = (g0.a || 0) + rot; }
+      if (g.k === 'poly') { const cr = Math.cos(rot), sr = Math.sin(rot); g.v = axisPoly(g0.v.map(([x, y]) => { const dx = (x - c[0]) * k, dy = (y - c[1]) * k; return [c[0] + dx * cr - dy * sr, c[1] + dx * sr + dy * cr]; })); }
+      else { g.v = [c, [g0.v[1][0] * k, g0.v[1][1] * k]]; g.a = snapRot((g0.a || 0) + rot); }
     }
     cur.pts = genPts(g);
     if (!raf) raf = requestAnimationFrame(frame);
@@ -1045,11 +1058,19 @@
   function dragHandle(x, y) {   // x, y は紙の座標
     const s = edit, g = hdrag.g, ty = top(s), q = [x, y - ty];
     if (g.k === 'line') { g.v[hdrag.i] = snapAngle(g.v[1 - hdrag.i], q); }
-    else if (g.k === 'poly') g.v[hdrag.i] = q;
+    else if (g.k === 'poly') {
+      // となりの頂点との辺が水平・垂直に近ければそろえる
+      const n = g.v.length;
+      for (const j of [(hdrag.i + n - 1) % n, (hdrag.i + 1) % n]) {
+        const r = g.v[j], a = Math.atan2(q[1] - r[1], q[0] - r[0]), d = Math.abs(snapRot(a, Infinity) - a);
+        if (d < 8 * DEG) { if (Math.abs(Math.cos(a)) > .7) q[1] = r[1]; else q[0] = r[0]; }
+      }
+      g.v[hdrag.i] = q;
+    }
     else {
       const [c, [rx, ry]] = g.v, dx = q[0] - c[0], dy = q[1] - c[1], l = Math.max(2, Math.hypot(dx, dy));
       if (g.k === 'circle') g.v = [c, [l, l]];
-      else if (hdrag.i === 0) { g.v = [c, [l, ry]]; g.a = Math.atan2(dy, dx); }
+      else if (hdrag.i === 0) { g.v = [c, [l, ry]]; g.a = snapRot(Math.atan2(dy, dx)); }
       else g.v = [c, [rx, l]];
     }
     s.g = g; s.pts = genPts(g);
@@ -1074,10 +1095,10 @@
     page.setPointerCapture(e.pointerId);
     curId = e.pointerId; curType = e.pointerType; penDown = true;
     t0 = e.timeStamp; samples = 1; frames = 0;
-    if (edit && (tool === 'pen' || tool === 'ls')) {
+    if (edit && tool !== 'er') {
       const [x, y] = toPage(e), i = hitHandle(x, y);
       if (i >= 0) { hdrag = { i, g: cloneG(edit.g), g0: edit.g, pts0: edit.pts }; selMenu.hidden = true; return; }
-      if (tool === 'pen') setEdit(null);
+      if (tool !== 'ls') setEdit(null);
     }
     if (tool === 'er') { erased = []; eraseAt(toPage(e)); return; }
     if (tool === 'ls') { lassoDown(e); return; }
@@ -1101,8 +1122,8 @@
     for (const ev of list) pending.push(toRel(ev));
     predicted = e.getPredictedEvents ? e.getPredictedEvents().map(toRel) : [];
     if (!raf) raf = requestAnimationFrame(frame);
-    // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角）
-    if (cur.tool === 'pen') {
+    // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角。マーカーは直線だけ）
+    if (cur.tool === 'pen' || cur.tool === 'hl') {
       const q = pending[pending.length - 1];
       if (!hold || Math.hypot(q[0] - hold[0], q[1] - hold[1]) > 3) { hold = q; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
     }
@@ -1111,7 +1132,7 @@
     if (!cur || cur.shape || curId === null) return;
     if (pending.length) { cur.pts.push(...pending); pending = []; }
     const g = fitShape(cur.pts);
-    if (!g) return;
+    if (!g || (cur.tool === 'hl' && g.k !== 'line')) return;
     cur.g = g; cur.pts = genPts(g); cur.shape = true; predicted = [];
     cur.live = { g0: cloneG(g), q0: hold };
     render(cur, null, false);
