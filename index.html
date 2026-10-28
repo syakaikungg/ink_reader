@@ -271,7 +271,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 #doc > .pg::before, #doc > .pg .blank { content: ""; position: absolute; left: 0; width: 100%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 3px 10px rgba(20,30,60,.06); }
 #doc > .pg::before { top: 0; height: var(--ph); }
 #doc > .pg canvas { position: absolute; left: 0; top: 0; width: 100%; }   /* 位置と大きさは app.js（ページの途中の余白で切って並べる） */
-#doc > .pg canvas.hd { z-index: 1; }   /* 拡大したとき、見えている部分だけ細かく描いて重ねる絵 */
+#doc > .pg canvas.hd { z-index: 1; }   /* 拡大したとき、見えている部分だけ細かく描いて重ねる絵（書き込み #ink はその上） */
 #doc > .pg .hitbox { position: absolute; z-index: 2; border-radius: 3px; background: rgba(255,200,0,.45); mix-blend-mode: multiply; pointer-events: none; animation: hitbox 2s ease-out forwards; }
 @keyframes hitbox { 0%, 45% { opacity: 1; } to { opacity: 0; } }
 #pgno { position: fixed; z-index: 15; right: max(12px, env(safe-area-inset-right, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px));
