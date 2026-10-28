@@ -24,17 +24,19 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await p.waitForFunction((n) => document.querySelectorAll('#doc > .pg').length === n, N, { timeout: 60000 });
   await p.waitForFunction(() => document.querySelector('#doc > .pg canvas'), null, { timeout: 20000 });
   console.log('open', (Date.now() - t0) + 'ms', await p.textContent('#stat'), '|', await p.textContent('#chap-t'));
-  const pg = () => p.evaluate(() => document.getElementById('pg-in').value + ' / ' + document.getElementById('pg-n').textContent);
+  const pg = () => p.evaluate(() => document.getElementById('pg-c').textContent + ' / ' + document.getElementById('pg-n').textContent);
   const canv = () => p.evaluate(() => [...document.querySelectorAll('#doc > .pg canvas:not(.hd)')].filter((c) => c.width).map((c) => +c.parentNode.dataset.n));
   await p.waitForTimeout(800);
   console.log('pgno', await pg(), 'visible', await p.isVisible('#pgno'), 'drawn', await canv(), 'foot hidden', await p.isHidden('#foot'));
   await p.screenshot({ path: path.join(OUT, 'pdf.png') });
 
+  // 右下のページ番号を押すと、ページの一覧が開く。番号を入れて飛ぶ
+  const jumpTo = async (n) => { await p.click('#pgno'); await p.fill('#pg-in', String(n)); await p.keyboard.press('Enter'); await p.waitForTimeout(1200); };
   const line = async (x, y) => { await p.mouse.move(x, y); await p.mouse.down(); for (let i = 0; i < 20; i++) await p.mouse.move(x + i * 5, y + (i % 2) * 3); await p.mouse.up(); };
   const y1 = await p.evaluate(() => document.querySelector('#doc > .pg[data-n="1"]').getBoundingClientRect().top + 200);
   await line(200, y1);
   // ページ番号を入れて飛ぶ
-  await p.click('#pg-in'); await p.fill('#pg-in', '150'); await p.keyboard.press('Enter'); await p.waitForTimeout(1200);
+  await jumpTo(150);
   console.log('jump', await pg(), 'drawn', await canv());
   const y150 = await p.evaluate(() => document.querySelector('#doc > .pg[data-n="150"]').getBoundingClientRect().top + 300);
   await line(250, y150);
@@ -48,7 +50,7 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await p.click('#chap'); await p.waitForTimeout(300);
   console.log('toc', await p.$$eval('#toc-list button', (o) => o.map((x) => x.textContent.trim())), 'search hidden', await p.isHidden('#toc-q'));
   await p.click('#toc-list li:nth-child(4) button'); await p.waitForTimeout(1000); console.log('toc jump', await pg());
-  await p.click('#pg-in'); await p.fill('#pg-in', '150'); await p.keyboard.press('Enter'); await p.waitForTimeout(1200);
+  await jumpTo(150);
 
   // しおり: ページを指で長押し
   const cdp = await ctx.newCDPSession(p);
@@ -102,6 +104,35 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await p.screenshot({ path: path.join(OUT, 'pdf-search.png') });
   await p.click('#chap'); await p.fill('#toc-q', 'mc^2'); await p.waitForTimeout(600); console.log('search all', (await p.$$('#toc-hits li')).length, await p.textContent('#toc-hits li:last-child'));
   await p.click('#toc button[value=cancel]');
+
+  // ページの一覧: 右下のページ番号から開く → 縮小画像は見えている分だけ → 「…」から白紙を入れる・消す（後ろのページが下がる・戻る）
+  await jumpTo(150);
+  await p.click('#pgno'); await p.waitForTimeout(1500);
+  const thumbs = () => p.evaluate(() => ({ items: document.querySelectorAll('#pg-grid .th').length, drawn: document.querySelectorAll('#pg-grid canvas').length, cur: (document.querySelector('#pg-grid .cur') || {}).dataset?.n, blanks: document.querySelectorAll('#pg-grid .blank').length }));
+  console.log('pages tab', await p.evaluate(() => [...document.querySelectorAll('#toc-tabs button')].map((b) => b.textContent + (b.getAttribute('aria-selected') === 'true' ? '*' : ''))), JSON.stringify(await thumbs()));
+  await p.screenshot({ path: path.join(OUT, 'pdf-pages.png') });
+  const p151 = () => p.evaluate(() => Math.round(document.querySelector('#doc > .pg[data-n="151"]').offsetTop));
+  const t151 = await p151();
+  await p.click('#pg-grid .th[data-n="150"] .th-m'); await p.click('#th-add'); await p.waitForTimeout(600);
+  console.log('add blank', await p.textContent('#stat'), JSON.stringify(await thumbs()), 'page151 moved', await p151() - t151);
+  // 白紙に書く → 一覧からその白紙へ飛べる → 白紙の前にもう1枚入れると、書いた線は後ろへずれる
+  await p.click('#pg-grid .th.blank .im'); await p.waitForTimeout(500);
+  const by = await p.evaluate(() => { const el = document.querySelector('#doc > .pg[data-n="150"] .blank'); const r = el.getBoundingClientRect(); return r.top + 300; });
+  await line(250, by); await p.waitForTimeout(300);
+  const lastY = () => p.evaluate(() => { const l = [...document.querySelectorAll('#ink path')].pop(); return Math.round(l.getBoundingClientRect().top + scrollY); });
+  const ly0 = await lastY();
+  await p.click('#pgno'); await p.waitForTimeout(500);
+  await p.click('#pg-grid .th[data-n="150"]:not(.blank) .th-m'); await p.click('#th-add'); await p.waitForTimeout(600);
+  console.log('insert before', JSON.stringify(await thumbs()), 'stroke moved', await lastY() - ly0);
+  await p.click('#pg-grid .th.blank[data-i="1"] .th-m'); console.log('del shown', await p.isVisible('#th-del')); await p.click('#th-del'); await p.waitForTimeout(600);
+  console.log('del blank 1', JSON.stringify(await thumbs()), 'stroke back', await lastY() - ly0, 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path').length));
+  await p.click('#pg-grid .th.blank[data-i="1"] .th-m'); await p.click('#th-del'); await p.waitForTimeout(600);
+  console.log('del blank with ink', JSON.stringify(await thumbs()), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path').length), 'page151 back', await p151() - t151);
+  await p.click('#toc button[value=cancel]');
+  await p.click('#undo'); await p.waitForTimeout(400);
+  console.log('undo', 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path').length), 'page151', await p151() - t151);
+  await p.reload(); await p.waitForTimeout(1500);
+  console.log('reload page151', await p151() - t151);
 
   // 削除すると PDF も消える
   await p.click('#books'); await p.click('#shelf-list li:first-child .del'); await p.click('#shelf-list li:first-child .del'); await p.waitForTimeout(500);
