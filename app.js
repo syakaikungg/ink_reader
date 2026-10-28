@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v39';
+  const APP_VERSION = 'ink-reader-v40';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -920,13 +920,17 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   const pop = $('#pop'), popColors = $('#pop-colors'), popSize = $('#pop-size'), popRange = popSize.querySelector('input'), popEr = $('#pop-er'), erRange = popEr.querySelector('input');
   let popFor = null;
   const pens = (() => { try { return JSON.parse(store.get(PREF + ':pens')) || {}; } catch { return {}; } })();
-  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: colorBtns.map((b) => b.dataset.c), s: sizeBtns.map((b) => +b.dataset.s) }));
+  // 色と太さのボタンの中身と、選んでいるボタン（ci, si）を端末に覚える（開き直しても同じペンで書ける）
+  const on = (list) => list.findIndex((b) => b.getAttribute('aria-pressed') === 'true');
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: colorBtns.map((b) => b.dataset.c), s: sizeBtns.map((b) => +b.dataset.s), ci: on(colorBtns), si: on(sizeBtns) }));
   const swatch = (el, c) => { el.className = 'sw' + (/^#/.test(c) ? '' : ' ' + c); el.style.background = /^#/.test(c) ? c : ''; };
   const dotSize = (el, s) => { const w = Math.max(3, Math.min(16, s * 2)) + 'px'; el.style.width = el.style.height = w; };
   function setColorBtn(b, c) { b.dataset.c = c; swatch(b.firstElementChild, c); }
   function setSizeBtn(b, s) { b.dataset.s = String(s); dotSize(b.firstElementChild, s); }
   (pens.c || []).forEach((c, i) => colorBtns[i] && setColorBtn(colorBtns[i], c));
   (pens.s || []).forEach((s, i) => sizeBtns[i] && setSizeBtn(sizeBtns[i], s));
+  if (colorBtns[pens.ci]) press(colorBtns, colorBtns[pens.ci]);
+  if (sizeBtns[pens.si]) press(sizeBtns, sizeBtns[pens.si]);
   for (const b of sizeBtns) if (b.getAttribute('aria-pressed') === 'true') size = +b.dataset.s;
   for (const b of colorBtns) if (b.getAttribute('aria-pressed') === 'true') color = b.dataset.c;
   function closePop() { pop.hidden = true; popFor = null; }
@@ -937,7 +941,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (kind === 'c') popColors.replaceChildren(...PALETTE.map((c) => {
       const x = document.createElement('button'); x.type = 'button'; x.setAttribute('aria-pressed', String(c === btn.dataset.c));
       const s = document.createElement('span'); swatch(s, c); x.append(s);
-      x.onclick = () => { setColorBtn(btn, c); savePens(); closePop(); color = c; press(colorBtns, btn); };
+      x.onclick = () => { setColorBtn(btn, c); color = c; press(colorBtns, btn); savePens(); closePop(); };
       return x;
     }));
     if (kind === 'c') {   // 一覧にない色は、iPad の色の選択画面から選ぶ
@@ -965,13 +969,13 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target.closest('button') !== popFor) closePop(); }, true);
   colorBtns.forEach((b) => b.onclick = () => {
     const again = color === b.dataset.c && b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
-    color = b.dataset.c; press(colorBtns, b);
+    color = b.dataset.c; press(colorBtns, b); savePens();
     if (sel.length) restyle({ c: color }); else if (tool !== 'pen') toolBtns[0].click();
     if (again && popFor !== b) openPop(b, 'c'); else closePop();
   });
   sizeBtns.forEach((b) => b.onclick = () => {
     const again = b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
-    size = +b.dataset.s; press(sizeBtns, b);
+    size = +b.dataset.s; press(sizeBtns, b); savePens();
     if (sel.length) restyle({ s: size }); else if (tool !== 'pen') toolBtns[0].click();
     if (again && popFor !== b) openPop(b, 's'); else closePop();
   });
