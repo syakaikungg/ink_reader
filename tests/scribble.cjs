@@ -1,8 +1,8 @@
 // ぐちゃぐちゃ消しの判定（app.js の scribbleTargets）を、合成した線で確かめる。ブラウザは使わない
 // 使い方: node tests/scribble.cjs [比べる app.js ...]   消すべき形（横往復・縦ギザギザ・くるくる）と、消してはいけない字（m・w・M など）を数える
-// 2026-10 時点: 53/70。残りは「小さい字の上の3〜4往復」「3往復だけ」「斜めの往復」「mm・eee を字の上に書く」で、続け書きの誤爆を避けるための割り切り
+// 2026-10-28 時点: 54/72（消す範囲を、ぐちゃぐちゃの点の凸包に変えた。凸包からはみ出す字「くるくる 低め」の端の1画は残る）。残りは「小さい字の上の3〜4往復」「3往復だけ」「斜めの往復」「mm・eee を字の上に書く」で、続け書きの誤爆を避けるための割り切り
 const fs = require('fs');
-const src = (f) => { const t = fs.readFileSync(f, 'utf8'); const i = t.indexOf('  // 往復の多い線'); const j = t.indexOf('// ---------- 投げ縄', i); return t.slice(i, j); };
+const src = (f) => { const t = fs.readFileSync(f, 'utf8'); const i = t.indexOf('  // 往復の多い線'); const j = t.indexOf('// ---------- 投げ縄', i); const k = t.indexOf('  function inPoly'), e = t.indexOf('\n  }\n', k) + 4; return t.slice(i, j) + t.slice(k, e); };
 const make = (code) => { let strokes = []; const top = () => 0; const fn = new Function('strokes', 'top', 'scale', code + '; return scribbleTargets;');
   return (scr, others, scale = 1) => { strokes = others; return fn(strokes, top, scale)(scr); }; };
 const bbox = (s) => { let a=1e9,b=1e9,c=-1e9,d=-1e9; for (const [x,y] of s.pts){a=Math.min(a,x);b=Math.min(b,y);c=Math.max(c,x);d=Math.max(d,y);} s.bbox=[a,b,c,d]; return s; };
@@ -54,9 +54,15 @@ for (const [name, pts] of Object.entries(letters)) {
 }
 cases.push({ kind: '消さない', name: '二重下線（往復）を字の下に', scr: S(dense([[X, Y + H + 4], [X + 100, Y + H + 5], [X, Y + H + 9], [X + 100, Y + H + 10]])), others: word(X, Y, 100, H), want: 0 });
 cases.push({ kind: '消さない', name: 'W を字の上に', scr: S(dense([[X, Y], [X + 8, Y + H], [X + 16, Y], [X + 24, Y + H], [X + 32, Y]])), others: word(X, Y, 30, H), want: 0 });
+// ぐちゃぐちゃのすぐ外（5px）にある縦棒は消さない（前は範囲の四角＋6px まで消していた）。拡大して書いたとき（紙では 1/3）も同じ
+for (const k of [1, 3]) {
+  const v = (x, y0, y1) => S(dense([[x, y0], [x, y1]]).map(([x, y]) => [x / k, y / k]), 3.4 / k);
+  const tg = [v(130, 100, 122)], nb = v(165, 104, 120), scr = S(dense([...Array(8)].map((_, i) => [i % 2 ? 100 : 160, 103 + i * 2.5])).map(([x, y]) => [x / k, y / k]), 3.4 / k);
+  cases.push({ kind: '隣は残す', name: `5px 右の縦棒 拡大${k}`, scr, others: [...tg, nb], want: 1, scale: k, only: tg });
+}
 const files = process.argv.length > 2 ? process.argv.slice(2) : [require('path').join(__dirname, '../app.js')];
 for (const file of files) {
   const fn = make(src(file)); let good = 0; const bad = [];
-  for (const c of cases) { const r = fn(c.scr, c.others); const n = r ? r.length : 0; const pass = c.want ? n === c.want : n === 0; if (pass) good++; else bad.push(`  ✗ [${c.kind}] ${c.name}: ${n}/${c.others.length}`); }
+  for (const c of cases) { const r = fn(c.scr, c.others, c.scale); const n = r ? r.length : 0; const pass = c.only ? n === c.want && r.every((o) => c.only.includes(o)) : c.want ? n === c.want : n === 0; if (pass) good++; else bad.push(`  ✗ [${c.kind}] ${c.name}: ${n}/${c.others.length}`); }
   console.log(`${file}: ${good}/${cases.length}`); console.log(bad.join('\n'));
 }
