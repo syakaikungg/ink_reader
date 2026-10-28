@@ -744,7 +744,7 @@
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
   const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (finger && e.pointerType === 'touch');
-  let hold = null, holdT = 0;   // ペンを止めた位置と、図形に直すまでのタイマー
+  let hold = null, holdC = null, holdT = 0;   // ペンを止めた位置（紙と画面）と、図形に直すまでのタイマー
   // 丸で囲んで長押し: ペンで書いた最後の線が輪なら、その線の上でペンを止めて押さえると、線が消えて中が投げ縄で選ばれる。
   // 選び終わったら（外を押す・解除・削除）ペンに戻る
   let loopCand = null, loopT = 0, loopAt = null, loopBack = null;
@@ -1447,7 +1447,7 @@
     curTop = tops[b] - (toSto(b, y - tops[b]) - (y - tops[b]));   // たたんだ余白の下では、開いたときの位置で持つ
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
     cur.el = document.createElementNS(NS, 'path'); paint(cur.el, cur);
-    hold = null; holdT = 0;
+    hold = null; holdC = null; holdT = 0;
     mount(cur); render(cur, null, false);
     clearTimeout(loopT); loopT = 0;
     if (tool === 'pen' && loopCand) { loopAt = toPage(e); if (onLoop(...loopAt)) loopT = setTimeout(loopToLasso, 450); }
@@ -1468,15 +1468,19 @@
     if (!raf) raf = requestAnimationFrame(frame);
     // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角。マーカーは直線だけ）
     if (cur.tool === 'pen' || cur.tool === 'hl') {
-      const q = pending[pending.length - 1];
-      if (!hold || Math.hypot(q[0] - hold[0], q[1] - hold[1]) > 3) { hold = q; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
+      // 止まっているかは画面上の位置で見る（紙が少しスクロールしても止まっているとみなす）。5px までのぶれは許す
+      const q = pending[pending.length - 1], c = [e.clientX, e.clientY];
+      if (!holdC || Math.hypot(c[0] - holdC[0], c[1] - holdC[1]) > 5) { hold = q; holdC = c; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
     }
   });
   function snapShape() {
     if (!cur || cur.shape || curId === null) return;
     if (pending.length) { cur.pts.push(...pending); pending = []; }
-    const g = fitShape(cur.pts);
-    if (!g || (cur.tool === 'hl' && g.k !== 'line')) return;
+    // 止めている間のぶれは形を見るときに除く（止めた位置の近くに集まった最後の点）
+    const pts = cur.pts, r = 6 / scale, L = pts[pts.length - 1];
+    let n = pts.length; while (n > 2 && Math.hypot(pts[n - 2][0] - L[0], pts[n - 2][1] - L[1]) < r) n--;
+    const g = fitShape(n < pts.length ? pts.slice(0, n - 1).concat([L]) : pts);
+    if (!g || (cur.tool === 'hl' && g.k !== 'line')) { if (Math.hypot(L[0] - pts[0][0], L[1] - pts[0][1]) > 40) stat.textContent = '形に直せませんでした（もう少しまっすぐ、またはきれいに閉じると直ります）'; return; }
     cur.g = g; cur.pts = genPts(g); cur.shape = true; predicted = [];
     cur.live = { g0: cloneG(g), q0: hold };
     render(cur, null, false);
