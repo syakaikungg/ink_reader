@@ -360,6 +360,8 @@
   let src = store.get(PREF + ':book') || 'gh';
   const isLocal = () => src !== 'gh';
   const canSync = () => !isLocal() && !!cfg.token && online();
+  // 書き込みを GitHub に送れるか。ファイルから開いた本も、トークンがあれば <リポジトリ>/books/files/<本>/ に送る（Claude が読めるように）
+  const canPush = () => !!cfg.token && online();
 
   // ---------- GitHub ----------
   const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
@@ -381,6 +383,8 @@
   const isPdf = () => !!(book && book.pdf);
   const bookKey = () => isLocal() ? src : cfg.repo + '@' + cfg.branch + ':' + cfg.book;
   // 章の位置や最後に開いた章は本ごとに覚える（GitHub の本は前からのキーのまま）
+  // GitHub の上の本のフォルダ
+  const bookDir = () => isLocal() ? 'books/files/' + src.slice(6) : cfg.book;
   const memKey = (k) => PREF + ':' + k + (isLocal() ? ':' + src : '');
   async function loadBook() { book = await kv.get('book:' + bookKey()); return book; }
   // 変わったファイルだけ取り直す。図は一度取れば取り直さない
@@ -441,7 +445,7 @@
   // pending の段落は端末側を正とし、それ以外は GitHub 側を正としてまとめる
   let cs = null;   // 今の章の { blocks, sha, pending:Set }
   const inkKey = (id) => 'ink:' + bookKey() + ':' + id;
-  const inkPath = (id) => cfg.book + '/ink/' + id + '.json';
+  const inkPath = (id, dir = bookDir()) => dir + '/ink/' + id + '.json';
   let saveT = 0;
   function persist() {
     clearTimeout(saveT);
@@ -451,7 +455,7 @@
   }
   function touch(list) {
     if (!cs) return;
-    if (!isLocal()) for (const s of list) cs.pending.add(s.b);
+    if (!isLocal() || cfg.token) for (const s of list) cs.pending.add(s.b);
     persist(); schedulePush(); showPending();
   }
   function showPending() {
@@ -467,26 +471,28 @@
     for (const b of st.pending) if (st.blocks[b]) out[b] = st.blocks[b];
     return out;
   }
-  async function pullInk(id, st) {
-    const meta = await gh(inkPath(id));
+  async function pullInk(id, st, dir) {
+    const meta = await gh(inkPath(id, dir));
     if (!meta) return { sha: null, blocks: {} };
-    const text = meta.content ? b64.to(meta.content) : await gh(inkPath(id), { raw: true });
+    const text = meta.content ? b64.to(meta.content) : await gh(inkPath(id, dir), { raw: true });
     return { sha: meta.sha, blocks: (JSON.parse(text || '{}').blocks) || {} };
   }
   let pushing = false;
   async function pushChapter(id) {
-    if (pushing || !canSync()) { showPending(); return; }
-    const key = inkKey(id);   // 送信中に本を切り替えても、元の本に保存する
+    if (pushing || !canPush()) { showPending(); return; }
+    const key = inkKey(id), dir = bookDir(), bk = bookKey(), meta = book;   // 送信中に本を切り替えても、元の本に保存する
     const st = id === CH ? cs : await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
     if (!st || !st.pending.size) return;
     pushing = true;
+    let sent = null;
     try {
+      if (isLocal()) await upBook(dir, bk, meta);
       for (let tryNo = 0; tryNo < 2; tryNo++) {
-        const sent = new Set(st.pending);
+        sent = new Set(st.pending);
         if (id === CH) st.blocks = serialize();
         const body = JSON.stringify({ chapter: id, blocks: st.blocks }, null, 0);
         try {
-          const r = await gh(inkPath(id), { method: 'PUT', body: { message: `ink: ${cfg.book.split('/').pop()} ${id}`, branch: cfg.branch,
+          const r = await gh(inkPath(id, dir), { method: 'PUT', body: { message: `ink: ${dir.split('/').pop()} ${id}`, branch: cfg.branch,
             content: b64.from(body), ...(st.sha ? { sha: st.sha } : {}) } });
           st.sha = r.content.sha;
           for (const b of sent) if (id !== CH || sameBlock(b, st.blocks[b])) st.pending.delete(b);
@@ -494,19 +500,21 @@
         } catch (e) {
           if (e.status !== 409 && e.status !== 422) throw e;
           // 他の端末が先に保存していた: 取り直してまとめ、もう一度
-          const remote = await pullInk(id, st);
+          const remote = await pullInk(id, st, dir);
           st.sha = remote.sha;
           st.blocks = merge(st, remote.blocks);
           if (id === CH) { showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist(); }
         }
       }
       await kv.set(key, { blocks: st.blocks, sha: st.sha, pending: [...st.pending] });
+      // PDF は座標だけでは AI に分からないので、書き込みを変えたページを画像にして送る
+      if (meta && meta.pdf && id === CH && bk === bookKey()) await upPages(dir, bk, [...sent]);
       if (id === CH && !st.pending.size) stat.textContent = 'GitHubに保存しました';
     } catch (e) {
       stat.textContent = e.status === 401 || e.status === 403 ? 'GitHubに保存できません（トークンを確認してください）' : 'GitHubに送れませんでした（iPadには保存済み）';
     } finally {
       pushing = false;
-      if (id === CH && cs.pending.size && canSync()) schedulePush(8000);
+      if (id === CH && cs && cs.pending.size && canPush()) schedulePush(8000);
     }
   }
   // 送信中に書き足された段落は送信済みにしない
@@ -514,12 +522,61 @@
     const now = strokes.filter((s) => s.b === b).map((s) => s.id).sort().join();
     return now === Object.keys((sentBlock && sentBlock.strokes) || {}).sort().join();
   }
+  // ファイルから開いた本: 本の情報（md の本は本文も）を、最初に一度だけ GitHub に置く
+  async function upBook(dir, bk, meta) {
+    if (!meta || await kv.get('up:' + bk)) return;
+    const put = async (path, content) => { if (!await gh(path)) await gh(path, { method: 'PUT', body: { message: `book: ${dir.split('/').pop()}`, branch: cfg.branch, content } }); };
+    const chapters = meta.chapters.map((c) => meta.pdf ? c : { ...c, file: 'chapters/' + c.id + '.md' });
+    for (const c of meta.pdf ? [] : meta.chapters) {
+      const v = await kv.get('md:' + bk + ':' + c.id);
+      if (v) await put(dir + '/chapters/' + c.id + '.md', b64.from(v.md));
+    }
+    await put(dir + '/book.json', b64.from(JSON.stringify({ title: meta.title, from: 'file', pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}) }, null, 1)));
+    await kv.set('up:' + bk, true);
+  }
+  // PDF のページ n を、余白・白紙と書き込みごと画像にする（紙の幅 680px の 2 倍）
+  async function pageImage(n) {
+    const k = 2, pg = await pdfDoc.getPage(n), w1 = pg.getViewport({ scale: 1 }).width, pc = document.createElement('canvas');
+    pc.width = W * k; pc.height = Math.ceil(pageH(n) * k);
+    await pg.render({ canvas: pc, viewport: pg.getViewport({ scale: k * W / w1 }) }).promise;
+    const list = strokes.filter((s) => s.b === n && !s.hid), t0 = tops[n] || 0, ty = (s) => top(s) - t0;
+    let h = sheet(n) + (gaps[n] || 0);
+    for (const s of list) h = Math.max(h, s.bbox[3] + ty(s) + 20);
+    const cv = document.createElement('canvas'), g = cv.getContext('2d');
+    cv.width = W * k; cv.height = Math.ceil(h * k);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    for (const s of segs(n)) g.drawImage(pc, 0, s.c0 * k, pc.width, (s.c1 - s.c0) * k, 0, s.v * k, cv.width, (s.c1 - s.c0) * k);
+    pc.width = pc.height = 0;
+    g.scale(k, k); drawInk(g, list, ty);
+    return cv;
+  }
+  const blobB64 = (bl) => new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = ng; r.readAsDataURL(bl); });
+  // <本>/view/p<ページ>.png を作り直す。書き込みがなくなったページの画像は消す（all: 書き込みがなくても置く）
+  async function upPages(dir, bk, pages, all) {
+    const shas = (await kv.get('view:' + bk)) || {};
+    for (const n of pages) {
+      const path = dir + '/view/p' + n + '.png', msg = `ink: ${dir.split('/').pop()} p${n}`;
+      try {
+        if (!pdfDoc || bk !== bookKey() || !blocks[n]) break;
+        if (!shas[n]) { const m = await gh(path); if (m) shas[n] = m.sha; }
+        if (!all && !strokes.some((s) => s.b === n)) {
+          if (shas[n]) { await gh(path, { method: 'DELETE', body: { message: msg, branch: cfg.branch, sha: shas[n] } }); delete shas[n]; }
+          continue;
+        }
+        const cv = await pageImage(n), bl = await new Promise((r) => cv.toBlob(r, 'image/png'));
+        cv.width = cv.height = 0;
+        const r = await gh(path, { method: 'PUT', body: { message: msg, branch: cfg.branch, content: await blobB64(bl), ...(shas[n] ? { sha: shas[n] } : {}) } });
+        shas[n] = r.content.sha;
+      } catch { delete shas[n]; }
+    }
+    await kv.set('view:' + bk, shas);
+  }
   async function pushAll() {
-    if (!canSync() || !book) return;
+    if (!canPush() || !book) return;
     for (const c of book.chapters) await pushChapter(c.id);
   }
   async function refreshChapter() {   // GitHub 側の書き込みと答えを取り込む（他の端末・Claude の変更）
-    if (!canSync() || !cs) return;
+    if (!canPush() || !cs) return;
     const id = CH, st = cs;
     pullAnswers(id);
     try {
@@ -1114,9 +1171,10 @@
   const sessUrl = () => { const v = (cfg.session || '').trim(), m = v.match(/\/code\/([\w-]+)/); const id = m ? m[1] : /^[\w-]+$/.test(v) ? v : ''; return id && id !== 'new' ? 'https://claude.ai/code/' + id : ''; };
   function syncSess() {
     $('#ask-code').textContent = sessUrl() ? 'いつものセッションで聞く' : 'sakai_studyで聞く（新しいセッション）';
-    $('#ask-new').hidden = !sessUrl() || isLocal();
-    // ファイルから開いた本はリポジトリにないので、Claude アプリに渡す方だけ
-    $('#ask-code').hidden = $('.sess').hidden = isLocal();
+    // ファイルから開いた本は、トークンがなければリポジトリにないので、Claude アプリに渡す方だけ
+    const noRepo = isLocal() && !cfg.token;
+    $('#ask-new').hidden = !sessUrl() || noRepo;
+    $('#ask-code').hidden = $('.sess').hidden = noRepo;
     // PDF は画像がないと伝わらないので、画像を渡せる「共有」を主にする
     $('#ask-open').classList.toggle('primary', isLocal() && !isPdf());
     $('#ask-share').classList.toggle('primary', isPdf());
@@ -1125,23 +1183,31 @@
   function codeText() {
     const ch = book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
-    const hasInk = strokes.some((s) => picked.includes(s.b));
-    return [
-      `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照。先に git pull して最新の書き込みを取り込んでください）。`,
-      `本: ${cfg.book}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${cfg.book}/${ch ? ch.file : ''}`,
-      `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${cfg.book} ${CH} ${picked.join(' ')}）` : ''),
+    const hasInk = strokes.some((s) => picked.includes(s.b)), dir = bookDir();
+    const head = `Ink Reader からの質問です（CLAUDE.md の「Ink Reader からの質問」を参照。先に git pull して最新の書き込みを取り込んでください）。`;
+    const tail = `答えは ${dir}/answers/${CH}.md に追記して push してください（質問ID: ${askId}${isPdf() ? '。b= にはページ番号を入れる' : ''}）。`;
+    if (isPdf()) return [head,
+      `本: ${dir}（PDF「${book.title || ''}」） ページ: ${picked.join(', ')}`,
+      `ページの画像（手書きの書き込み入り）: ${picked.map((n) => dir + '/view/p' + n + '.png').join(' ')}`,
+      `書き込みの座標: ${inkPath(CH)}（ページ番号ごと。座標は幅 680px の紙の上で、ページ上端からの値×10）`,
+      '', `質問: ${q || 'このページを分かりやすく説明してください'}`, '', tail,
+    ].join('\n');
+    return [head,
+      `本: ${dir}（${book.title || ''}） 章: ${CH}「${ch ? ch.label : ''}」 本文: ${dir}/${isLocal() ? 'chapters/' + CH + '.md' : ch ? ch.file : ''}`,
+      `段落番号: ${picked.join(', ')}` + (hasInk ? `（手書きあり: python scripts/ink_view.py ${dir} ${CH} ${picked.join(' ')}）` : ''),
       '', '該当箇所:', '"""', passage(), '"""', '',
       `質問: ${q || 'この箇所を分かりやすく説明してください'}`,
-      '', `答えは ${cfg.book}/answers/${CH}.md に追記して push してください（質問ID: ${askId}）。`,
+      '', tail,
     ].join('\n');
   }
   async function askCode(fresh) {
     const t = codeText(), url = fresh ? '' : sessUrl();
-    if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
     addAsk({ id: askId, b: picked.slice(), q: $('#ask-q').value.trim() });
     const ok = await copy(t);
+    if (cs && cs.pending.size) pushChapter(CH);   // 手書きを先に GitHub へ
+    if (isPdf() && canPush()) upPages(bookDir(), bookKey(), picked.slice(), true);   // 書き込みのないページも、聞いたページは画像にして置く
     $('#ask-msg').textContent = (url ? (ok ? '質問文をコピーしました。セッションに貼り付けて送ってください。' : 'コピーできませんでした。') : (ok ? '質問文をコピーしました。' : '') + '開いたセッションのURLを下に入れておくと、次から同じセッションで聞けます。')
-      + (cs && cs.pending.size && !canSync() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
+      + (cs && cs.pending.size && !canPush() ? '（未送信の書き込みはまだ GitHub にありません）' : '');
   }
   $('#ask-code').onclick = () => askCode(false);
   $('#ask-new').onclick = () => askCode(true);
@@ -1187,7 +1253,7 @@
     showMarks();
   }
   function addAsk(q) {
-    if (!CH || isLocal() || asks.some((x) => x.id === q.id)) return;
+    if (!CH || (isLocal() && !cfg.token) || asks.some((x) => x.id === q.id)) return;
     asks.push(q); kv.set(askKey(CH), asks).catch(() => {});
     showMarks();
   }
@@ -1234,9 +1300,9 @@
   qs.addEventListener('pointerup', (e) => { const m = e.target.closest('.qm'); if (m && m === qDown) toggleAns(+m.dataset.b); qDown = null; });
   qs.addEventListener('click', (e) => { const m = e.target.closest('.qm'); if (m && e.detail === 0) toggleAns(+m.dataset.b); });   // キーボード
   async function pullAnswers(id) {
-    if (!canSync()) return;
+    if (!canPush()) return;
     try {
-      const md = (await gh(cfg.book + '/answers/' + id + '.md', { raw: true })) || '';
+      const md = (await gh(bookDir() + '/answers/' + id + '.md', { raw: true })) || '';
       if (id !== CH || md === ansMd) return;
       kv.set(ansKey(id), md).catch(() => {});
       setAnswers(md);
@@ -1787,6 +1853,8 @@
     scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
     if (document.fonts) document.fonts.ready.then(layout);
+    // ファイルから開いた本で、まだ GitHub に送っていない書き込み（トークンを入れる前に書いたもの）を送る
+    if (isLocal() && cfg.token && !cs.sha && !cs.pending.size && Object.keys(cs.blocks).length) { for (const b in cs.blocks) cs.pending.add(+b); persist(); schedulePush(1500); }
     showPending();
     lastPull = Date.now(); refreshChapter();
   }

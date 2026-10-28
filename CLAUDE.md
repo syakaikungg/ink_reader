@@ -8,6 +8,7 @@ iPad と Apple Pencil で、md（数式つき）の本に手書きで書き込�
 ## 仕組み
 
 - 本は「本」ボタンから iPad の「ファイル」の md を開くこともできる（GitHub なし。端末の IndexedDB だけに保存、`app.js` の `openFiles` / `switchBook`）。
+- ファイルから開いた本も、トークンを入れていれば書き込みを `<リポジトリ>/books/files/<本の id>/` に送り、Claude が読めるようにする（`book.json`、md の本は `chapters/<章>.md`、`ink/<章>.json`、PDF は書き込みのあるページと聞いたページの画像 `view/p<ページ>.png`。PDF 本体は送らない）。答えも `answers/<章>.md` から読む（`app.js` の `bookDir` / `upBook` / `upPages`）。確認は `node tests/files-sync.cjs`。
 - GitHub の本と書き込みは別の非公開リポジトリ `syakaikungg/sakai_study` にある（`books/nishimori/`：`book.json`、`chapters/<章>.md`、`ink/<章>.json`）。アプリは iPad で入力された fine-grained PAT で GitHub API を直接読み書きする。
 - 端末側は IndexedDB に本・図・書き込みを保存し、未送信の段落を貯めてオンライン時に送る。409/422 のときは取り込んでからまとめ直す（`app.js` の `pushChapter` / `merge`）。
 - 書き込みは「`#doc` の何番目の子要素（段落）か」と、その段落の上端からの座標×10で保存する。`render.js` の段落の分け方を変えると、既存の書き込みがずれる。出力を変えたら `renderMarkdown.version` を上げる（端末内の HTML キャッシュを作り直すため）。
