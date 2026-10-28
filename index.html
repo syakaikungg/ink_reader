@@ -142,6 +142,10 @@ html, body, body * { touch-action: manipulation; }
 #pop-colors button { min-width: 0; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
 #pop-colors button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
 #pop-colors .sw { width: 24px; height: 24px; }
+#pop-colors .more { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; position: relative; cursor: pointer;
+  background: conic-gradient(#e33, #e93, #ed3, #3c5, #3cd, #36e, #93e, #e3a, #e33); }
+#pop-colors .more input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+#ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 #pop-size { display: flex; align-items: center; gap: 10px; }
 #pop-size input { width: 200px; }
 #pop-size .dot { background: var(--fg); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
@@ -307,7 +311,7 @@ body.pdf #doc > .src, body.pdf #foot, body.pdf #toc-q { display: none; }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります。選んでいる色・太さをもう一度押すと、色や太さを変えられます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
