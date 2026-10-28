@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v41';
+  const APP_VERSION = 'ink-reader-v42';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2365,7 +2365,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   $('#toc-q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(() => showHits($('#toc-q').value), 200); };
   $('#toc-q').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchT); showHits($('#toc-q').value); $('#toc-q').blur(); } };
 
-  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる（「指で書く」がオフのとき）
+  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる。投げ縄の選択も指のタップで外れる（「指で書く」がオフのとき）
   let lp = null;
   const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
   page.addEventListener('touchstart', (e) => {
@@ -2380,6 +2380,8 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (!lp) return;
     const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale;
     lpStop();
+    // 投げ縄で選んでいるときは、指で軽く触ると選択を外す
+    if (sel.length || picked.length) { clearSel(); return; }
     // 印は紙の左余白、段落の上端あたりにある。指で押しやすいよう、余白全体と上端から 36px までを当たりにする
     const b = blockAt(y);
     if (x < 48 && blocks[b] && blocks[b].classList.contains('bm') && y - tops[b] < 36) toggleBm(b);
