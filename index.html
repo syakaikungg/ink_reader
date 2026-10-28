@@ -93,6 +93,7 @@ select {
   border: 1px solid var(--rule); border-radius: 8px; height: 38px; padding: 0 8px; max-width: 15em;
 }
 #foot { display: flex; justify-content: space-between; gap: 12px; max-width: 680px; margin: 20px auto 0; }
+#cfg-ver { font-size: 12px; font-weight: normal; color: var(--muted); margin-left: 6px; }
 #foot button { border-color: var(--rule); background: var(--paper); }
 #doc.loading { opacity: .35; }
 #clear.arm { color: var(--ink-r); border-color: var(--ink-r); }
@@ -402,7 +403,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 
 <dialog id="cfg">
   <form method="dialog" id="cfg-form">
-    <h2>設定</h2>
+    <h2>設定 <small id="cfg-ver"></small></h2>
     <section id="drv">
       <h3>Google ドライブ</h3>
       <p>ファイルから開いた本の書き込みを、ドライブの「Ink Reader」フォルダに置きます。Claude のドライブ連携で、本と手書きを読んで答えられるようになります。</p>
