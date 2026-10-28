@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v44';
+  const APP_VERSION = 'ink-reader-v45';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -871,7 +871,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 
   // 2本指のピンチ。動かしている間は #sizer を transform で伸ばすだけにして（レイアウトし直さない）、指を離したときに拡大率を決める
   let pinch = null, pinchRaf = 0;
-  const fingers = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus');
+  const fingers = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus' && !palms.has(t.identifier));
   const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2, d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1 });
   const pinchK = () => Math.max(.5, Math.min(3, scale * pinch.m.d / pinch.m0.d)) / scale;
   function pinchDraw() {
@@ -1017,7 +1017,21 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   const stylusGuard = (e) => {
     if (penDown) { e.preventDefault(); return; }
     for (const t of e.changedTouches) if (t.touchType === 'stylus' && page.contains(e.target)) { e.preventDefault(); return; }
+    if (e.type === 'touchmove' && [...e.touches].some((t) => palms.has(t.identifier))) e.preventDefault();
   };
+  // 手のひら・小指: ペンを使っている間と、ペンを離してから 1 秒の間に触れた指は、離すまでスクロール・ピンチ・タップに使わない
+  const palms = new Set();
+  let penAt = -1e9;
+  const palmWatch = (e) => {
+    const now = performance.now();
+    for (const t of e.changedTouches) {
+      if (t.touchType === 'stylus') penAt = now;
+      else if (e.type === 'touchstart') { if (penDown || now - penAt < 1000) palms.add(t.identifier); }
+      else if (e.type !== 'touchmove') palms.delete(t.identifier);
+    }
+  };
+  for (const ty of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) document.addEventListener(ty, palmWatch, { capture: true, passive: true });
+  for (const ty of ['pointerdown', 'pointermove', 'pointerup']) document.addEventListener(ty, (e) => { if (e.pointerType === 'pen') penAt = performance.now(); }, { capture: true, passive: true });
   document.addEventListener('touchstart', stylusGuard, { passive: false });
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
@@ -2400,7 +2414,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
   page.addEventListener('touchstart', (e) => {
     lpStop();
     const t = e.touches[0];
-    if (finger || e.touches.length !== 1 || t.touchType === 'stylus' || e.target.closest('.sph')) return;
+    if (finger || e.touches.length !== 1 || t.touchType === 'stylus' || palms.has(t.identifier) || e.target.closest('.sph')) return;
     const x = t.clientX, y = t.clientY;
     lp = { x, y, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
   }, { passive: true });
