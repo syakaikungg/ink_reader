@@ -967,35 +967,75 @@
   function dropPage(n) {
     const p = drawn.get(n);
     if (!p) return;
-    p.cv.width = p.cv.height = 0; p.cv.remove(); drawn.delete(n);   // 幅を 0 にすると Safari がすぐメモリを返す
+    p.cv.width = p.cv.height = 0; p.cv.remove(); drawn.delete(n); dropHd(n);   // 幅を 0 にすると Safari がすぐメモリを返す
     if (pdfDoc) pdfDoc.getPage(n).then((pg) => pg.cleanup()).catch(() => {});
   }
   function stopPdf() { if (pdfIO) pdfIO.disconnect(); pdfIO = null; for (const n of [...drawn.keys()]) dropPage(n); near.clear(); }
-  function closePdf() { stopPdf(); if (pdfDoc) pdfDoc.destroy(); pdfDoc = pdfOpening = outline = null; }
+  function closePdf() { stopPdf(); if (pdfDoc) pdfDoc.destroy(); pdfDoc = pdfOpening = outline = ptext = null; }
   // 拡大率に合わせた解像度で描く。拡大しすぎたときは、1ページの画素数を上限で止める（Safari の canvas の上限とメモリのため）
   const MAXPX = 6e6;
   const resOf = (n) => Math.min(scale * (devicePixelRatio || 1), Math.sqrt(MAXPX / (W * pageH(n))));
   const curPage = () => Math.max(1, blockAt((innerHeight / 2 - page.getBoundingClientRect().top) / scale));
+  // 1ページずつ、画面の真ん中に近いページから描く。書いている間とピンチの間は描かない（ペンの描画を待たせない）
   // 1ページずつ、画面の真ん中に近いページから描く。書いている間とピンチの間は描かない（ペンの描画を待たせない）
   async function pdfPump() {
     if (pdfBusy || !pdfDoc || penDown || pinch) return;
     const c = curPage();
     const todo = [...near].filter((n) => { const p = drawn.get(n); return !p || Math.abs(p.k / resOf(n) - 1) > .05; })
       .sort((x, y) => Math.abs(x - c) - Math.abs(y - c));
-    if (!todo.length) return;
-    const n = todo[0], pd = pdfDoc, k = resOf(n), cv = document.createElement('canvas');
+    if (!todo.length) return pdfHd();
+    const n = todo[0], k = resOf(n);
+    const cv = await drawPdf(n, k);
+    if (!cv) return pdfPump();
+    const old = drawn.get(n);
+    if (old) { old.cv.replaceWith(cv); old.cv.width = old.cv.height = 0; } else blocks[n].prepend(cv);
+    drawn.set(n, { cv, k });
+    pdfPump();
+  }
+  // ページ n の範囲 r（ページ内の紙の px。省略するとページ全体）を、紙 1px あたり k 画素で canvas に描く。
+  // 描いている間に本やページが変わったら null
+  async function drawPdf(n, k, r) {
+    const pd = pdfDoc, [x0, y0, x1, y1] = r || [0, 0, W, pageH(n)], cv = document.createElement('canvas');
     pdfBusy = true;
     try {
-      const pg = await pd.getPage(n), w1 = pg.getViewport({ scale: 1 }).width, vp = pg.getViewport({ scale: k * W / w1 });
-      cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const pg = await pd.getPage(n), w1 = pg.getViewport({ scale: 1 }).width;
+      const vp = pg.getViewport({ scale: k * W / w1, offsetX: -x0 * k, offsetY: -y0 * k });
+      cv.width = Math.ceil((x1 - x0) * k); cv.height = Math.ceil((y1 - y0) * k);
       await pg.render({ canvas: cv, viewport: vp }).promise;
     } catch { cv.width = cv.height = 0; }   // 描けないページは白いままにする（何度も描き直さない）
     pdfBusy = false;
-    if (pd !== pdfDoc || !near.has(n) || !blocks[n]) { cv.width = cv.height = 0; return pdfPump(); }
-    const old = drawn.get(n);
-    if (old) { old.cv.replaceWith(cv); old.cv.width = old.cv.height = 0; } else blocks[n].append(cv);
-    drawn.set(n, { cv, k });
-    pdfPump();
+    if (pd !== pdfDoc || !near.has(n) || !blocks[n]) { cv.width = cv.height = 0; return null; }
+    return cv;
+  }
+  // 拡大してページ全体の絵では細かさが足りないときは、画面に見えている部分だけを細かく描いて上に重ねる
+  // （hd: ページ -> { cv, k, r }）。少し広めに描いておき、少しのスクロールでは描き直さない
+  const hd = new Map(), HDPX = 8e6;   // 重ねる絵の画素数の合計の上限
+  function dropHd(n) { const h = hd.get(n); if (!h) return; h.cv.width = h.cv.height = 0; h.cv.remove(); hd.delete(n); }
+  async function pdfHd() {
+    const K0 = scale * (devicePixelRatio || 1), pr = page.getBoundingClientRect();
+    const v = [-pr.left / scale, -pr.top / scale, (innerWidth - pr.left) / scale, (innerHeight - pr.top) / scale];
+    const want = new Map();
+    for (const n of near) {
+      const t = tops[n], h = pageH(n), p = drawn.get(n);
+      if (!p || p.k >= K0 * .95 || t >= v[3] || t + h <= v[1]) continue;
+      const a = [Math.max(0, v[0]), Math.max(0, v[1] - t), Math.min(W, v[2]), Math.min(h, v[3] - t)];
+      if (a[2] > a[0] && a[3] > a[1]) want.set(n, a);
+    }
+    for (const n of [...hd.keys()]) if (!want.has(n)) dropHd(n);
+    for (const [n, a] of want) {
+      const w = a[2] - a[0], h = a[3] - a[1], cap = HDPX / want.size;
+      const k = Math.min(K0, Math.sqrt(cap / (w * h))), e = Math.max(0, Math.min(.25, (Math.sqrt(cap / (w * h * k * k)) - 1) / 2));
+      const old = hd.get(n);
+      if (old && Math.abs(old.k / k - 1) < .05 && old.r[0] <= a[0] + .5 && old.r[1] <= a[1] + .5 && old.r[2] >= a[2] - .5 && old.r[3] >= a[3] - .5) continue;
+      const r = [Math.max(0, a[0] - w * e), Math.max(0, a[1] - h * e), Math.min(W, a[2] + w * e), Math.min(pageH(n), a[3] + h * e)];
+      const cv = await drawPdf(n, k, r);
+      if (!cv) return pdfPump();
+      dropHd(n);
+      cv.className = 'hd';
+      cv.style.cssText = `left:${r[0]}px;top:${r[1]}px;width:${r[2] - r[0]}px;height:${r[3] - r[1]}px`;
+      blocks[n].append(cv); hd.set(n, { cv, k, r });
+      return pdfPump();
+    }
   }
   // 端の「12 / 300」。数字を押すとページ番号を入れて飛べる
   const pgno = $('#pgno'), pgIn = $('#pg-in');
@@ -1006,13 +1046,60 @@
     $('#pg-n').textContent = blocks.length - 1;
     if (document.activeElement !== pgIn) pgIn.value = curPage();
   }
-  addEventListener('scroll', () => { if (isPdf() && !pgRaf) pgRaf = requestAnimationFrame(() => { pgRaf = 0; showPgno(); }); }, { passive: true });
+  let hdT = 0;
+  const onScroll = () => {
+    if (!isPdf()) return;
+    if (!pgRaf) pgRaf = requestAnimationFrame(() => { pgRaf = 0; showPgno(); });
+    clearTimeout(hdT); hdT = setTimeout(pdfPump, 150);   // 拡大しているときは、止まったところを細かく描き直す
+  };
+  addEventListener('scroll', onScroll, { passive: true });
+  wrap.addEventListener('scroll', onScroll, { passive: true });
   pgIn.onfocus = () => pgIn.select();
   pgIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); pgIn.blur(); } };
   pgIn.onblur = () => {
     const n = Math.round(+pgIn.value.replace(/[０-９]/g, (d) => d.charCodeAt(0) - 0xff10));
     if (n >= 1 && n < blocks.length && n !== curPage()) goTo(CH, n); else showPgno();
   };
+  // PDF の本文（検索用）。ページごとに文字と、文字のかたまりの位置（ページ内の紙の px）を一度だけ取り出し、端末に覚えておく。
+  // [{ t: 本文, r: [[t の中の位置, x, y, 幅, 高さ], …] }]。スキャンした PDF は文字がないので空になる
+  let ptext = null, ptextCb = null;   // ptextCb: 読み込みの進み具合を出す先（最後に検索したもの）
+  function pdfTexts(progress) {
+    if (progress) ptextCb = progress;
+    return ptext ||= (async () => {
+      const pd = pdfDoc, key = 'ptext:' + src, saved = await kv.get(key).catch(() => null);
+      if (saved) return saved;
+      const out = [];
+      for (let n = 1; n <= pd.numPages; n++) {
+        const pg = await pd.getPage(n), vp = pg.getViewport({ scale: W / pg.getViewport({ scale: 1 }).width });
+        let t = ''; const r = [];
+        for (const it of (await pg.getTextContent()).items) {
+          const str = (it.str || '').replace(/\s+/g, ' ');
+          if (str) {
+            const m = pdfjs.Util.transform(vp.transform, it.transform), h = Math.hypot(m[2], m[3]);
+            r.push([t.length, Math.round(m[4]), Math.round(m[5] - h), Math.round(it.width * vp.scale), Math.round(h)]);
+            t += str;
+          }
+          if (it.hasEOL && !t.endsWith(' ')) t += ' ';
+        }
+        out.push({ t, r });
+        pg.cleanup();
+        if (ptextCb && n % 10 === 0) ptextCb(n, pd.numPages);
+      }
+      kv.set(key, out).catch(() => {});
+      return out;
+    })().catch(() => { ptext = null; return null; });
+  }
+  // 見つかった文字（t の at から len 文字）のおおよその位置: [x, y, 幅, 高さ]
+  function pdfHitBox({ t, r }, at, len) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    r.forEach(([i, x, y, w, h], j) => {
+      const end = j + 1 < r.length ? r[j + 1][0] : t.length, n = Math.max(1, end - i);
+      if (end <= at || i >= at + len) return;
+      const f0 = Math.max(0, at - i) / n, f1 = Math.min(n, at + len - i) / n;   // かたまりの中は、文字数の割合で位置を決める
+      a = Math.min(a, x + w * f0); c = Math.max(c, x + w * f1); b = Math.min(b, y); d = Math.max(d, y + h);
+    });
+    return a < c ? [a, b, c - a, d - b] : null;
+  }
   // PDF のしおり（目次）。目次を開いたときに一度だけ読む: [{ t: 題, n: ページ, d: 深さ }]
   async function pdfOutline() {
     if (outline || !pdfDoc) return outline || [];
@@ -1113,12 +1200,24 @@
     blocks[b].classList.toggle('bm', i < 0); showBm();
     stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
   }
-  async function goTo(c, b, flash) {
+  // box: PDF の検索で見つかった文字の位置（ページ内の紙の px）。そこが画面の上の方に来るようにして、一瞬だけ色を付ける
+  async function goTo(c, b, flash, box) {
     toc.close();
     if (c !== CH) await openChapter(c, false);
     if (c !== CH) return;
     if (!b || !blocks[b]) { scrollTo(0, 0); return; }
-    scrollBy(0, blocks[b].getBoundingClientRect().top - $('#bar').getBoundingClientRect().bottom - 12);
+    const barB = $('#bar').getBoundingClientRect().bottom;
+    if (box) {
+      const r = blocks[b].getBoundingClientRect();
+      scrollBy(0, r.top + box[1] * scale - barB - (innerHeight - barB) * .3);
+      const x = r.left + box[0] * scale;
+      if (x < 0 || x + box[2] * scale > innerWidth) wrap.scrollLeft += x - innerWidth * .2;
+      const m = document.createElement('div'); m.className = 'hitbox';
+      m.style.cssText = `left:${box[0] - 3}px;top:${box[1] - 2}px;width:${box[2] + 6}px;height:${box[3] + 4}px`;
+      blocks[b].append(m); setTimeout(() => m.remove(), 2000);
+      return;
+    }
+    scrollBy(0, blocks[b].getBoundingClientRect().top - barB - 12);
     if (flash) { const el = blocks[b]; el.classList.remove('hit'); void el.offsetWidth; el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 1900); }
   }
   function tocItem(text, cls, go, at) {
@@ -1151,7 +1250,8 @@
   };
   // 本文の検索。章ごとの段落の文字（数式は TeX）を一度だけ作って覚えておく。段落の番号は #doc の子要素の番号（先頭は出典の行）
   const searchText = new Map();   // '<本>:<章>' -> { html, texts }
-  async function chapterTexts(id) {
+  async function chapterTexts(id, progress) {
+    if (isPdf()) { const p = await pdfTexts(progress); return p && p.map((x) => x.t); }
     const html = await chapterHtml(id);
     if (html == null) return null;
     const k = bookKey() + ':' + id, hit = searchText.get(k);
@@ -1162,6 +1262,7 @@
     return texts;
   }
   let searchSeq = 0, searchT = 0;
+  const note = (t) => { const li = document.createElement('li'); li.className = 'none'; li.textContent = t; return li; };
   async function showHits(q) {
     const my = ++searchSeq;
     q = q.trim();
@@ -1169,8 +1270,9 @@
     if (!q) return;
     const ql = q.toLowerCase(), hits = [];
     for (const c of book.chapters) {
-      const texts = await chapterTexts(c.id);
+      const texts = await chapterTexts(c.id, (n, all) => { if (my === searchSeq) $('#toc-hits').replaceChildren(note(`本文を読み込み中 ${n}/${all}ページ（初めての検索だけ）`)); });
       if (my !== searchSeq) return;
+      if (isPdf() && texts && !texts.some((t) => t.trim())) { $('#toc-hits').replaceChildren(note('この PDF には文字の情報がないので、検索できません（スキャンした PDF など）')); return; }
       (texts || []).forEach((t, i) => {
         const at = t.toLowerCase().indexOf(ql);
         if (at >= 0 && hits.length < 200) hits.push({ c, b: i + 1, t, at });
@@ -1180,12 +1282,13 @@
       const s = Math.max(0, h.at - 18), frag = document.createElement('span'), m = document.createElement('mark');
       m.textContent = h.t.slice(h.at, h.at + q.length);
       frag.append((s ? '…' : '') + h.t.slice(s, h.at), m, h.t.slice(h.at + q.length, h.at + q.length + 60));
-      const li = tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
+      const li = isPdf() ? tocItem(frag, '', async () => goTo(CH, h.b, true, pdfHitBox((await ptext)[h.b - 1], h.at, q.length)), h.b + 'ページ')
+        : tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
       li.querySelector('.bm-at').className = 'at';
       return li;
     });
-    if (!rows.length) { const li = document.createElement('li'); li.className = 'none'; li.textContent = '見つかりませんでした'; rows.push(li); }
-    else if (hits.length >= 200) { const li = document.createElement('li'); li.className = 'none'; li.textContent = '200件まで表示しています'; rows.push(li); }
+    if (!rows.length) rows.push(note('見つかりませんでした'));
+    else if (hits.length >= 200) rows.push(note('200件まで表示しています'));
     $('#toc-hits').replaceChildren(...rows);
   }
   $('#toc-q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(() => showHits($('#toc-q').value), 200); };
@@ -1327,7 +1430,7 @@
           if (!d.classList.contains('arm')) { d.classList.add('arm'); d.textContent = 'もう一度押すと削除'; return; }
           const meta = await kv.get('book:' + r.id);
           for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + r.id + ':' + c.id);
-          await kv.del('book:' + r.id); await kv.del('pdf:' + r.id);
+          await kv.del('book:' + r.id); await kv.del('pdf:' + r.id); await kv.del('ptext:' + r.id);
           await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== r.id));
           if (r.id === src) { CH = null; cs = null; await switchBook('gh'); }
           showShelf();
