@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v37';
+  const APP_VERSION = 'ink-reader-v38';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -95,22 +95,26 @@
     while (k > 0 && Math.hypot(pts[k][0] - L[0], pts[k][1] - L[1]) < r) k--;
     return k >= n - 2 ? pts : pts.slice(0, k + 1).concat([L]);
   }
-  // 前後2点ずつとの平均でならす。iPad のペンの位置は画面の 1px 刻みなので、拡大して書くと点が階段状になり、線の太さが波打つ
-  function smooth(pts) {
+  // 前後 r の長さ（線の太さに合わせる）の点の平均でならす。iPad のペンの位置は画面の 1px 刻みで、手のぶれも画面の上では同じ大きさなので、
+  // 拡大して書くと線の太さに比べてぶれが目立ち、太さが波打つ。太さに合わせた長さでならすと、拡大率によらず同じ仕上がりになる
+  function smooth(pts, r) {
     const n = pts.length;
     if (n < 3) return pts;
+    const c = [0];
+    for (let i = 1; i < n; i++) c.push(c[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     return pts.map((q, i) => {
-      const h = Math.min(2, i, n - 1 - i);
-      if (!h) return q;
-      let x = 0, y = 0;
-      for (let j = i - h; j <= i + h; j++) { x += pts[j][0]; y += pts[j][1]; }
-      return [x / (2 * h + 1), y / (2 * h + 1), q[2]];
+      const h = Math.min(r, c[i], c[n - 1] - c[i]);   // 両端は動かさない
+      if (h <= 0) return q;
+      let x = 0, y = 0, k = 0;
+      for (let j = i; j >= 0 && c[j] >= c[i] - h; j--) { x += pts[j][0]; y += pts[j][1]; k++; }
+      for (let j = i + 1; j < n && c[j] <= c[i] + h; j++) { x += pts[j][0]; y += pts[j][1]; k++; }
+      return [x / k, y / k, q[2]];
     });
   }
   function render(s, pts, last) {
     const o = opts(s, last);
     const list = pts || s.pts;   // 図形に直した線は角を丸めないよう、ならさない
-    s.el.setAttribute('d', pathD(getStroke(trimTail(s.g ? list : smooth(list), Math.min(o.size, 3)), o)));
+    s.el.setAttribute('d', pathD(getStroke(trimTail(s.g ? list : smooth(list, Math.min(o.size * .75, 3)), Math.min(o.size, 3)), o)));
   }
   function bbox(s) {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
