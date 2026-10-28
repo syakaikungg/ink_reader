@@ -105,11 +105,12 @@
   // 今の章の書き込みを段落ごとの形にする（GitHub の ink/<章>.json と同じ形）
   function serialize() {
     const out = {};
-    for (const s of strokes) {
+    for (const s of strokes.concat(Object.keys(gaps).map((b) => ({ b: +b })))) {
       // PDF は b がページ番号。ページの大きさ（pt）も残し、座標（幅 680 の紙の px）を PDF の座標に直せるようにする
       const blk = out[s.b] ||= isPdf() ? { b: s.b, pt: book.sizes[s.b - 1], strokes: {} }
         : { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
-      blk.strokes[s.id] = ser(s);
+      if (s.pts) blk.strokes[s.id] = ser(s);
+      if (gaps[s.b]) blk.gap = gaps[s.b];
     }
     return out;
   }
@@ -117,7 +118,46 @@
     clearSel();
     for (const s of strokes) s.el.remove();
     strokes = [];
-    for (const b in data) for (const id in data[b].strokes) { const s = de(id, +b, data[b].strokes[id]); mount(s); strokes.push(s); }
+    for (const b of Object.keys(gaps)) setGap(+b, 0);
+    for (const b in data) { if (data[b].gap) setGap(+b, data[b].gap); for (const id in data[b].strokes || {}) { const s = de(id, +b, data[b].strokes[id]); mount(s); strokes.push(s); } }
+  }
+
+  // ---------- 余白・白紙ページ ----------
+  // 段落（PDF はページ）の下に高さを足して、書き込む場所を作る。新しい段落は作らないので、段落番号もページ番号もずれない。
+  // 余白に書いた線はその段落に、段落の上端からの座標で結びつく。足した高さは書き込みの JSON の段落ごとの gap（紙の px）に入れ、元の md・PDF は変えない。
+  // md は段落の下の余白、PDF は直前のページと同じ大きさの白紙（ページの間と同じ隙間を空けて並べる）
+  let gaps = {};   // 段落番号 -> 足した高さ
+  const GAP_MD = 320, PAGE_GAP = 14;
+  const gapUnit = (b) => isPdf() ? pageH(b) + PAGE_GAP : GAP_MD;
+  function setGap(b, px) {
+    const el = blocks[b];
+    if (px) gaps[b] = px; else delete gaps[b];
+    if (!el) return;
+    if (!isPdf()) { el.style.paddingBottom = px ? px + 'px' : ''; return; }
+    const ph = pageH(b), n = Math.round(px / (ph + PAGE_GAP));
+    el.style.height = ph + px + 'px';
+    for (const x of el.querySelectorAll('.blank')) x.remove();
+    for (let i = 1; i <= n; i++) {
+      const d = document.createElement('div'); d.className = 'blank';
+      d.style.cssText = `top:${i * (ph + PAGE_GAP)}px;height:${ph}px`;
+      el.append(d);
+    }
+  }
+  const gapTop = (b) => blocks[b].offsetHeight - (gaps[b] || 0);   // 足した高さの始まり（段落の上端から）
+  function addGap(b) {
+    const from = gaps[b] || 0;
+    setGap(b, from + gapUnit(b));   // 先に変えてから記録する（記録したときに保存される）
+    push({ type: 'gap', b, from, to: from + gapUnit(b), list: [] });
+  }
+  // 一番下の余白（白紙1ページ分）を消す。そこに書いた線も一緒に消す（戻すで戻る）
+  function removeGap(b) {
+    const from = gaps[b] || 0;
+    if (!from) return;
+    const to = Math.max(0, from - gapUnit(b)), edge = gapTop(b) + to;
+    const list = strokes.filter((s) => s.b === b && (s.bbox[1] + s.bbox[3]) / 2 > edge);
+    removeAll(list);
+    setGap(b, to);
+    push({ type: 'gap', b, from, to, list });
   }
 
   // ---------- 設定 ----------
@@ -311,13 +351,14 @@
 
   // ---------- history ----------
   // op: {type:'add'|'erase', list} か {type:'replace', from, to}（投げ縄の移動・色変更）
-  const opList = (op) => op.list || op.from.concat(op.to);
+  const opList = (op) => op.type === 'gap' ? op.list.concat({ b: op.b }) : op.list || op.from.concat(op.to);
   function push(op) { undoStack.push(op); redoStack.length = 0; syncHist(); touch(opList(op)); }
   function addAll(list) { for (const s of list) { mount(s); strokes.push(s); } }
   function removeAll(list) { const set = new Set(list); strokes = strokes.filter((s) => !set.has(s)); for (const s of list) s.el.remove(); }
   function apply(op, inverse) {
     clearSel();
     if (op.type === 'replace') { removeAll(inverse ? op.to : op.from); addAll(inverse ? op.from : op.to); }
+    else if (op.type === 'gap') { setGap(op.b, inverse ? op.from : op.to); if (op.list.length) inverse ? addAll(op.list) : removeAll(op.list); }
     else ((op.type === 'add') !== inverse) ? addAll(op.list) : removeAll(op.list);
     touch(opList(op));
   }
@@ -538,6 +579,12 @@
     selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
     $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
     $('#sel-del').hidden = !sel.length;
+    // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
+    const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
+    $('#sel-gap').textContent = isPdf() ? '後ろに白紙' : '下に余白';
+    $('#sel-gap').hidden = sel.length > 0 || !last;
+    $('#sel-ungap').textContent = isPdf() ? '白紙を消す' : '余白を消す';
+    $('#sel-ungap').hidden = !last || !gaps[last] || !box || box[3] < tops[last] + gapTop(last);
   }
   function clearSel() { sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); }
   function finishLasso() {
@@ -582,6 +629,8 @@
   }
   $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
   $('#sel-x').onclick = clearSel;
+  $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = isPdf() ? `${b}ページの後ろに白紙を入れました` : '余白を入れました'; };
+  $('#sel-ungap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); removeGap(b); stat.textContent = isPdf() ? '白紙を消しました' : '余白を消しました'; };
   function lassoDown(e) {
     const [x, y] = toPage(e);
     if (sel.length) {
@@ -675,7 +724,7 @@
     const g = cv.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
     g.scale(k, k); g.translate(-a, -b);
-    for (const n of picked) { const p = drawn.get(n); if (p && p.cv.width) g.drawImage(p.cv, 0, tops[n], W, blocks[n].offsetHeight); }
+    for (const n of picked) { const p = drawn.get(n); if (p && p.cv.width) g.drawImage(p.cv, 0, tops[n], W, pageH(n)); }
     drawInk(g, strokes.filter((s) => { const ty = top(s); return s.bbox[2] > a && s.bbox[0] < c && s.bbox[3] + ty > b && s.bbox[1] + ty < d; }));
     return cv;
   }
@@ -953,7 +1002,7 @@
       pdfDoc = d; outline = null;
     }
     if (!pdfDoc) return null;
-    return book.sizes.map((_, i) => `<div class="pg" data-n="${i + 1}" style="height:${pageH(i + 1)}px"></div>`).join('');
+    return book.sizes.map((_, i) => `<div class="pg" data-n="${i + 1}" style="height:${pageH(i + 1)}px;--ph:${pageH(i + 1)}px"></div>`).join('');
   }
   function startPdf() {
     stopPdf(); showPgno();
