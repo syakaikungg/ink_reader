@@ -132,7 +132,7 @@ html, body, body * { touch-action: manipulation; }
 #selmenu[hidden] { display: none; }
 #selmenu button { height: 32px; }
 #sel-del { color: var(--ink-r); }
-#ink { position: absolute; left: 0; top: 0; width: 100%; overflow: visible; pointer-events: none; }
+#ink { position: absolute; z-index: 2; left: 0; top: 0; width: 100%; overflow: visible; pointer-events: none; }
 #ink path { stroke: none; }
 #ink .k { fill: var(--ink-k); }
 /* 色・太さを変える小窓（選んでいるボタンをもう一度押すと出る） */
@@ -247,6 +247,16 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 @keyframes hit { from { background: rgba(214,177,0,.3); } to { background: transparent; } }
 #toc .row button { border-color: var(--rule); }
 /* しおりを付けた段落の左の印。段落の中に描くと数式の段落（横スクロールする）で隠れるので、紙の上の別の層に置く */
+/* 横線で入れた余白。点線で囲み、下の端のつまみ（押すとたたむ・長押しして上下に動かすと高さが変わる）。たたんだ余白は細い帯（押すと開く） */
+#sps { position: absolute; z-index: 3; left: 0; top: 0; width: 100%; height: 0; }
+#sps .sp { position: absolute; left: 8px; right: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; pointer-events: none; }
+#sps .sph { position: absolute; left: calc(50% - 24px); width: 48px; height: 22px; margin-top: -11px; padding: 0; min-width: 0;
+  border: 1px solid var(--rule); border-radius: 11px; background: var(--bar); color: var(--muted); touch-action: none; }
+#sps .sph::before { content: ""; display: block; width: 18px; height: 6px; margin: 0 auto; border-top: 2px solid currentColor; border-bottom: 2px solid currentColor; }
+#sps .sph.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+#sps .sph.fold { left: 8px; width: calc(100% - 16px); height: 28px; margin-top: 0; border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--paper)); font: 12px/1 var(--f-ui); }
+#sps .sph.fold::before { display: none; }
 #bms { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
 #bms i { position: absolute; left: 18px; margin-top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
@@ -260,7 +270,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 #doc > .pg { position: relative; margin: 0 0 14px; }
 #doc > .pg::before, #doc > .pg .blank { content: ""; position: absolute; left: 0; width: 100%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 3px 10px rgba(20,30,60,.06); }
 #doc > .pg::before { top: 0; height: var(--ph); }
-#doc > .pg canvas { position: absolute; left: 0; top: 0; width: 100%; height: var(--ph); }
+#doc > .pg canvas { position: absolute; left: 0; top: 0; width: 100%; }   /* 位置と大きさは app.js（ページの途中の余白で切って並べる） */
 #doc > .pg canvas.hd { z-index: 1; }   /* 拡大したとき、見えている部分だけ細かく描いて重ねる絵 */
 #doc > .pg .hitbox { position: absolute; z-index: 2; border-radius: 3px; background: rgba(255,200,0,.45); mix-blend-mode: multiply; pointer-events: none; animation: hitbox 2s ease-out forwards; }
 @keyframes hitbox { 0%, 45% { opacity: 1; } to { opacity: 0; } }
@@ -355,6 +365,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="qs"></div>
     <div id="bms" aria-hidden="true"></div>
+    <div id="sps"></div>
   </div>
   <div id="selmenu" hidden>
     <span id="sel-n"></span>
