@@ -1,6 +1,6 @@
 // ぐちゃぐちゃ消しの判定（app.js の scribbleTargets）を、合成した線で確かめる。ブラウザは使わない
 // 使い方: node tests/scribble.cjs [比べる app.js ...]   消すべき形（横往復・縦ギザギザ・くるくる）と、消してはいけない字（m・w・M など）を数える
-// 2026-10-28 時点: 54/72（消す範囲を、ぐちゃぐちゃの点の凸包に変えた。凸包からはみ出す字「くるくる 低め」の端の1画は残る）。残りは「小さい字の上の3〜4往復」「3往復だけ」「斜めの往復」「mm・eee を字の上に書く」で、続け書きの誤爆を避けるための割り切り
+// 2026-10-28 時点: 60/78（消す範囲を、ぐちゃぐちゃの点の凸包に変えた。凸包からはみ出す字「くるくる 低め」の端の1画は残る）。残りは「小さい字の上の3〜4往復」「3往復だけ」「斜めの往復」「mm・eee を字の上に書く」で、続け書きの誤爆を避けるための割り切り
 const fs = require('fs');
 const src = (f) => { const t = fs.readFileSync(f, 'utf8'); const i = t.indexOf('  // 往復の多い線'); const j = t.indexOf('// ---------- 投げ縄', i); const k = t.indexOf('  function inPoly'), e = t.indexOf('\n  }\n', k) + 4; return t.slice(i, j) + t.slice(k, e); };
 const make = (code) => { let strokes = []; const top = () => 0; const fn = new Function('strokes', 'top', 'scale', code + '; return scribbleTargets;');
@@ -58,6 +58,14 @@ cases.push({ kind: '消さない', name: 'W を字の上に', scr: S(dense([[X, 
 for (const k of [1, 3]) {
   const v = (x, y0, y1) => S(dense([[x, y0], [x, y1]]).map(([x, y]) => [x / k, y / k]), 3.4 / k);
   const tg = [v(130, 100, 122)], nb = v(165, 104, 120), scr = S(dense([...Array(8)].map((_, i) => [i % 2 ? 100 : 160, 103 + i * 2.5])).map(([x, y]) => [x / k, y / k]), 3.4 / k);
+  // ぐちゃぐちゃの隙間にある点（細いペン）も消す。前はインクが重ならない点が残っていた
+  const dots = [[112, 104], [127, 110], [143, 106], [151, 115]].map(([x, y]) => S([[x / k, y / k], [(x + .5) / k, y / k]], 1));
+  const thin = S(dense([...Array(8)].map((_, i) => [i % 2 ? 100 : 160, 103 + i * 2.5])).map(([x, y]) => [x / k, y / k]), 1);
+  cases.push({ kind: '消すべき', name: `隙間の点 細いペン 拡大${k}`, scr: thin, others: [...tg, ...dots], want: 5, scale: k });
+  // 範囲の少し外にはみ出した濁点（字にくっついている）は一緒に消す。くっついていない点は残す
+  const dak = [S([[162 / k, 99 / k], [163 / k, 102 / k]], 3.4 / k)], tgR = [v(158, 100, 122)], lone = S([[165 / k, 130 / k], [166 / k, 131 / k]], 3.4 / k);
+  cases.push({ kind: '消すべき', name: `はみ出した濁点 拡大${k}`, scr, others: [...tgR, ...dak], want: 2, scale: k });
+  cases.push({ kind: '隣は残す', name: `離れた点 拡大${k}`, scr, others: [...tgR, lone], want: 1, scale: k, only: tgR });
   cases.push({ kind: '隣は残す', name: `5px 右の縦棒 拡大${k}`, scr, others: [...tg, nb], want: 1, scale: k, only: tg });
 }
 const files = process.argv.length > 2 ? process.argv.slice(2) : [require('path').join(__dirname, '../app.js')];
