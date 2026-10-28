@@ -1,4 +1,4 @@
-// 余白・白紙ページの確認（Playwright）。md と PDF を「ファイルから開く」で開き、投げ縄のメニューから余白（白紙）を入れて書き、消す。GitHub は使わない。
+// 余白の確認（Playwright）。md を「ファイルから開く」で開き、投げ縄のメニューから余白を入れて書き、消す。GitHub は使わない。
 // 使い方: node tests/gap.cjs [スクリーンショットの出力先]
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..'), OUT = process.argv[2] || os.tmpdir();
@@ -21,7 +21,7 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   const rect = (sel) => p.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.top), Math.round(r.bottom)]; }, sel);
   const savedGaps = () => p.evaluate(() => new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => { const s = r.result.transaction('kv').objectStore('kv'); const q = s.getAllKeys(); q.onsuccess = () => { const k = q.result.filter((x) => /^ink:local:/.test(x)).pop(); const g = s.get(k); g.onsuccess = () => res(Object.values(g.result.blocks).filter((x) => x.gap).map((x) => [x.b, x.gap, Object.keys(x.strokes).length])); }; }; }));
 
-  for (const [file, pg] of [['gap.md', false], ['gap.pdf', true]]) {
+  for (const [file, pg] of [['gap.md', false]]) {   // PDF の白紙はページの一覧から（tests/pdf.cjs）
     console.log('---', file);
     await p.setInputFiles(pg ? '#shelf .open-file' : '#empty .open-file', path.join(dir, file));
     if (pg) await p.waitForFunction(() => document.querySelector('#doc > .pg canvas')); else await p.waitForFunction(() => document.querySelectorAll('#doc > p').length > 10);

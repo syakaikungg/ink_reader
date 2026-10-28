@@ -169,6 +169,25 @@
     push({ type: 'gap', b, from, to, list });
   }
 
+  // PDF の白紙: i 枚目（0 はページそのもの）の後ろに白紙を1枚入れる・i 枚目の白紙を消す。
+  // 白紙はページの下に同じ間隔で並ぶので、後ろの白紙に書いた線はずらす（線は作り直して、戻すで戻る）
+  function blankOp(n, i, add) {
+    const u = gapUnit(n), from = gaps[n] || 0, to = from + (add ? u : -u), cut = (i + 1) * u - PAGE_GAP / 2;
+    if (to < 0) return;
+    const mid = (x) => (x.bbox[1] + x.bbox[3]) / 2, rm = [], old = [], moved = [];
+    for (const x of strokes) {
+      if (x.b !== n) continue;
+      if (!add && mid(x) >= cut - u && mid(x) < cut) rm.push(x);
+      else if (mid(x) >= cut) {
+        const dy = add ? u : -u, m = { id: newId(), b: n, tool: x.tool, c: x.c, s: x.s, pen: x.pen, pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
+        if (x.g) m.g = moveG(x.g, 0, dy);
+        bbox(m); old.push(x); moved.push(m);
+      }
+    }
+    removeAll(rm.concat(old)); setGap(n, to); addAll(moved);
+    push({ type: 'gap', b: n, from, to, list: rm, mv: [old, moved] });
+  }
+
   // ---------- 設定 ----------
   const DEF = { token: '', repo: 'syakaikungg/sakai_study', branch: 'master', book: 'books/nishimori', session: '' };
   let cfg = { ...DEF };
@@ -360,14 +379,17 @@
 
   // ---------- history ----------
   // op: {type:'add'|'erase', list} か {type:'replace', from, to}（投げ縄の移動・色変更）
-  const opList = (op) => op.type === 'gap' ? op.list.concat({ b: op.b }) : op.list || op.from.concat(op.to);
+  const opList = (op) => op.type === 'gap' ? op.list.concat(op.mv ? op.mv[0].concat(op.mv[1]) : [], { b: op.b }) : op.list || op.from.concat(op.to);
   function push(op) { undoStack.push(op); redoStack.length = 0; syncHist(); touch(opList(op)); }
   function addAll(list) { for (const s of list) { mount(s); strokes.push(s); } }
   function removeAll(list) { const set = new Set(list); strokes = strokes.filter((s) => !set.has(s)); for (const s of list) s.el.remove(); }
   function apply(op, inverse) {
     clearSel(); setEdit(null);
     if (op.type === 'replace') { removeAll(inverse ? op.to : op.from); addAll(inverse ? op.from : op.to); }
-    else if (op.type === 'gap') { setGap(op.b, inverse ? op.from : op.to); if (op.list.length) inverse ? addAll(op.list) : removeAll(op.list); }
+    else if (op.type === 'gap') {
+      const [a, b] = op.mv || [[], []];
+      removeAll(inverse ? b : op.list.concat(a)); setGap(op.b, inverse ? op.from : op.to); addAll(inverse ? op.list.concat(a) : b);
+    }
     else ((op.type === 'add') !== inverse) ? addAll(op.list) : removeAll(op.list);
     touch(opList(op));
   }
@@ -643,10 +665,8 @@
     $('#sel-del').hidden = !sel.length;
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
-    $('#sel-gap').textContent = isPdf() ? '後ろに白紙' : '下に余白';
-    $('#sel-gap').hidden = sel.length > 0 || !last;
-    $('#sel-ungap').textContent = isPdf() ? '白紙を消す' : '余白を消す';
-    $('#sel-ungap').hidden = !last || !gaps[last] || !box || box[3] < tops[last] + gapTop(last);
+    $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
+    $('#sel-ungap').hidden = isPdf() || !last || !gaps[last] || !box || box[3] < tops[last] + gapTop(last);
   }
   function clearSel() { sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null); }
   function finishLasso() {
@@ -692,8 +712,8 @@
   }
   $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
   $('#sel-x').onclick = clearSel;
-  $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = isPdf() ? `${b}ページの後ろに白紙を入れました` : '余白を入れました'; };
-  $('#sel-ungap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); removeGap(b); stat.textContent = isPdf() ? '白紙を消しました' : '余白を消しました'; };
+  $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = '余白を入れました'; };
+  $('#sel-ungap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); removeGap(b); stat.textContent = '余白を消しました'; };
   function lassoDown(e) {
     const [x, y] = toPage(e);
     if (sel.length) {
@@ -1338,15 +1358,15 @@
       return pdfPump();
     }
   }
-  // 端の「12 / 300」。数字を押すとページ番号を入れて飛べる
+  // 端の「12 / 300」。押すとページの一覧（目次の画面の「ページ」）を開く
   const pgno = $('#pgno'), pgIn = $('#pg-in');
   let pgRaf = 0;
   function showPgno() {
     pgno.hidden = !isPdf();
     if (!isPdf()) return;
-    $('#pg-n').textContent = blocks.length - 1;
-    if (document.activeElement !== pgIn) pgIn.value = curPage();
+    $('#pg-c').textContent = curPage(); $('#pg-n').textContent = $('#pg-all').textContent = blocks.length - 1;
   }
+  pgno.onclick = () => openToc('pages');
   let hdT = 0;
   const onScroll = () => {
     if (!isPdf()) return;
@@ -1356,10 +1376,12 @@
   addEventListener('scroll', onScroll, { passive: true });
   wrap.addEventListener('scroll', onScroll, { passive: true });
   pgIn.onfocus = () => pgIn.select();
-  pgIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); pgIn.blur(); } };
-  pgIn.onblur = () => {
+  pgIn.onkeydown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
     const n = Math.round(+pgIn.value.replace(/[０-９]/g, (d) => d.charCodeAt(0) - 0xff10));
-    if (n >= 1 && n < blocks.length && n !== curPage()) goTo(CH, n); else showPgno();
+    if (n >= 1 && n < blocks.length) { pgIn.blur(); goTo(CH, n); }
+    else pgIn.select();
   };
   // PDF の本文（検索用）。ページごとに文字と、文字のかたまりの位置（ページ内の紙の px）を一度だけ取り出し、端末に覚えておく。
   // [{ t: 本文, r: [[t の中の位置, x, y, 幅, 高さ], …] }]。スキャンした PDF は文字がないので空になる
@@ -1528,8 +1550,12 @@
     if (text.nodeType) btn.append(...text.childNodes); else btn.append(text);   // 見出しは数式を描いたまま並べる
     li.append(btn); return li;
   }
-  chapSel.onclick = async () => {
+  chapSel.onclick = () => openToc('main');
+  // tab: 'main'（目次・しおり・検索）か 'pages'（PDF のページの一覧）
+  async function openToc(tab) {
     if (!book) return;
+    if (!isPdf()) tab = 'main';
+    $('#toc-head').hidden = !isPdf();
     const ol = isPdf() ? await pdfOutline() : [];
     const label = (c) => (book.chapters.find((x) => x.id === c) || {}).label || c;
     const bms = loadBm().filter((m) => ids.includes(m.c)).sort((x, y) => ids.indexOf(x.c) - ids.indexOf(y.c) || x.b - y.b);
@@ -1545,10 +1571,104 @@
     }
     $('#toc-list').replaceChildren(...rows);
     $('#toc-q').value = ''; showHits('');
-    toc.showModal();
-    if (document.activeElement === $('#toc-q')) $('#toc-q').blur();   // 開いただけでキーボードが出ないようにする
-    const cur = toc.querySelector('.cur'); if (cur) cur.scrollIntoView({ block: 'center' });
-  };
+    if (!toc.open) toc.showModal();
+    showTab(tab);
+    pgIn.value = '';
+    if (toc.contains(document.activeElement)) document.activeElement.blur();   // 開いただけでキーボードが出ないようにする
+  }
+  function showTab(tab) {
+    for (const b of $('#toc-tabs').children) b.setAttribute('aria-selected', String(b.dataset.t === tab));
+    $('#toc-tab-main').hidden = tab !== 'main'; $('#toc-pages').hidden = $('#pg-go').hidden = tab !== 'pages';
+    toc.classList.toggle('pages', tab === 'pages');
+    if (tab === 'pages') buildPages(); else stopThumbs();
+    const cur = toc.querySelector(tab === 'pages' ? '.th.cur' : '#toc-list .cur'); if (cur) cur.scrollIntoView({ block: 'center' });
+  }
+  $('#toc-tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) showTab(b.dataset.t); };
+  toc.addEventListener('close', () => { stopThumbs(); thMenu.hidden = true; });
+
+  // ---------- ページの一覧（PDF） ----------
+  // ページと白紙の縮小画像を並べる。画像は一覧で見えているものだけ作り、離れたら捨てる。
+  // 押すとそのページへ。「…」から後ろに白紙を入れる・白紙を消す
+  const grid = $('#pg-grid'), thMenu = $('#th-menu');
+  let thIO = null, thQ = [], thBusy = false, thAt = null;
+  function stopThumbs() {
+    if (thIO) thIO.disconnect(); thIO = null; thQ = [];
+    for (const c of grid.querySelectorAll('canvas')) { c.width = c.height = 0; }
+    grid.replaceChildren();
+  }
+  function buildPages() {
+    stopThumbs();
+    const cur = curPage(), items = [];
+    for (let n = 1; n < blocks.length; n++) {
+      const k = Math.round((gaps[n] || 0) / gapUnit(n));
+      for (let i = 0; i <= k; i++) items.push(thItem(n, i, k, n === cur && !i));
+    }
+    grid.replaceChildren(...items);
+    thIO = new IntersectionObserver((es) => {
+      for (const e of es) {
+        const el = e.target;
+        if (e.isIntersecting) { if (!el.dataset.d) { thQ.push(el); thPump(); } }
+        else if (el.dataset.d) { const c = el.querySelector('canvas'); if (c) { c.width = c.height = 0; c.remove(); } delete el.dataset.d; }
+      }
+    }, { root: toc, rootMargin: '400px 0px' });
+    for (const el of items) thIO.observe(el);
+  }
+  function thItem(n, i, k, cur) {
+    const el = document.createElement('div'), [w, h] = book.sizes[n - 1];
+    el.className = 'th' + (i ? ' blank' : '') + (cur ? ' cur' : ''); el.dataset.n = n; el.dataset.i = i;
+    const im = document.createElement('button'); im.type = 'button'; im.className = 'im'; im.style.aspectRatio = `${w} / ${h}`;
+    im.setAttribute('aria-label', i ? `${n}ページの後ろの白紙へ` : `${n}ページへ`);
+    const lb = document.createElement('div'); lb.className = 'lb';
+    const t = document.createElement('span'); t.textContent = i ? `白紙${k > 1 ? i : ''}` : n;
+    const m = document.createElement('button'); m.type = 'button'; m.className = 'th-m'; m.textContent = '…'; m.setAttribute('aria-label', 'このページの操作');
+    lb.append(t, m); el.append(im, lb);
+    return el;
+  }
+  // 縮小画像は1枚ずつ作る（ページの絵 + 書き込み）
+  async function thPump() {
+    if (thBusy || !thIO) return;
+    const el = thQ.shift();
+    if (!el) return;
+    if (!el.isConnected || el.dataset.d) return thPump();
+    thBusy = true;
+    try {
+      const n = +el.dataset.n, i = +el.dataset.i, im = el.firstChild, ph = pageH(n);
+      const k = (im.clientWidth || 100) * (devicePixelRatio || 1) / W, cv = document.createElement('canvas');
+      cv.width = Math.round(W * k); cv.height = Math.round(ph * k);
+      if (!i) { const pg = await pdfDoc.getPage(n); await pg.render({ canvas: cv, viewport: pg.getViewport({ scale: k * W / pg.getViewport({ scale: 1 }).width }) }).promise; }
+      const g = cv.getContext('2d'), y0 = i * gapUnit(n);
+      if (i) { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
+      g.save(); g.scale(k, k); g.translate(0, -(tops[n] + y0));
+      drawInk(g, strokes.filter((s) => s.b === n && s.bbox[3] > y0 && s.bbox[1] < y0 + ph));
+      g.restore();
+      if (el.isConnected && thIO) { im.append(cv); el.dataset.d = 1; } else cv.width = cv.height = 0;
+    } catch {}
+    thBusy = false;
+    thPump();
+  }
+  grid.addEventListener('click', (e) => {
+    const th = e.target.closest('.th');
+    if (!th) return;
+    const n = +th.dataset.n, i = +th.dataset.i;
+    if (e.target.closest('.th-m')) {
+      thAt = { n, i };
+      $('#th-del').hidden = !i;
+      const r = e.target.getBoundingClientRect();
+      thMenu.hidden = false;
+      thMenu.style.left = Math.max(8, Math.min(innerWidth - thMenu.offsetWidth - 8, r.right - thMenu.offsetWidth)) + 'px';
+      thMenu.style.top = Math.min(innerHeight - thMenu.offsetHeight - 8, r.bottom + 4) + 'px';
+      return;
+    }
+    if (!e.target.closest('.im')) return;
+    toc.close();
+    if (!i) { goTo(CH, n); return; }
+    scrollBy(0, blocks[n].getBoundingClientRect().top + i * gapUnit(n) * scale - $('#bar').getBoundingClientRect().bottom - 12);
+  });
+  toc.addEventListener('click', (e) => { if (!thMenu.hidden && !e.target.closest('#th-menu, .th-m')) thMenu.hidden = true; });
+  const thKeep = () => { const t = toc.scrollTop; buildPages(); toc.scrollTop = t; };
+  $('#th-add').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, true); stat.textContent = `${thAt.n}ページの後ろに白紙を入れました`; thKeep(); };
+  $('#th-del').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, false); stat.textContent = '白紙を消しました'; thKeep(); };
+
   // 本文の検索。章ごとの段落の文字（数式は TeX）を一度だけ作って覚えておく。段落の番号は #doc の子要素の番号（先頭は出典の行）
   const searchText = new Map();   // '<本>:<章>' -> { html, texts }
   async function chapterTexts(id, progress) {
