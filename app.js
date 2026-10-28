@@ -71,8 +71,20 @@
     }
     return d + 'Z';
   }
-  const top = (s) => tops[Math.min(s.b, tops.length - 1)] || 0;
-  function place(s) { s.el.setAttribute('transform', `translate(0 ${top(s)})`); }
+  // 線の上下の位置（段落の上端から）。書いている途中は書き始めの点
+  const sy = (s) => s.bbox ? (s.bbox[1] + s.bbox[3]) / 2 : s.pts[0][1];
+  // 線を置く位置。段落にたたんだ余白があれば、その下の線は見た目だけ上にずらす（余白の高さを変えている間は live の分もずらす）
+  function top(s) {
+    const b = Math.min(s.b, tops.length - 1), t = tops[b] || 0;
+    if (!spans[b] && !live) return t;
+    const y = sy(s), z = live && live.b === b && y >= live.e ? y + live.d : y;
+    return t + z - y - foldOff(b, z);
+  }
+  function place(s) {
+    s.el.setAttribute('transform', `translate(0 ${top(s)})`);
+    const h = !!spans[s.b] && inFold(s.b, sy(s));   // たたんだ余白の中の線は隠す
+    if (h !== !!s.hid) { s.hid = h; s.el.style.display = h ? 'none' : ''; }
+  }
   function render(s, pts, last) { s.el.setAttribute('d', pathD(getStroke(pts || s.pts, opts(s, last)))); }
   function bbox(s) {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
@@ -114,12 +126,14 @@
   // 今の章の書き込みを段落ごとの形にする（GitHub の ink/<章>.json と同じ形）
   function serialize() {
     const out = {};
-    for (const s of strokes.concat(Object.keys(gaps).map((b) => ({ b: +b })))) {
+    for (const s of strokes.concat([...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds])].map((b) => ({ b: +b })))) {
       // PDF は b がページ番号。ページの大きさ（pt）も残し、座標（幅 680 の紙の px）を PDF の座標に直せるようにする
       const blk = out[s.b] ||= isPdf() ? { b: s.b, pt: book.sizes[s.b - 1], strokes: {} }
         : { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
       if (s.pts) blk.strokes[s.id] = ser(s);
       if (gaps[s.b]) blk.gap = gaps[s.b];
+      if (folds.has(s.b)) blk.fold = 1;
+      if (sps[s.b]) blk.sp = sps[s.b].map((p) => [p.at, p.h, p.c ? 1 : 0]);
     }
     return out;
   }
@@ -127,65 +141,212 @@
     clearSel();
     for (const s of strokes) s.el.remove();
     strokes = [];
-    for (const b of Object.keys(gaps)) setGap(+b, 0);
-    for (const b in data) { if (data[b].gap) setGap(+b, data[b].gap); for (const id in data[b].strokes || {}) { const s = de(id, +b, data[b].strokes[id]); mount(s); strokes.push(s); } }
+    const was = [...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds])];
+    gaps = {}; sps = {}; folds = new Set();
+    for (const b of was) relay(+b);
+    for (const b in data) {
+      const d = data[b];
+      if (d.gap) gaps[b] = d.gap;
+      if (d.fold && d.gap) folds.add(+b);
+      if (d.sp && d.sp.length) sps[b] = d.sp.map(([at, h, c]) => ({ at, h, c: !!c }));
+      if (d.gap || d.sp) relay(+b);
+      for (const id in d.strokes || {}) { const s = de(id, +b, d.strokes[id]); mount(s); strokes.push(s); }
+    }
+    showSps();
   }
 
   // ---------- 余白・白紙ページ ----------
-  // 段落（PDF はページ）の下に高さを足して、書き込む場所を作る。新しい段落は作らないので、段落番号もページ番号もずれない。
-  // 余白に書いた線はその段落に、段落の上端からの座標で結びつく。足した高さは書き込みの JSON の段落ごとの gap（紙の px）に入れ、元の md・PDF は変えない。
-  // md は段落の下の余白、PDF は直前のページと同じ大きさの白紙（ページの間と同じ隙間を空けて並べる）
-  let gaps = {};   // 段落番号 -> 足した高さ
-  const GAP_MD = 320, PAGE_GAP = 14;
+  // 段落（PDF はページ）に高さを足して、書き込む場所を作る。新しい段落は作らないので、段落番号もページ番号もずれない。
+  // 余白に書いた線はその段落に、段落の上端からの座標で結びつく。足した高さは書き込みの JSON の段落ごとの値（紙の px）に入れ、元の md・PDF は変えない。
+  // - gap: 段落の下に足した高さ。md は段落の下の余白（fold: たたんでいる）、PDF は直前のページと同じ大きさの白紙（ページの間と同じ隙間を空けて並べる）
+  // - sp: PDF のページの途中に入れた余白 [[at（元のページの上端からの位置）, 高さ, たたんでいるか], …]（上から順）。ページの絵は余白のところで切って並べる
+  // 線の座標は、余白をすべて開いたときの位置で持つ。たたんだ余白の中の線は隠し、下の線は見た目だけ上にずらす（top）
+  let gaps = {}, sps = {}, folds = new Set();
+  let spans = {};   // 段落番号 -> 余白の範囲 [{ i（sps の番号。md は -1）, e0, e1（線の座標での上端・下端）, c（たたんでいる） }]
+  let live = null;  // 余白の高さを変えている間: { b, e, d }（e より下の線を見た目だけ d ずらす）
+  const GAP_MD = 320, PAGE_GAP = 14, FOLD = 28, SP_H = 200;
   const gapUnit = (b) => isPdf() ? pageH(b) + PAGE_GAP : GAP_MD;
-  function setGap(b, px) {
+  const padV = (b) => gaps[b] ? (folds.has(b) ? FOLD : gaps[b]) : 0;   // md: 段落の下の余白の見た目の高さ
+  const spSum = (b) => (sps[b] || []).reduce((a, p) => a + p.h, 0);
+  const sheet = (b) => pageH(b) + (sps[b] || []).reduce((a, p) => a + (p.c ? FOLD : p.h), 0);   // PDF: 余白を入れたページの紙の見た目の高さ
+  // PDF のページの切れ目: 元のページの [c0, c1) を、ページの上端から v の位置に出す
+  function segs(b) {
+    const out = []; let c0 = 0, v = 0;
+    for (const p of sps[b] || []) { out.push({ c0, c1: p.at, v }); v += p.at - c0 + (p.c ? FOLD : p.h); c0 = p.at; }
+    out.push({ c0, c1: pageH(b), v });
+    return out;
+  }
+  const cToV = (b, c) => { const s = segs(b).find((x) => c <= x.c1); return s ? s.v + c - s.c0 : c; };
+  // 見た目の位置 v（ページの上端から）にある元のページの位置。余白の中なら、その直後の位置
+  const vToC = (b, v) => { for (const s of segs(b)) if (v < s.v + s.c1 - s.c0) return s.c0 + Math.max(0, v - s.v); return pageH(b); };
+  const foldOff = (b, y) => { let d = 0; for (const p of spans[b] || []) if (p.c && p.e1 <= y) d += p.e1 - p.e0 - FOLD; return d; };
+  const inFold = (b, y) => (spans[b] || []).some((p) => p.c && y >= p.e0 && y < p.e1);
+  // 見た目の位置（段落の上端から）-> 線の座標
+  const toSto = (b, v) => { let d = 0; for (const p of spans[b] || []) if (p.c && v >= p.e0 - d + FOLD) d += p.e1 - p.e0 - FOLD; return v + d; };
+  function respan(b) {
+    const el = blocks[b], out = [];
+    if (!el) { delete spans[b]; return; }
+    if (!isPdf() && gaps[b]) { const e0 = el.offsetHeight - padV(b); out.push({ i: -1, e0, e1: e0 + gaps[b], c: folds.has(b) }); }
+    let acc = 0;
+    (sps[b] || []).forEach((p, i) => { out.push({ i, e0: p.at + acc, e1: p.at + acc + p.h, c: p.c }); acc += p.h; });
+    if (out.length) spans[b] = out; else delete spans[b];
+  }
+  // 段落 b の見た目を、余白の状態に合わせて作り直す
+  function relay(b) {
     const el = blocks[b];
-    if (px) gaps[b] = px; else delete gaps[b];
-    if (!el) return;
-    if (!isPdf()) { el.style.paddingBottom = px ? px + 'px' : ''; return; }
-    const ph = pageH(b), n = Math.round(px / (ph + PAGE_GAP));
-    el.style.height = ph + px + 'px';
-    for (const x of el.querySelectorAll('.blank')) x.remove();
-    for (let i = 1; i <= n; i++) {
-      const d = document.createElement('div'); d.className = 'blank';
-      d.style.cssText = `top:${i * (ph + PAGE_GAP)}px;height:${ph}px`;
-      el.append(d);
+    if (!gaps[b]) { delete gaps[b]; folds.delete(b); }
+    if (sps[b] && !sps[b].length) delete sps[b];
+    if (el && !isPdf()) el.style.paddingBottom = gaps[b] ? padV(b) + 'px' : '';
+    if (el && isPdf()) {
+      const ph = pageH(b), sh = sheet(b), px = gaps[b] || 0, n = Math.round(px / (ph + PAGE_GAP));
+      el.style.height = sh + px + 'px'; el.style.setProperty('--ph', sh + 'px');
+      for (const x of el.querySelectorAll('.blank')) x.remove();
+      for (let i = 1; i <= n; i++) {
+        const d = document.createElement('div'); d.className = 'blank';
+        d.style.cssText = `top:${sh - ph + i * (ph + PAGE_GAP)}px;height:${ph}px`;
+        el.append(d);
+      }
+      placePage(b);
     }
+    respan(b);
+    for (const s of strokes) if (s.b === b) place(s);
   }
-  const gapTop = (b) => blocks[b].offsetHeight - (gaps[b] || 0);   // 足した高さの始まり（段落の上端から）
-  function addGap(b) {
-    const from = gaps[b] || 0;
-    setGap(b, from + gapUnit(b));   // 先に変えてから記録する（記録したときに保存される）
-    push({ type: 'gap', b, from, to: from + gapUnit(b), list: [] });
+  const spState = (b) => ({ g: gaps[b] || 0, f: folds.has(b), sp: sps[b] ? sps[b].map((p) => ({ ...p })) : null });
+  function setState(b, st) {
+    if (st.g) gaps[b] = st.g; else delete gaps[b];
+    if (st.f) folds.add(b); else folds.delete(b);
+    if (st.sp) sps[b] = st.sp.map((p) => ({ ...p })); else delete sps[b];
+    relay(b); showSps();
   }
-  // 一番下の余白（白紙1ページ分）を消す。そこに書いた線も一緒に消す（戻すで戻る）
-  function removeGap(b) {
-    const from = gaps[b] || 0;
-    if (!from) return;
-    const to = Math.max(0, from - gapUnit(b)), edge = gapTop(b) + to;
-    const list = strokes.filter((s) => s.b === b && (s.bbox[1] + s.bbox[3]) / 2 > edge);
-    removeAll(list);
-    setGap(b, to);
-    push({ type: 'gap', b, from, to, list });
-  }
-
-  // PDF の白紙: i 枚目（0 はページそのもの）の後ろに白紙を1枚入れる・i 枚目の白紙を消す。
-  // 白紙はページの下に同じ間隔で並ぶので、後ろの白紙に書いた線はずらす（線は作り直して、戻すで戻る）
-  function blankOp(n, i, add) {
-    const u = gapUnit(n), from = gaps[n] || 0, to = from + (add ? u : -u), cut = (i + 1) * u - PAGE_GAP / 2;
-    if (to < 0) return;
-    const mid = (x) => (x.bbox[1] + x.bbox[3]) / 2, rm = [], old = [], moved = [];
+  // 段落 b の余白を変える（change）。線の座標で e より下の線は dy ずらし、rm の範囲 [上, 下) の線は消す（どれも戻すで戻る）
+  function changeSpace(b, change, e, dy, rm) {
+    const from = spState(b), del = [], old = [], moved = [];
     for (const x of strokes) {
-      if (x.b !== n) continue;
-      if (!add && mid(x) >= cut - u && mid(x) < cut) rm.push(x);
-      else if (mid(x) >= cut) {
-        const dy = add ? u : -u, m = { id: newId(), b: n, tool: x.tool, c: x.c, s: x.s, pen: x.pen, pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
+      if (x.b !== b) continue;
+      const y = sy(x);
+      if (rm && y >= rm[0] && y < rm[1]) del.push(x);
+      else if (dy && y >= e) {
+        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
         if (x.g) m.g = moveG(x.g, 0, dy);
         bbox(m); old.push(x); moved.push(m);
       }
     }
-    removeAll(rm.concat(old)); setGap(n, to); addAll(moved);
-    push({ type: 'gap', b: n, from, to, list: rm, mv: [old, moved] });
+    removeAll(del.concat(old)); change(); relay(b); addAll(moved); showSps();
+    push({ type: 'gap', b, from, to: spState(b), list: del, mv: [old, moved] });   // 先に変えてから記録する（記録したときに保存される）
+  }
+  // md: 投げ縄のメニューの「下に余白」
+  function addGap(b) { changeSpace(b, () => { gaps[b] = (gaps[b] || 0) + GAP_MD; folds.delete(b); }, 0, 0); }
+  // 余白を消す。そこに書いた線も一緒に消す
+  function removeSpace(b, i) {
+    const p = (spans[b] || []).find((x) => x.i === i);
+    if (!p) return;
+    if (i < 0) changeSpace(b, () => { delete gaps[b]; }, 0, 0, [p.e0, Infinity]);
+    else changeSpace(b, () => { sps[b].splice(i, 1); }, p.e1, p.e0 - p.e1, [p.e0, p.e1]);
+  }
+  // 投げ縄で横にまっすぐ線を引いたら、そこに余白を入れる（y は紙の上の位置）。md は近い方の段落の切れ目、PDF はページの途中にも入る
+  const SP_OK = '余白を入れました（下の端のつまみ：押すとたたむ・長押しして上下に動かすと高さが変わる）', SP_IN = 'ここにはもう余白があります（下の端のつまみを長押しすると広げられます）';
+  function lineSpace(y) {
+    let b = Math.max(1, blockAt(y));
+    const el = blocks[b];
+    if (!el) return;
+    const v = y - tops[b];
+    if (!isPdf()) {
+      const ch = el.offsetHeight - padV(b);
+      if (v >= ch && gaps[b]) return SP_IN;
+      if (v < ch / 2 && b > 1) b--;
+      changeSpace(b, () => { gaps[b] = (gaps[b] || 0) + SP_H; folds.delete(b); }, 0, 0);
+      return SP_OK;
+    }
+    const sh = sheet(b);
+    if (v >= sh && v < el.offsetHeight) return '白紙には入れられません（白紙はページの一覧から）';
+    if ((spans[b] || []).some((p) => { const d0 = p.e0 - foldOff(b, p.e0); return v >= d0 && v < d0 + (p.c ? FOLD : p.e1 - p.e0); })) return SP_IN;
+    const at = Math.round(v >= sh ? pageH(b) : vToC(b, v)), list = sps[b] || [], i = list.filter((p) => p.at <= at).length;
+    const e = at + list.slice(0, i).reduce((a, p) => a + p.h, 0);
+    changeSpace(b, () => { (sps[b] ||= []).splice(i, 0, { at, h: SP_H, c: false }); }, e, SP_H);
+    return SP_OK;
+  }
+  // 余白のたたむ・開く（戻すには入れない）
+  function toggleFold(b, i) {
+    if (i < 0) { if (folds.has(b)) folds.delete(b); else folds.add(b); }
+    else sps[b][i].c = !sps[b][i].c;
+    relay(b); showSps(); touch([{ b }]);
+  }
+  // 余白の見た目の範囲（紙の上）: [{ b, i, y0, h, c, n（中の線の数） }]
+  function spaceRects() {
+    const out = [];
+    for (const b in spans) for (const p of spans[+b]) {
+      const y0 = tops[+b] + p.e0 - foldOff(+b, p.e0);
+      out.push({ b: +b, i: p.i, y0, h: p.c ? FOLD : p.e1 - p.e0, c: p.c, n: strokes.filter((s) => s.b === +b && sy(s) >= p.e0 && sy(s) < p.e1).length });
+    }
+    return out;
+  }
+  // 余白の印: 開いた余白は点線で囲み、下の端につまみを出す（押すとたたむ・長押しして上下に動かすと高さが変わる）。たたんだ余白は細い帯（押すと開く）
+  const spLayer = $('#sps');
+  function showSps() {
+    const els = [];
+    for (const r of spaceRects()) {
+      const k = document.createElement('button'); k.type = 'button'; k.dataset.b = r.b; k.dataset.i = r.i;
+      if (r.c) {
+        k.className = 'sph fold'; k.style.top = r.y0 + 'px'; k.textContent = `たたんだ余白${r.n ? `（${r.n}画）` : ''}`;
+        k.setAttribute('aria-label', '余白を開く');
+        els.push(k); continue;
+      }
+      const box = document.createElement('div'); box.className = 'sp'; box.style.cssText = `top:${r.y0}px;height:${r.h}px`;
+      k.className = 'sph'; k.style.top = r.y0 + r.h + 'px'; k.setAttribute('aria-label', '余白をたたむ（長押しして上下に動かすと高さが変わる）');
+      els.push(box, k);
+    }
+    spLayer.replaceChildren(...els);
+  }
+  let spd = null;   // 余白のつまみを押している: { b, i, id, y, p（範囲）, h0, min, h, on（高さを変えている）, t }
+  spLayer.addEventListener('pointerdown', (e) => {
+    const k = e.target.closest('.sph');
+    if (!k || spd || curId !== null) return;
+    e.preventDefault(); e.stopPropagation();
+    k.setPointerCapture(e.pointerId);
+    const b = +k.dataset.b, i = +k.dataset.i, p = spans[b].find((x) => x.i === i);
+    // 中に書いた線より上には縮めない（線がなければ、上まで縮めると消える）
+    const low = strokes.reduce((a, s) => s.b === b && sy(s) >= p.e0 && sy(s) < p.e1 ? Math.max(a, s.bbox[3] + (s.s || 8)) : a, -Infinity);
+    spd = { b, i, id: e.pointerId, y: e.clientY, p, h0: p.e1 - p.e0, min: low > -Infinity ? low - p.e0 + 6 : 0, k, on: false };
+    if (!p.c) spd.t = setTimeout(() => { if (!spd) return; spd.on = true; k.classList.add('on'); stat.textContent = '上下に動かすと余白の高さが変わります'; }, 350);
+  });
+  // 動かしている間につまみを作り直すので、動きと離したのは window で受ける
+  addEventListener('pointermove', (e) => {
+    if (!spd || e.pointerId !== spd.id) return;
+    const dy = (e.clientY - spd.y) / scale;
+    if (!spd.on) { if (Math.abs(dy) * scale > 8) { clearTimeout(spd.t); spd.moved = true; } return; }
+    spd.h = Math.max(spd.min, spd.h0 + dy);
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (spd && spd.on) liveSpace(spd.h); });
+  });
+  // 動かしている間は、高さだけ変えて下の線を見た目だけずらす（離したときに線の座標を直して記録する）
+  function liveSpace(h) {
+    const { b, i, p } = spd;
+    if (i < 0) gaps[b] = Math.max(1, h); else sps[b][i].h = Math.max(1, h);
+    live = { b, e: p.e1, d: h - spd.h0 };
+    relay(b); showSps();
+    spLayer.querySelector(`.sph[data-b="${b}"][data-i="${i}"]`)?.classList.add('on');
+  }
+  function spUp(e) {
+    if (!spd || e.pointerId !== spd.id) return;
+    const s = spd; spd = null; clearTimeout(s.t);
+    if (!s.on) { if (!s.moved && e.type === 'pointerup') toggleFold(s.b, s.i); return; }
+    if (s.i < 0) gaps[s.b] = s.h0; else sps[s.b][s.i].h = s.h0;
+    live = null; relay(s.b);
+    const h = s.h ?? s.h0;
+    if (h < 24 && !s.min) { removeSpace(s.b, s.i); stat.textContent = '余白を消しました'; return; }
+    if (Math.abs(h - s.h0) < 1) { showSps(); return; }
+    const nh = Math.round(h);
+    changeSpace(s.b, () => { if (s.i < 0) gaps[s.b] = nh; else sps[s.b][s.i].h = nh; }, s.p.e1, nh - s.h0);
+    stat.textContent = '余白の高さを変えました';
+  }
+  addEventListener('pointerup', spUp);
+  addEventListener('pointercancel', spUp);
+
+  // PDF の白紙: i 枚目（0 はページそのもの）の後ろに白紙を1枚入れる・i 枚目の白紙を消す。
+  // 白紙はページの下に同じ間隔で並ぶので、後ろの白紙に書いた線はずらす（線は作り直して、戻すで戻る）
+  function blankOp(n, i, add) {
+    const u = gapUnit(n), to = (gaps[n] || 0) + (add ? u : -u), cut = spSum(n) + (i + 1) * u - PAGE_GAP / 2;
+    if (to < 0) return;
+    changeSpace(n, () => { gaps[n] = to; }, cut, add ? u : -u, add ? null : [cut - u, cut]);
   }
 
   // ---------- 設定 ----------
@@ -388,7 +549,7 @@
     if (op.type === 'replace') { removeAll(inverse ? op.to : op.from); addAll(inverse ? op.from : op.to); }
     else if (op.type === 'gap') {
       const [a, b] = op.mv || [[], []];
-      removeAll(inverse ? b : op.list.concat(a)); setGap(op.b, inverse ? op.from : op.to); addAll(inverse ? op.list.concat(a) : b);
+      removeAll(inverse ? b : op.list.concat(a)); setState(op.b, inverse ? op.from : op.to); addAll(inverse ? op.list.concat(a) : b);
     }
     else ((op.type === 'add') !== inverse) ? addAll(op.list) : removeAll(op.list);
     touch(opList(op));
@@ -406,7 +567,7 @@
     page.style.transform = `scale(${scale})`;
     zoomNow.textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
-    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); placeMarks(); placeBm(); showHandles(); }
+    if (next.some((v, i) => v !== tops[i])) { tops = next; for (const b in spans) respan(+b); for (const s of strokes) place(s); placeMarks(); placeBm(); showHandles(); showSps(); }
     if (sel.length) showSel();
     if (pdfDoc) pdfPump();
   }
@@ -588,6 +749,7 @@
     const rad = 9 / scale;
     const hit = [];
     for (const s of strokes) {
+      if (s.hid) continue;
       const ty = top(s), [a, b, c, d] = s.bbox, pad = rad + (s.tool === 'hl' ? 8 : s.s);
       if (x < a - pad || x > c + pad || y < b + ty - pad || y > d + ty + pad) continue;
       for (const [px, py] of s.pts) { if ((px - x) ** 2 + (py + ty - y) ** 2 < pad * pad) { hit.push(s); break; } }
@@ -618,6 +780,7 @@
     if (Math.max(tx, tz) < 5 && !(r >= 2 && long >= 3)) return null;
     const pad = Math.max(6, Math.min(w, h) * .2), hit = [];
     for (const o of strokes) {
+      if (o.hid) continue;
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
       if (oc < a - pad || oa > c + pad || od + oy < b - pad || ob + oy > d + pad) continue;
       let inside = 0;
@@ -666,13 +829,15 @@
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
     $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
-    $('#sel-ungap').hidden = isPdf() || !last || !gaps[last] || !box || box[3] < tops[last] + gapTop(last);
+    $('#sel-ungap').hidden = !box || !spaceIn(box);
   }
   function clearSel() { sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null); }
   function finishLasso() {
     const poly = lasso; lasso = null; lassoEl.remove();
     if (poly.length < 3) return;
+    if (lineGesture(poly)) return;
     sel = strokes.filter((s) => {
+      if (s.hid) return false;
       const ty = top(s); let n = 0;
       for (const [x, y] of s.pts) if (inPoly(x, y + ty, poly)) n++;
       return n >= s.pts.length / 2;
@@ -693,7 +858,7 @@
       const ty = top(s);
       const abs = s.pts.map(([x, y, p]) => [x + dx, y + ty + dy, p]);
       let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
-      const b = blockAt(minY), t = tops[b];
+      const b = blockAt(minY), t = tops[b] - (toSto(b, minY - tops[b]) - (minY - tops[b]));   // たたんだ余白の下なら、開いたときの位置にする
       const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
       if (s.g) n.g = moveG(s.g, dx, ty + dy - t);
       bbox(n); return n;
@@ -713,7 +878,19 @@
   $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
   $('#sel-x').onclick = clearSel;
   $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = '余白を入れました'; };
-  $('#sel-ungap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); removeGap(b); stat.textContent = '余白を消しました'; };
+  $('#sel-ungap').onclick = () => { const r = spaceIn(sel.length ? selBox() : lassoBox); clearSel(); if (r) removeSpace(r.b, r.i); stat.textContent = '余白を消しました'; };
+  // 囲んだ範囲にかかる余白（いちばん下のもの）
+  const spaceIn = (box) => spaceRects().filter((r) => box[3] > r.y0 && box[1] < r.y0 + r.h).pop();
+  // 横にまっすぐ引いた線（幅が紙の 1/3 以上、高さ 30px 以下、始めと終わりが離れている）なら、そこに余白を入れる
+  function lineGesture(poly) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity, sum = 0;
+    for (const [x, y] of poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); sum += y; }
+    const [x0] = poly[0], [x1] = poly[poly.length - 1];
+    if (c - a < W / 3 || d - b > 30 || Math.abs(x1 - x0) < (c - a) * .6) return false;
+    clearSel();
+    stat.textContent = lineSpace(sum / poly.length) ?? '';
+    return true;
+  }
   function lassoDown(e) {
     const [x, y] = toPage(e);
     if (sel.length) {
@@ -776,7 +953,7 @@
     return out.join('\n\n');
   }
   function inkImage() {   // 選んだ段落の書き込み（なければ選んだ線）を白地の PNG に
-    const list = strokes.filter((s) => picked.includes(s.b) || sel.includes(s));
+    const list = strokes.filter((s) => !s.hid && (picked.includes(s.b) || sel.includes(s)));
     if (!list.length) return null;
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
     for (const s of list) { const ty = top(s); a = Math.min(a, s.bbox[0]); b = Math.min(b, s.bbox[1] + ty); c = Math.max(c, s.bbox[2]); d = Math.max(d, s.bbox[3] + ty); }
@@ -788,9 +965,9 @@
     drawInk(g, list);
     return cv;
   }
-  function drawInk(g, list) {
+  function drawInk(g, list, ty = top) {
     for (const s of [...list].sort((x, y) => (y.tool === 'hl') - (x.tool === 'hl'))) {
-      g.save(); g.translate(0, top(s));
+      g.save(); g.translate(0, ty(s));
       g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || (/^#/.test(s.c) ? s.c : INK.k);
       g.fill(new Path2D(s.el.getAttribute('d')));
       g.restore();
@@ -807,8 +984,11 @@
     const g = cv.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
     g.scale(k, k); g.translate(-a, -b);
-    for (const n of picked) { const p = drawn.get(n); if (p && p.cv.width) g.drawImage(p.cv, 0, tops[n], W, pageH(n)); }
-    drawInk(g, strokes.filter((s) => { const ty = top(s); return s.bbox[2] > a && s.bbox[0] < c && s.bbox[3] + ty > b && s.bbox[1] + ty < d; }));
+    for (const n of picked) {
+      const p = drawn.get(n), ky = p && p.cv.height / pageH(n);
+      if (p && p.cv.width) for (const s of segs(n)) g.drawImage(p.cv, 0, s.c0 * ky, p.cv.width, (s.c1 - s.c0) * ky, 0, tops[n] + s.v, W, s.c1 - s.c0);
+    }
+    drawInk(g, strokes.filter((s) => { if (s.hid) return false; const ty = top(s); return s.bbox[2] > a && s.bbox[0] < c && s.bbox[3] + ty > b && s.bbox[1] + ty < d; }));
     return cv;
   }
   let askImg = null, askId = '';
@@ -1177,7 +1357,7 @@
   const cloneG = (g) => ({ ...g, v: g.v.map((q) => q.slice()) });
 
   page.addEventListener('pointerdown', (e) => {
-    if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans')) return;   // 「Q」と答えの上には書かない
+    if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans, .sph')) return;   // 「Q」と答え・余白のつまみの上には書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
@@ -1190,8 +1370,8 @@
     }
     if (tool === 'er') { erased = []; eraseAt(toPage(e)); return; }
     if (tool === 'ls') { lassoDown(e); return; }
-    const b = blockAt(toPage(e)[1]);
-    curTop = tops[b];
+    const y = toPage(e)[1], b = blockAt(y);
+    curTop = tops[b] - (toSto(b, y - tops[b]) - (y - tops[b]));   // たたんだ余白の下では、開いたときの位置で持つ
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
     cur.el = document.createElementNS(NS, 'path'); paint(cur.el, cur);
     hold = null; holdT = 0;
@@ -1307,7 +1487,8 @@
   function dropPage(n) {
     const p = drawn.get(n);
     if (!p) return;
-    p.cv.width = p.cv.height = 0; p.cv.remove(); drawn.delete(n); dropHd(n);   // 幅を 0 にすると Safari がすぐメモリを返す
+    for (const c of [p.cv, ...p.more]) { c.width = c.height = 0; c.remove(); }   // 幅を 0 にすると Safari がすぐメモリを返す
+    drawn.delete(n); dropHd(n);
     if (pdfDoc) pdfDoc.getPage(n).then((pg) => pg.cleanup()).catch(() => {});
   }
   function stopPdf() { if (pdfIO) pdfIO.disconnect(); pdfIO = null; for (const n of [...drawn.keys()]) dropPage(n); near.clear(); }
@@ -1327,10 +1508,38 @@
     const n = todo[0], k = resOf(n);
     const cv = await drawPdf(n, k);
     if (!cv) return pdfPump();
-    const old = drawn.get(n);
-    if (old) { old.cv.replaceWith(cv); old.cv.width = old.cv.height = 0; } else blocks[n].prepend(cv);
-    drawn.set(n, { cv, k });
+    const old = drawn.get(n), more = [];
+    if (old) { old.cv.replaceWith(cv); for (const c of [old.cv, ...old.more]) { c.width = c.height = 0; c.remove(); } } else blocks[n].prepend(cv);
+    drawn.set(n, { cv, k, more });
+    fitCv(n, cv, [0, 0, W, pageH(n)], more);
     pdfPump();
+  }
+  // ページ n の範囲 r（元のページの px）を描いた canvas を、余白で切った位置に並べる。
+  // 最初の切れ目には canvas そのものを（はみ出す分は隠して）置き、残りの切れ目には写しを作る（more に入れる）
+  function fitCv(n, cv, r, more) {
+    for (const c of more.splice(0)) { c.width = c.height = 0; c.remove(); }
+    const ky = cv.height / (r[3] - r[1]), pos = (a, z, v) => `left:${r[0]}px;width:${r[2] - r[0]}px;top:${v}px;height:${z - a}px`;
+    let first = true;
+    for (const s of segs(n)) {
+      const a = Math.max(r[1], s.c0), z = Math.min(r[3], s.c1);
+      if (z <= a) continue;
+      if (first) {
+        first = false;
+        cv.style.cssText = pos(r[1], r[3], s.v + r[1] - s.c0) + (a > r[1] || z < r[3] ? `;clip-path:inset(${a - r[1]}px 0 ${r[3] - z}px 0)` : '');
+        continue;
+      }
+      const c = document.createElement('canvas'), y0 = Math.floor((a - r[1]) * ky);
+      c.width = cv.width; c.height = Math.max(1, Math.ceil((z - r[1]) * ky) - y0); c.className = cv.className;
+      if (cv.width && cv.height) c.getContext('2d').drawImage(cv, 0, y0, cv.width, c.height, 0, 0, c.width, c.height);
+      c.style.cssText = pos(a, z, s.v + a - s.c0);
+      cv.after(c); more.push(c);
+    }
+  }
+  // 余白を変えたページの絵を並べ直す
+  function placePage(n) {
+    const p = drawn.get(n), h = hd.get(n);
+    if (p) fitCv(n, p.cv, [0, 0, W, pageH(n)], p.more);
+    if (h) fitCv(n, h.cv, h.r, h.more);
   }
   // ページ n の範囲 r（ページ内の紙の px。省略するとページ全体）を、紙 1px あたり k 画素で canvas に描く。
   // 描いている間に本やページが変わったら null
@@ -1350,15 +1559,15 @@
   // 拡大してページ全体の絵では細かさが足りないときは、画面に見えている部分だけを細かく描いて上に重ねる
   // （hd: ページ -> { cv, k, r }）。少し広めに描いておき、少しのスクロールでは描き直さない
   const hd = new Map(), HDPX = 8e6;   // 重ねる絵の画素数の合計の上限
-  function dropHd(n) { const h = hd.get(n); if (!h) return; h.cv.width = h.cv.height = 0; h.cv.remove(); hd.delete(n); }
+  function dropHd(n) { const h = hd.get(n); if (!h) return; for (const c of [h.cv, ...h.more]) { c.width = c.height = 0; c.remove(); } hd.delete(n); }
   async function pdfHd() {
     const K0 = scale * (devicePixelRatio || 1), pr = page.getBoundingClientRect();
     const v = [-pr.left / scale, -pr.top / scale, (innerWidth - pr.left) / scale, (innerHeight - pr.top) / scale];
     const want = new Map();
     for (const n of near) {
       const t = tops[n], h = pageH(n), p = drawn.get(n);
-      if (!p || p.k >= K0 * .95 || t >= v[3] || t + h <= v[1]) continue;
-      const a = [Math.max(0, v[0]), Math.max(0, v[1] - t), Math.min(W, v[2]), Math.min(h, v[3] - t)];
+      if (!p || p.k >= K0 * .95 || t >= v[3] || t + sheet(n) <= v[1]) continue;
+      const a = [Math.max(0, v[0]), vToC(n, Math.max(0, v[1] - t)), Math.min(W, v[2]), vToC(n, Math.min(sheet(n), v[3] - t))];   // 見えている元のページの範囲
       if (a[2] > a[0] && a[3] > a[1]) want.set(n, a);
     }
     for (const n of [...hd.keys()]) if (!want.has(n)) dropHd(n);
@@ -1372,8 +1581,8 @@
       if (!cv) return pdfPump();
       dropHd(n);
       cv.className = 'hd';
-      cv.style.cssText = `left:${r[0]}px;top:${r[1]}px;width:${r[2] - r[0]}px;height:${r[3] - r[1]}px`;
-      blocks[n].append(cv); hd.set(n, { cv, k, r });
+      blocks[n].append(cv);
+      const more = []; hd.set(n, { cv, k, r, more }); fitCv(n, cv, r, more);
       return pdfPump();
     }
   }
@@ -1551,6 +1760,7 @@
     const barB = $('#bar').getBoundingClientRect().bottom;
     if (box) {
       const r = blocks[b].getBoundingClientRect();
+      box = [box[0], cToV(b, box[1]), box[2], box[3]];   // ページの途中に余白があれば、その分下
       scrollBy(0, r.top + box[1] * scale - barB - (innerHeight - barB) * .3);
       const x = r.left + box[0] * scale;
       if (x < 0 || x + box[2] * scale > innerWidth) wrap.scrollLeft += x - innerWidth * .2;
@@ -1655,10 +1865,12 @@
       const k = (im.clientWidth || 100) * (devicePixelRatio || 1) / W, cv = document.createElement('canvas');
       cv.width = Math.round(W * k); cv.height = Math.round(ph * k);
       if (!i) { const pg = await pdfDoc.getPage(n); await pg.render({ canvas: cv, viewport: pg.getViewport({ scale: k * W / pg.getViewport({ scale: 1 }).width }) }).promise; }
-      const g = cv.getContext('2d'), y0 = i * gapUnit(n);
+      const g = cv.getContext('2d'), y0 = i ? spSum(n) + i * gapUnit(n) : 0;
       if (i) { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
-      g.save(); g.scale(k, k); g.translate(0, -(tops[n] + y0));
-      drawInk(g, strokes.filter((s) => s.b === n && s.bbox[3] > y0 && s.bbox[1] < y0 + ph));
+      // 線は元のページ（白紙）の上の位置に直して描く。ページの途中の余白に書いた線は入れない
+      const sp = spans[n] || [], up = (s) => i ? 0 : sp.reduce((a, p) => a + (p.e1 <= sy(s) ? p.e1 - p.e0 : 0), 0);
+      g.save(); g.scale(k, k); g.translate(0, -y0);
+      drawInk(g, strokes.filter((s) => s.b === n && (i || !sp.some((p) => sy(s) >= p.e0 && sy(s) < p.e1)) && s.bbox[3] - up(s) > y0 && s.bbox[1] - up(s) < y0 + ph), (s) => -up(s));
       g.restore();
       if (el.isConnected && thIO) { im.append(cv); el.dataset.d = 1; } else cv.width = cv.height = 0;
     } catch {}
@@ -1681,7 +1893,7 @@
     if (!e.target.closest('.im')) return;
     toc.close();
     if (!i) { goTo(CH, n); return; }
-    scrollBy(0, blocks[n].getBoundingClientRect().top + i * gapUnit(n) * scale - $('#bar').getBoundingClientRect().bottom - 12);
+    scrollBy(0, blocks[n].getBoundingClientRect().top + (sheet(n) - pageH(n) + i * gapUnit(n)) * scale - $('#bar').getBoundingClientRect().bottom - 12);
   });
   toc.addEventListener('click', (e) => { if (!thMenu.hidden && !e.target.closest('#th-menu, .th-m')) thMenu.hidden = true; });
   const thKeep = () => { const t = toc.scrollTop; buildPages(); toc.scrollTop = t; };
@@ -1740,7 +1952,7 @@
   page.addEventListener('touchstart', (e) => {
     lpStop();
     const t = e.touches[0];
-    if (finger || e.touches.length !== 1 || t.touchType === 'stylus') return;
+    if (finger || e.touches.length !== 1 || t.touchType === 'stylus' || e.target.closest('.sph')) return;
     const x = t.clientX, y = t.clientY;
     lp = { x, y, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
   }, { passive: true });
