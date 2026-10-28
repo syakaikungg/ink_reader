@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v36';
+  const APP_VERSION = 'ink-reader-v37';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -95,9 +95,22 @@
     while (k > 0 && Math.hypot(pts[k][0] - L[0], pts[k][1] - L[1]) < r) k--;
     return k >= n - 2 ? pts : pts.slice(0, k + 1).concat([L]);
   }
+  // 前後2点ずつとの平均でならす。iPad のペンの位置は画面の 1px 刻みなので、拡大して書くと点が階段状になり、線の太さが波打つ
+  function smooth(pts) {
+    const n = pts.length;
+    if (n < 3) return pts;
+    return pts.map((q, i) => {
+      const h = Math.min(2, i, n - 1 - i);
+      if (!h) return q;
+      let x = 0, y = 0;
+      for (let j = i - h; j <= i + h; j++) { x += pts[j][0]; y += pts[j][1]; }
+      return [x / (2 * h + 1), y / (2 * h + 1), q[2]];
+    });
+  }
   function render(s, pts, last) {
     const o = opts(s, last);
-    s.el.setAttribute('d', pathD(getStroke(trimTail(pts || s.pts, Math.min(o.size / 2, 3)), o)));
+    const list = pts || s.pts;   // 図形に直した線は角を丸めないよう、ならさない
+    s.el.setAttribute('d', pathD(getStroke(trimTail(s.g ? list : smooth(list), Math.min(o.size, 3)), o)));
   }
   function bbox(s) {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
