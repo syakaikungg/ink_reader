@@ -172,6 +172,20 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.mouse.move(...cp[0]); await p.mouse.down(); for (const q of cp) for (let k = 1; k <= 4; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(150);
   console.log('lasso shape after reload', await p.textContent('#sel-n'), 'handles', (await hd()).length); await p.click('#sel-x'); await p.click('#t-pen');
   console.log('pens after reload', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), await p.evaluate(() => [...document.querySelectorAll('#ink path')].some((x) => x.style.fill === 'rgb(31, 138, 76)')));
+  // 少し傾いて少し曲がった線も、水平な直線になる。傾いた四角形も水平・垂直にそろう
+  const qy = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[9]; el.scrollIntoView({ block: 'start' }); return el.getBoundingClientRect().top + 80; });
+  const tl = []; for (let i = 0; i <= 30; i++) tl.push([150 + i * 10, qy + 60 + i * 10 * Math.tan(7 * Math.PI / 180) + 8 * Math.sin(i / 30 * Math.PI)]);
+  console.log('tilted line', await hold(tl), 'handles', JSON.stringify(await hd()));
+  const tq = sq.map(([x, y]) => { const dx = x - 260, dy = y - (py + 480), r = 9 * Math.PI / 180; return [260 + dx * Math.cos(r) - dy * Math.sin(r), qy + 260 + dx * Math.sin(r) + dy * Math.cos(r)]; });
+  console.log('tilted square', await hold(tq), 'handles', JSON.stringify(await hd()));
+  const arc = []; for (let i = 0; i <= 30; i++) { const t = Math.PI * (.15 + .7 * i / 30); arc.push([400 - 150 * Math.cos(t), qy + 600 - 150 * Math.sin(t)]); }
+  console.log('arc stays freehand', await hold(arc));
+  // マーカーも止めると直線になる（円などにはならない）
+  await p.click('#t-hl');
+  const hl = []; for (let i = 0; i <= 30; i++) hl.push([150 + i * 10, qy + 380 + (i % 3) * 2 + i * .5]);
+  console.log('marker line', await hold(hl), 'handles', JSON.stringify(await hd()));
+  console.log('marker circle stays', await hold(circ.map(([x, y]) => [x, y - py + qy + 160])));
+  await p.click('#t-pen');
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
   const MD = process.env.MD_DIR;
