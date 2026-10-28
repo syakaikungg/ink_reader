@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュして、通信なしでも起動できるようにする。
 // 本文と書き込みは IndexedDB 側（app.js）。アプリを更新したら VERSION を上げる
-const VERSION = 'ink-reader-v16';
+const VERSION = 'ink-reader-v17';
 const FILES = [
   './',
   'index.html',
@@ -13,6 +13,9 @@ const FILES = [
   'vendor/katex.min.js',
   'vendor/marked.min.js',
   'vendor/perfect-freehand.js',
+  // PDF.js。cmaps・standard_fonts・wasm は使ったものだけ、初めて読んだときにキャッシュされる
+  'vendor/pdfjs/pdf.min.mjs',
+  'vendor/pdfjs/pdf.worker.min.mjs',
   'vendor/fonts/KaTeX_AMS-Regular.woff2',
   'vendor/fonts/KaTeX_Caligraphic-Bold.woff2',
   'vendor/fonts/KaTeX_Caligraphic-Regular.woff2',

@@ -106,7 +106,9 @@
   function serialize() {
     const out = {};
     for (const s of strokes) {
-      const blk = out[s.b] ||= { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
+      // PDF は b がページ番号。ページの大きさ（pt）も残し、座標（幅 680 の紙の px）を PDF の座標に直せるようにする
+      const blk = out[s.b] ||= isPdf() ? { b: s.b, pt: book.sizes[s.b - 1], strokes: {} }
+        : { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
       blk.strokes[s.id] = ser(s);
     }
     return out;
@@ -145,6 +147,7 @@
 
   // ---------- 本のダウンロード（端末に保存） ----------
   let book = null;
+  const isPdf = () => !!(book && book.pdf);
   const bookKey = () => isLocal() ? src : cfg.repo + '@' + cfg.branch + ':' + cfg.book;
   // 章の位置や最後に開いた章は本ごとに覚える（GitHub の本は前からのキーのまま）
   const memKey = (k) => PREF + ':' + k + (isLocal() ? ':' + src : '');
@@ -333,6 +336,7 @@
     const next = blocks.map((el) => el.offsetTop);
     if (next.some((v, i) => v !== tops[i])) { tops = next; for (const s of strokes) place(s); placeMarks(); placeBm(); }
     if (sel.length) showSel();
+    if (pdfDoc) pdfPump();
   }
   function fitScale() {
     const avail = document.documentElement.clientWidth - 32;
@@ -532,7 +536,7 @@
     selMenu.hidden = false;
     selMenu.style.left = Math.max(0, (a + dx) * scale) + 'px';
     selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
-    $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}段落`;
+    $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
     $('#sel-del').hidden = !sel.length;
   }
   function clearSel() { sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); }
@@ -552,7 +556,7 @@
     blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
     picked = [...set].sort((x, y) => x - y);
     showSel();
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : picked.length ? `${picked.length}段落を選択` : '囲んだ中に何もありません';
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
   }
   // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
   function rebuild(dx, dy, patch) {
@@ -630,7 +634,9 @@
     const t = c.textContent.trim();
     return /^H[1-6]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' + t : t;
   }
+  const pagesText = () => picked[0] + (picked.length > 1 ? '〜' + picked[picked.length - 1] : '') + 'ページ';
   function passage() {
+    if (isPdf()) return `${pagesText()}（囲んだ範囲を画像で送ります）`;
     const out = [];
     const first = picked[0];
     for (let i = first - 1; i > 0; i--) if (/^H[1-6]$/.test(blocks[i].tagName)) { out.push(blockMd(blocks[i])); if (i < first - 1) out.push('…'); break; }
@@ -647,18 +653,41 @@
     const g = cv.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
     g.scale(k, k); g.translate(pad - a, pad - b);
+    drawInk(g, list);
+    return cv;
+  }
+  function drawInk(g, list) {
     for (const s of [...list].sort((x, y) => (y.tool === 'hl') - (x.tool === 'hl'))) {
       g.save(); g.translate(0, top(s));
       g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || INK.k;
       g.fill(new Path2D(s.el.getAttribute('d')));
       g.restore();
     }
+  }
+  // PDF は本文の文字を取らず、囲んだ範囲をページの絵と書き込みごと画像にする
+  function pdfImage() {
+    let [a, b, c, d] = lassoBox;
+    if (sel.length) { const q = selBox(); a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[2]); d = Math.max(d, q[3]); }
+    a = Math.max(0, a); c = Math.min(W, c);
+    if (c - a < 4 || d - b < 4) return null;
+    const k = Math.min(3, Math.sqrt(4e6 / ((c - a) * (d - b)))), cv = document.createElement('canvas');
+    cv.width = Math.ceil((c - a) * k); cv.height = Math.ceil((d - b) * k);
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.scale(k, k); g.translate(-a, -b);
+    for (const n of picked) { const p = drawn.get(n); if (p && p.cv.width) g.drawImage(p.cv, 0, tops[n], W, blocks[n].offsetHeight); }
+    drawInk(g, strokes.filter((s) => { const ty = top(s); return s.bbox[2] > a && s.bbox[0] < c && s.bbox[3] + ty > b && s.bbox[1] + ty < d; }));
     return cv;
   }
   let askImg = null, askId = '';
   function askText(withImg) {
     const ch = book && book.chapters.find((c) => c.id === CH);
     const q = $('#ask-q').value.trim();
+    if (isPdf()) return [
+      `PDF「${book.title}」の${pagesText()}を読んでいて質問があります。`, '',
+      withImg ? '添付の画像は、その箇所を切り出したものです（私の手書きの書き込みも入っています）。' : '該当箇所の画像は別に貼り付けます。',
+      `質問: ${q || '（この箇所を分かりやすく説明してください）'}`,
+    ].join('\n');
     return [
       `「${book.title || book.source || ''}」${ch ? ' ' + ch.label : ''} を読んでいて質問があります。`,
       '', '該当箇所（Markdown、数式は TeX）:', '"""', passage(), '"""', '',
@@ -669,7 +698,7 @@
   $('#sel-ask').onclick = () => {
     if (!picked.length) return;
     askId = Math.random().toString(36).slice(2, 8);
-    askImg = inkImage();
+    askImg = isPdf() ? pdfImage() : inkImage();
     $('#ask-pv').textContent = passage();
     $('#ask-img').hidden = !askImg;
     if (askImg) $('#ask-img').src = askImg.toDataURL('image/png');
@@ -701,7 +730,9 @@
     $('#ask-new').hidden = !sessUrl() || isLocal();
     // ファイルから開いた本はリポジトリにないので、Claude アプリに渡す方だけ
     $('#ask-code').hidden = $('.sess').hidden = isLocal();
-    $('#ask-open').classList.toggle('primary', isLocal());
+    // PDF は画像がないと伝わらないので、画像を渡せる「共有」を主にする
+    $('#ask-open').classList.toggle('primary', isLocal() && !isPdf());
+    $('#ask-share').classList.toggle('primary', isPdf());
   }
   $('#ask-sess').onchange = () => { cfg.session = $('#ask-sess').value.trim(); store.set(PREF + ':cfg', JSON.stringify(cfg)); syncSess(); links(); };
   function codeText() {
@@ -863,6 +894,7 @@
   function end(e) {
     if (e.pointerId !== curId) return;
     curId = null; penDown = false;
+    if (pdfDoc) pdfPump();
     const dt = (e.timeStamp - t0) / 1000;
     if (erased) { if (erased.length) push({ type: 'erase', list: erased }); erased = null; return; }
     if (tool === 'ls') { lassoUp(); return; }
@@ -895,6 +927,112 @@
   page.addEventListener('pointercancel', end);
 
 
+  // ---------- PDF ----------
+  // PDF はページを紙の切れ目として縦に並べる。1ページを #doc の子要素1つにし、段落と同じ仕組みで書き込みを結びつける
+  // （段落番号 = ページ番号、座標はページの上端から測った幅 680 の紙の px）。
+  // 描くのは画面の近くのページだけで、離れたページの canvas は捨てる（数百ページでも Safari のメモリに収める）。
+  // PDF.js は PDF を開くときに初めて読み込む（md だけ読むときは重くしない）
+  const PDFJS = 'vendor/pdfjs/';
+  let pdfjs = null, pdfDoc = null, pdfOpening = null, pdfIO = null, pdfBusy = false, outline = null;
+  const near = new Set(), drawn = new Map();   // 画面の近くのページ番号 / 描いたページ -> { cv, k（紙 1px あたりの canvas の画素） }
+  async function openPdf(data) {
+    pdfjs ||= await import('./' + PDFJS + 'pdf.min.mjs');
+    const base = new URL(PDFJS, location.href).href;
+    pdfjs.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.mjs';
+    return pdfjs.getDocument({ data, cMapUrl: base + 'cmaps/', cMapPacked: true, standardFontDataUrl: base + 'standard_fonts/',
+      wasmUrl: base + 'wasm/', iccUrl: base + 'iccs/', isEvalSupported: false, enableHWA: true }).promise;
+  }
+  const pdfBytes = async (v) => new Uint8Array(v instanceof Blob ? await v.arrayBuffer() : v);
+  const pageH = (n) => Math.round(W * book.sizes[n - 1][1] / book.sizes[n - 1][0]);
+  async function pdfHtml() {
+    if (!pdfDoc) {
+      const key = src;
+      pdfOpening ||= kv.get('pdf:' + key).then(async (v) => v ? openPdf(await pdfBytes(v)) : null);
+      const d = await pdfOpening;
+      if (key !== src) { if (d) d.destroy(); return null; }
+      pdfDoc = d; outline = null;
+    }
+    if (!pdfDoc) return null;
+    return book.sizes.map((_, i) => `<div class="pg" data-n="${i + 1}" style="height:${pageH(i + 1)}px"></div>`).join('');
+  }
+  function startPdf() {
+    stopPdf(); showPgno();
+    if (!isPdf() || !pdfDoc) return;
+    pdfIO = new IntersectionObserver((es) => {
+      for (const e of es) { const n = +e.target.dataset.n; if (e.isIntersecting) near.add(n); else { near.delete(n); dropPage(n); } }
+      pdfPump();
+    }, { rootMargin: '100% 0px' });   // 上下 1 画面分先まで描いておく
+    for (const el of blocks) if (el.dataset.n) pdfIO.observe(el);
+  }
+  function dropPage(n) {
+    const p = drawn.get(n);
+    if (!p) return;
+    p.cv.width = p.cv.height = 0; p.cv.remove(); drawn.delete(n);   // 幅を 0 にすると Safari がすぐメモリを返す
+    if (pdfDoc) pdfDoc.getPage(n).then((pg) => pg.cleanup()).catch(() => {});
+  }
+  function stopPdf() { if (pdfIO) pdfIO.disconnect(); pdfIO = null; for (const n of [...drawn.keys()]) dropPage(n); near.clear(); }
+  function closePdf() { stopPdf(); if (pdfDoc) pdfDoc.destroy(); pdfDoc = pdfOpening = outline = null; }
+  // 拡大率に合わせた解像度で描く。拡大しすぎたときは、1ページの画素数を上限で止める（Safari の canvas の上限とメモリのため）
+  const MAXPX = 6e6;
+  const resOf = (n) => Math.min(scale * (devicePixelRatio || 1), Math.sqrt(MAXPX / (W * pageH(n))));
+  const curPage = () => Math.max(1, blockAt((innerHeight / 2 - page.getBoundingClientRect().top) / scale));
+  // 1ページずつ、画面の真ん中に近いページから描く。書いている間とピンチの間は描かない（ペンの描画を待たせない）
+  async function pdfPump() {
+    if (pdfBusy || !pdfDoc || penDown || pinch) return;
+    const c = curPage();
+    const todo = [...near].filter((n) => { const p = drawn.get(n); return !p || Math.abs(p.k / resOf(n) - 1) > .05; })
+      .sort((x, y) => Math.abs(x - c) - Math.abs(y - c));
+    if (!todo.length) return;
+    const n = todo[0], pd = pdfDoc, k = resOf(n), cv = document.createElement('canvas');
+    pdfBusy = true;
+    try {
+      const pg = await pd.getPage(n), w1 = pg.getViewport({ scale: 1 }).width, vp = pg.getViewport({ scale: k * W / w1 });
+      cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      await pg.render({ canvas: cv, viewport: vp }).promise;
+    } catch { cv.width = cv.height = 0; }   // 描けないページは白いままにする（何度も描き直さない）
+    pdfBusy = false;
+    if (pd !== pdfDoc || !near.has(n) || !blocks[n]) { cv.width = cv.height = 0; return pdfPump(); }
+    const old = drawn.get(n);
+    if (old) { old.cv.replaceWith(cv); old.cv.width = old.cv.height = 0; } else blocks[n].append(cv);
+    drawn.set(n, { cv, k });
+    pdfPump();
+  }
+  // 端の「12 / 300」。数字を押すとページ番号を入れて飛べる
+  const pgno = $('#pgno'), pgIn = $('#pg-in');
+  let pgRaf = 0;
+  function showPgno() {
+    pgno.hidden = !isPdf();
+    if (!isPdf()) return;
+    $('#pg-n').textContent = blocks.length - 1;
+    if (document.activeElement !== pgIn) pgIn.value = curPage();
+  }
+  addEventListener('scroll', () => { if (isPdf() && !pgRaf) pgRaf = requestAnimationFrame(() => { pgRaf = 0; showPgno(); }); }, { passive: true });
+  pgIn.onfocus = () => pgIn.select();
+  pgIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); pgIn.blur(); } };
+  pgIn.onblur = () => {
+    const n = Math.round(+pgIn.value.replace(/[０-９]/g, (d) => d.charCodeAt(0) - 0xff10));
+    if (n >= 1 && n < blocks.length && n !== curPage()) goTo(CH, n); else showPgno();
+  };
+  // PDF のしおり（目次）。目次を開いたときに一度だけ読む: [{ t: 題, n: ページ, d: 深さ }]
+  async function pdfOutline() {
+    if (outline || !pdfDoc) return outline || [];
+    const out = [], pd = pdfDoc;
+    const walk = async (items, d) => {
+      for (const it of items || []) {
+        let n = 0;
+        try {
+          const dest = typeof it.dest === 'string' ? await pd.getDestination(it.dest) : it.dest;
+          if (dest && dest[0] != null) n = (typeof dest[0] === 'number' ? dest[0] : await pd.getPageIndex(dest[0])) + 1;
+        } catch {}
+        out.push({ t: it.title, n, d });
+        if (d < 2) await walk(it.items, d + 1);
+      }
+    };
+    try { await walk(await pd.getOutline(), 0); } catch {}
+    if (pd === pdfDoc) outline = out;
+    return out;
+  }
+
   // ---------- chapters ----------
   const chapSel = $('#chap');   // 押すと目次・しおりが開く
   const srcLine = doc.firstElementChild;
@@ -903,6 +1041,7 @@
   function fillChapters() {
     ids = book.chapters.map((c) => c.id);
     srcLine.textContent = book.source || book.title || '';
+    document.body.classList.toggle('pdf', isPdf());
   }
   async function openChapter(id, restore) {
     if (!ids.includes(id)) id = ids.includes('ch1') ? 'ch1' : ids[0];
@@ -911,10 +1050,10 @@
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs && cs.pending.size) pushChapter(CH);
     doc.classList.add('loading');
-    let html = await chapterHtml(id);
+    let html = isPdf() ? await pdfHtml().catch(() => null) : await chapterHtml(id);
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
-    if (html == null) { stat.textContent = 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
+    if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
     const [saved, ans, wait] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id))]);
     if (my !== opening) return;
     for (const s of strokes) s.el.remove();
@@ -924,7 +1063,7 @@
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
-    initBlocks(); markBm(); layout();
+    initBlocks(); markBm(); layout(); startPdf();
     showBlocks(cs.blocks);
     openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
@@ -969,7 +1108,7 @@
   function toggleBm(b) {
     if (!CH || !blocks[b]) return;
     const list = loadBm(), i = list.findIndex((m) => m.c === CH && m.b === b);
-    if (i >= 0) list.splice(i, 1); else list.push({ c: CH, b, t: blockTitle(blocks[b]) });
+    if (i >= 0) list.splice(i, 1); else list.push({ c: CH, b, t: isPdf() ? b + 'ページ' : blockTitle(blocks[b]) });
     store.set(memKey('bm'), JSON.stringify(list));
     blocks[b].classList.toggle('bm', i < 0); showBm();
     stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
@@ -989,8 +1128,9 @@
     if (text.nodeType) btn.append(...text.childNodes); else btn.append(text);   // 見出しは数式を描いたまま並べる
     li.append(btn); return li;
   }
-  chapSel.onclick = () => {
+  chapSel.onclick = async () => {
     if (!book) return;
+    const ol = isPdf() ? await pdfOutline() : [];
     const label = (c) => (book.chapters.find((x) => x.id === c) || {}).label || c;
     const bms = loadBm().filter((m) => ids.includes(m.c)).sort((x, y) => ids.indexOf(x.c) - ids.indexOf(y.c) || x.b - y.b);
     $('#toc-bm').hidden = !bms.length;
@@ -1000,6 +1140,8 @@
       rows.push(tocItem(c.label, c.id === CH ? 'cur' : '', () => goTo(c.id, 0)));
       // 開いている章だけ、見出しも並べる（章の最初の見出しは章の名前と同じなので飛ばす）
       if (c.id === CH) blocks.forEach((el, b) => { if (/^H[2-4]$/.test(el.tagName)) rows.push(tocItem(el.cloneNode(true), el.tagName.toLowerCase(), () => goTo(CH, b))); });
+      // PDF は PDF に入っている目次（しおり）を並べる
+      if (c.id === CH) for (const o of ol) rows.push(tocItem(o.t, 'h' + (o.d + 2), () => goTo(CH, o.n), o.n ? String(o.n) : ''));
     }
     $('#toc-list').replaceChildren(...rows);
     $('#toc-q').value = ''; showHits('');
@@ -1111,19 +1253,23 @@
     if (cs) persist();
     if (cs && cs.pending.size) pushChapter(CH);
     CH = null; cs = null;
+    closePdf();
   }
   async function switchBook(v) {
     leaveBook(); setSrc(v);
-    if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); setAnswers('', []); layout(); return; }
+    if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; document.body.classList.remove('pdf'); doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); setAnswers('', []); layout(); showPgno(); return; }
     $('#empty').hidden = true; chapSel.disabled = false;
     fillChapters();
     await openChapter(store.get(memKey('chapter')) || ids[0], true);
     if (!isLocal()) { pushAll(); if (canSync()) syncBook(false).catch(() => {}); }
   }
   const mdTitle = (md, name) => ((md.match(/^#{1,3}\s+(.+)$/m) || [])[1] || name.replace(/\.[^.]+$/, '')).replace(/[*_`$]/g, '').trim();
-  async function openFiles(files) {
-    files = [...files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
-    if (!files.length) return;
+  async function addBook(id, meta) {
+    await kv.set('book:' + id, meta);
+    await kv.set('books', [{ id, title: meta.title }, ...((await kv.get('books')) || [])]);
+    return { id, title: meta.title };
+  }
+  async function importMd(files) {
     const id = 'local:' + newId(), chapters = [];
     for (const [i, f] of files.entries()) {
       const md = await f.text(), c = { id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name };
@@ -1131,11 +1277,38 @@
       chapters.push(c);
     }
     const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : '');
-    await kv.set('book:' + id, { title, local: true, chapters, images: {} });
-    await kv.set('books', [{ id, title }, ...((await kv.get('books')) || [])]);
+    return addBook(id, { title, local: true, chapters, images: {} });
+  }
+  // PDF は1ファイルを1冊にする。PDF そのものは 'pdf:<本>' に置き、ページの大きさだけ先に調べておく（開くたびに全ページを読まないため）
+  async function importPdf(f) {
+    const id = 'local:' + newId();
+    stat.textContent = `「${f.name}」を読み込み中…`;
+    try { await kv.set('pdf:' + id, f); } catch { await kv.set('pdf:' + id, await f.arrayBuffer()); }
+    let pd = null;
+    try {
+      pd = await openPdf(new Uint8Array(await f.arrayBuffer()));
+      const sizes = [];
+      for (let i = 1; i <= pd.numPages; i++) {
+        const v = (await pd.getPage(i)).getViewport({ scale: 1 });
+        sizes.push([Math.round(v.width * 100) / 100, Math.round(v.height * 100) / 100]);
+        if (i % 25 === 0) stat.textContent = `PDF を読み込み中 ${i}/${pd.numPages}ページ`;
+      }
+      const title = f.name.replace(/\.pdf$/i, '');
+      return await addBook(id, { title, local: true, pdf: true, chapters: [{ id: 'pdf', label: title, file: f.name }], sizes, images: {} });
+    } catch (e) { kv.del('pdf:' + id).catch(() => {}); throw e; }
+    finally { if (pd) pd.destroy(); }
+  }
+  const isPdfFile = (f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+  async function openFiles(files) {
+    files = [...files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
+    if (!files.length) return;
+    const opened = [];
+    for (const f of files.filter(isPdfFile)) opened.push(await importPdf(f));
+    const mds = files.filter((f) => !isPdfFile(f));
+    if (mds.length) opened.push(await importMd(mds));
     shelf.close();
-    await switchBook(id);
-    stat.textContent = `「${title}」をこのiPadに保存しました`;
+    await switchBook(opened[opened.length - 1].id);
+    stat.textContent = `「${opened.map((b) => b.title).join('」「')}」をこのiPadに保存しました`;
   }
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
   const shelf = $('#shelf');
@@ -1154,7 +1327,7 @@
           if (!d.classList.contains('arm')) { d.classList.add('arm'); d.textContent = 'もう一度押すと削除'; return; }
           const meta = await kv.get('book:' + r.id);
           for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + r.id + ':' + c.id);
-          await kv.del('book:' + r.id);
+          await kv.del('book:' + r.id); await kv.del('pdf:' + r.id);
           await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== r.id));
           if (r.id === src) { CH = null; cs = null; await switchBook('gh'); }
           showShelf();
