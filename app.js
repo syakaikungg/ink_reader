@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v42';
+  const APP_VERSION = 'ink-reader-v43';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1087,7 +1087,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     else if (erased.length) push({ type: 'erase', list: erased });
     erased = null; pieces = null;
   }
-  // 往復の多い線（ぐちゃぐちゃ）なら、その範囲にほぼ収まる既存の線を返す。該当なしなら null
+  // 往復の多い線（ぐちゃぐちゃ）なら、その線が囲む範囲に半分以上入る既存の線を返す。該当なしなら null
   // 折り返しは縦横それぞれで数える（横の往復・縦のギザギザ・くるくる、どれでも拾う）
   function turnsOn(pts, ax, minRun) {
     let turns = 0, dir = 0, anchor = pts[0][ax];
@@ -1098,6 +1098,17 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
       else if ((dir > 0 && dv > 0) || (dir < 0 && dv < 0)) anchor = p[ax];
     }
     return turns;
+  }
+  function convexHull(p) {
+    p = p.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+    for (const q of p) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (const q of p.reverse()) { while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
+  }
+  function segDist(x, y, [x0, y0], [x1, y1]) {
+    const dx = x1 - x0, dy = y1 - y0, l = dx * dx + dy * dy, k = l ? Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / l)) : 0;
+    return Math.hypot(x - x0 - k * dx, y - y0 - k * dy);
   }
   function scribbleTargets(s) {
     const pts = s.pts;
@@ -1111,20 +1122,22 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     // 5回以上折り返す（m・w は3回、続け書きの漢字もたいてい4回まで）。横長・縦長の範囲を長く往復するなら3回でよい
     const r = Math.max(w, h) / Math.max(1, Math.min(w, h)), long = w >= h ? tx : tz;
     if (Math.max(tx, tz) < 5 && !(r >= 2 && long >= 3)) return null;
-    const pad = Math.max(6 * u, Math.min(w, h) * .2), hit = [];
+    // 消すのは、ぐちゃぐちゃの線が囲む範囲（点の凸包）の中に半分以上ある線。凸包の外へは、ぐちゃぐちゃの太さの半分と画面 2px だけ広げる
+    const hull = convexHull(pts.map(([x, y]) => [x, y + ty])), m = s.s / 2 + 2 * u, hit = [];
+    const inHull = (x, y) => inPoly(x, y, hull) || hull.some((q, k) => segDist(x, y, q, hull[(k + 1) % hull.length]) < m);
     for (const o of strokes) {
       if (o.hid) continue;
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
-      if (oc < a - pad || oa > c + pad || od + oy < b - pad || ob + oy > d + pad) continue;
+      if (oc < a - m || oa > c + m || od + oy < b - m || ob + oy > d + m) continue;
       let inside = 0;
-      for (const [x, y] of o.pts) if (x >= a - pad && x <= c + pad && y + oy >= b - pad && y + oy <= d + pad) inside++;
+      for (const [x, y] of o.pts) if (inHull(x, y + oy)) inside++;
       if (inside / o.pts.length < .5) continue;
-      // ぐちゃぐちゃが実際にその線の上を通っていること。点のような短い線は、インクが重なっているときだけ
-      const dot = Math.max(oc - oa, od - ob) < 4 * u;
-      const r2 = (dot ? Math.max(o.s || 3, s.s) * 1.5 : Math.max(o.s || 8, s.s) + 6 * u) ** 2, need = dot ? 1 : Math.min(2, o.pts.length);
-      let near = 0;
-      outer: for (const [x, y] of o.pts) for (const [sx, sy] of pts) if ((x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2) { near++; if (near >= need) break outer; break; }
-      if (near >= need) hit.push(o);
+      // 点のような短い線は、ぐちゃぐちゃのインクが実際に重なるときだけ（字の中の点を巻き込まない）
+      if (Math.max(oc - oa, od - ob) < 4 * u) {
+        const r2 = (Math.max(o.s || 3, s.s) * 1.5) ** 2;
+        if (!o.pts.some(([x, y]) => pts.some(([sx, sy]) => (x - sx) ** 2 + (y + oy - sy - ty) ** 2 < r2))) continue;
+      }
+      hit.push(o);
     }
     return hit.length ? hit : null;
   }
