@@ -1718,7 +1718,7 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (loopT) { const [x, y] = toPage(list[list.length - 1]); if (Math.hypot(x - loopAt[0], y - loopAt[1]) > 5 / scale) { clearTimeout(loopT); loopT = 0; } }
     if (cur.shape) { adjustLive(toRel(list[list.length - 1])); return; }
     for (const ev of list) pending.push(toRel(ev));
-    predicted = e.getPredictedEvents ? e.getPredictedEvents().map(toRel) : [];
+    predicted = e.getPredictedEvents ? clipAhead(pending[pending.length - 1], e.getPredictedEvents().map(toRel)) : [];
     if (!raf) raf = requestAnimationFrame(frame);
     // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角。マーカーは直線だけ）
     if (cur.tool === 'pen' || cur.tool === 'hl') {
@@ -1726,6 +1726,16 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
       if (!hold || Math.hypot(q[0] - hold[0], q[1] - hold[1]) > 3) { hold = q; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
     }
   });
+  // 予測点は、ペンの先から画面の 5px までにとどめる。長く伸ばすと、離したときにその分が消えて線の終わりが途切れて見える
+  function clipAhead(from, list) {
+    const out = []; let left = 5 / scale, q0 = from;
+    for (const q of list) {
+      const l = Math.hypot(q[0] - q0[0], q[1] - q0[1]);
+      if (l >= left) { const k = left / l; out.push([q0[0] + (q[0] - q0[0]) * k, q0[1] + (q[1] - q0[1]) * k, q[2]]); break; }
+      out.push(q); left -= l; q0 = q;
+    }
+    return out;
+  }
   function snapShape() {
     if (!cur || cur.shape || curId === null) return;
     if (pending.length) { cur.pts.push(...pending); pending = []; }
@@ -1746,6 +1756,12 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
     if (tool === 'ls') { lassoUp(); return; }
     if (!cur) return;
     if (pending.length) { cur.pts.push(...pending); pending = []; }
+    // 離した位置も最後の点に入れる（最後の pointermove より先まで動いていることがある）
+    if (!cur.shape && e.type === 'pointerup') {
+      const q = toRel(e), l = cur.pts[cur.pts.length - 1];
+      const d = Math.hypot(q[0] - l[0], q[1] - l[1]);
+      if (d > .05 && d < 20 / scale) { q[2] = l[2]; cur.pts.push(q); }
+    }
     predicted = [];
     bbox(cur);
     const victims = cur.tool === 'pen' && !cur.shape ? scribbleTargets(cur) : null;
