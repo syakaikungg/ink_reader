@@ -13,7 +13,7 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await mk.setContent('<style>body{margin:0;font:28px serif} section{height:100vh;page-break-after:always;padding:40px;box-sizing:border-box} p{margin:0 0 30px}</style>' + [1, 2, 3].map((i) => `<section>${[...Array(12)].map((_, j) => `<p>page ${i} line ${j + 1}</p>`).join('')}</section>`).join(''));
   await mk.pdf({ path: path.join(dir, 'sp.pdf'), format: 'A4' }); await mk.close();
 
-  const ctx = await b.newContext({ viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, hasTouch: true });
+  const ctx = await b.newContext({ viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, hasTouch: true, colorScheme: process.env.DARK ? 'dark' : 'light' });
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errs.push(m.text()));
   await p.goto('http://localhost:8770/'); await p.waitForTimeout(300);
   const tool = (t) => p.click(t);

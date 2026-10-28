@@ -287,7 +287,8 @@
     for (const r of spaceRects()) {
       const k = document.createElement('button'); k.type = 'button'; k.dataset.b = r.b; k.dataset.i = r.i;
       if (r.c) {
-        k.className = 'sph fold'; k.style.top = r.y0 + 'px'; k.textContent = `たたんだ余白${r.n ? `（${r.n}画）` : ''}`;
+        k.className = 'sph fold'; k.style.top = r.y0 + 'px';
+        const t = document.createElement('span'); t.textContent = `余白${r.n ? ` ${r.n}画` : ''} ▾`; k.append(t);
         k.setAttribute('aria-label', '余白を開く');
         els.push(k); continue;
       }
