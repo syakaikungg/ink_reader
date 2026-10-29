@@ -63,15 +63,18 @@ body {
 /* ---------- toolbar ---------- */
 #bar {
   position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
-  margin: 0 auto 14px; padding: 8px 10px; max-width: 980px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px;
+  /* 紙の左右の余白（body の padding）まで広げて、画面の端から端までの帯にする */
+  margin: 0 calc(-1 * max(16px, env(safe-area-inset-right, 0px))) 14px calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding: 8px max(10px, env(safe-area-inset-right, 0px)) 8px max(10px, env(safe-area-inset-left, 0px));
   background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--rule);
   -webkit-user-select: none; user-select: none;
 }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bar); }
 .grp { display: flex; align-items: center; gap: 4px; }
-.grp + .grp { padding-left: 10px; border-left: 1px solid var(--rule); }
+.grp + .grp { padding-left: 8px; border-left: 1px solid var(--rule); }
+#bar button { padding: 0 9px; }
 button {
   font: 600 13px/1 var(--f-ui); color: var(--fg); background: transparent;
   border: 1px solid transparent; border-radius: 8px; min-width: 40px; height: 38px; padding: 0 10px;
@@ -83,10 +86,19 @@ button:disabled { opacity: .35; }
 .sw { width: 18px; height: 18px; border-radius: 50%; display: inline-block; vertical-align: middle; }
 .sw.k { background: var(--ink-k); } .sw.r { background: var(--ink-r); } .sw.b { background: var(--ink-b); }
 .dot { display: inline-block; border-radius: 50%; background: currentColor; vertical-align: middle; }
+/* 「ペン」の前の点は、いま書く色と太さ（app.js の showPen） */
+#t-pen { display: inline-flex; align-items: center; gap: 6px; }
+#t-pen .dot { flex: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 12%, transparent); }
 #zoomv { font-variant-numeric: tabular-nums; width: 80px; }
 /* 文言の長さでツールバーが折り返し直して紙が動かないよう、大きさを固定（2行まで） */
-#stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; width: 14em; height: 2.6em; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; }
+#stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; width: 13em; height: 2.6em; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; }
 #chap { border-color: var(--rule); background: var(--paper); max-width: 15em; display: inline-flex; align-items: center; gap: 4px; }
+/* 縦向きなど幅が足りないときは、ツールを1行にまとめ、知らせはその下の細い1行にする */
+@media (max-width: 940px) {
+  #stat { display: block; width: auto; flex-basis: 100%; height: 1.4em; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
+  #chap { max-width: 12em; }
+}
+@media (max-width: 800px) { #chap { max-width: 8em; } }
 #chap-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 select {
   font: 600 13px/1 var(--f-ui); color: var(--fg); background: var(--paper);
@@ -96,10 +108,20 @@ select {
 #cfg-ver { font-size: 12px; font-weight: normal; color: var(--muted); margin-left: 6px; }
 #foot button { border-color: var(--rule); background: var(--paper); }
 #doc.loading { opacity: .35; }
-#clear.arm { color: var(--ink-r); border-color: var(--ink-r); }
+/* 戻す・進む: 紙の左上に浮かぶ小さな札（ツールバーの下。高さ --bar-h は app.js が入れる） */
+#hist { position: fixed; z-index: 15; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 56px) + 10px);
+  display: flex; padding: 2px; border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(20,30,60,.1);
+  -webkit-user-select: none; user-select: none; }
+#hist button { min-width: 0; width: 44px; height: 38px; padding: 0; border-radius: 11px; color: var(--fg); display: flex; align-items: center; justify-content: center; }
+#hist button + button { position: relative; }
+#hist button + button::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; border-left: 1px solid var(--rule); }
+#hist svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#hist button:disabled { opacity: .3; }
+#empty:not([hidden]) ~ #hist { display: none; }
 
 #hint {
-  max-width: 680px; margin: 0 auto 14px; font-size: 13px; line-height: 1.6; color: var(--muted);
+  max-width: 680px; margin: 0 auto 14px; padding-top: 46px; font-size: 13px; line-height: 1.6; color: var(--muted);   /* 上は戻す・進むの札の分あける */
   display: flex; gap: 12px; align-items: flex-start;
 }
 #hint p { margin: 0; flex: 1; min-width: 0; }
@@ -139,7 +161,7 @@ html, body, body * { touch-action: manipulation; }
 /* 色・太さを変える小窓（選んでいるボタンをもう一度押すと出る） */
 #pop { position: fixed; z-index: 40; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
 #pop[hidden] { display: none; }
-#pop-colors { display: grid; grid-template-columns: repeat(6, 36px); gap: 6px; }
+#pop-colors { display: grid; grid-template-columns: repeat(7, 36px); gap: 6px; }
 #pop-colors button { min-width: 0; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
 #pop-colors button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
 #pop-colors .sw { width: 24px; height: 24px; }
@@ -147,9 +169,14 @@ html, body, body * { touch-action: manipulation; }
   background: conic-gradient(#e33, #e93, #ed3, #3c5, #3cd, #36e, #93e, #e3a, #e33); }
 #pop-colors .more input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 #ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-#pop-size { display: flex; align-items: center; gap: 10px; }
-#pop-size input { width: 200px; }
-#pop-er[hidden] { display: none; }
+#pop-pen[hidden], #pop-er[hidden] { display: none; }
+/* 太さ: 3つから選び、下のつまみで選んだ太さを変える */
+#pop-size { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+#pop-size .seg { display: flex; gap: 6px; margin-bottom: 6px; }
+#pop-size .seg button { flex: 1; height: 40px; display: flex; align-items: center; justify-content: center; }
+#pop-size .seg span { width: 30px; border-radius: 8px; }   /* 太さの見本（高さは app.js が入れる） */
+#pop-size .seg button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+#pop-size input { display: block; width: 100%; margin: 0; }
 #pop-er .seg { display: flex; gap: 6px; margin-bottom: 10px; }
 #pop-er .seg button { flex: 1; white-space: nowrap; }
 #pop-er .seg button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
@@ -157,8 +184,10 @@ html, body, body * { touch-action: manipulation; }
 #pop-er .ring-box { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; }
 #pop-er .ring { border: 1.5px solid var(--fg); border-radius: 50%; }
 #pop-er input { width: 160px; }
+#clear { display: block; width: 100%; margin-top: 10px; border-color: var(--rule); font-weight: 400; color: var(--muted); }
+#clear.arm { color: var(--ink-r); border-color: var(--ink-r); font-weight: 600; }
 #ink .er-ring { fill: var(--accent); fill-opacity: .12; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
-#pop-size .dot { background: var(--fg); } #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
+#ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
 #ink .hl { fill: var(--hl); opacity: var(--hl-op); mix-blend-mode: var(--hl-blend); }
 
 #doc {
@@ -336,29 +365,13 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 <div id="bar" role="toolbar" aria-label="書き込みツール">
   <div class="grp">
     <button id="books" title="本を選ぶ・ファイルから開く">本</button>
-    <button id="prev" aria-label="前の章">‹</button>
-    <button id="chap" aria-label="目次・しおり" title="目次・しおり"><span id="chap-t"></span> ▾</button>
-    <button id="next" aria-label="次の章">›</button>
+    <button id="chap" aria-label="目次・しおり" title="目次・しおり（章の切り替えもここから）"><span id="chap-t"></span> ▾</button>
   </div>
   <div class="grp">
-    <button id="t-pen" aria-pressed="true" title="ペン">ペン</button>
+    <button id="t-pen" aria-pressed="true" title="ペン（もう一度押すと色・太さ）"><span class="dot"></span>ペン</button>
     <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
-    <button id="t-er" aria-pressed="false" title="消しゴム">消しゴム</button>
+    <button id="t-er" aria-pressed="false" title="消しゴム（もう一度押すと消し方・大きさ）">消しゴム</button>
     <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・色変更・削除）">投げ縄</button>
-  </div>
-  <div class="grp" id="colors" title="選んでいる色をもう一度押すと、色を変えられます">
-    <button data-c="k" aria-pressed="true" aria-label="黒"><span class="sw k"></span></button>
-    <button data-c="r" aria-pressed="false" aria-label="赤"><span class="sw r"></span></button>
-    <button data-c="b" aria-pressed="false" aria-label="青"><span class="sw b"></span></button>
-  </div>
-  <div class="grp" id="sizes" title="選んでいる太さをもう一度押すと、太さを変えられます">
-    <button data-s="2.2" aria-pressed="false" aria-label="細"><span class="dot" style="width:4px;height:4px"></span></button>
-    <button data-s="3.4" aria-pressed="true" aria-label="中"><span class="dot" style="width:7px;height:7px"></span></button>
-    <button data-s="5.5" aria-pressed="false" aria-label="太"><span class="dot" style="width:11px;height:11px"></span></button>
-  </div>
-  <div class="grp">
-    <button id="undo" disabled title="元に戻す">戻す</button>
-    <button id="redo" disabled title="やり直す">進む</button>
   </div>
   <div class="grp">
     <select id="zoomv" aria-label="拡大率" title="2本指のピンチでも拡大・縮小できます">
@@ -367,17 +380,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
       <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option>
       <option value="1.5">150%</option><option value="2">200%</option><option value="2.5">250%</option><option value="3">300%</option>
     </select>
-  </div>
-  <div class="grp">
     <button id="finger" aria-pressed="false" title="オンにすると指でも書ける（スクロールはできなくなる）">指で書く</button>
-    <button id="clear">全消去</button>
     <button id="gear" aria-label="設定">設定</button>
   </div>
   <div id="stat" aria-live="polite">Pencilで書いてみてください</div>
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。選んでいる色・太さをもう一度押すと、色や太さを変えられます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます。「投げ縄」で囲むと、ドラッグで移動、色・太さボタンで変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。「ペン」をもう一度押すと、色と太さを選べます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。左上の矢印で、戻す・進むができます。「投げ縄」で囲むと、ドラッグで移動、「色・太さ」で変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（sakai_study で聞いた答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。GitHub の本は、書き込みが通信できるときに GitHub へ送られます。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -399,6 +409,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   </div>
   <div id="selmenu" hidden>
     <span id="sel-n"></span>
+    <button id="sel-pen">色・太さ</button>
     <button id="sel-ask">Claudeに聞く</button>
     <button id="sel-gap">下に余白</button>
     <button id="sel-ungap">余白を消す</button>
@@ -406,6 +417,10 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="sel-x">解除</button>
   </div>
 </div>
+</div>
+<div id="hist" role="group" aria-label="戻す・進む">
+  <button id="undo" disabled aria-label="元に戻す" title="元に戻す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5 4 9.5 8.5 14M4.5 9.5H15a4.75 4.75 0 0 1 0 9.5h-3"/></svg></button>
+  <button id="redo" disabled aria-label="やり直す" title="やり直す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5 20 9.5 15.5 14M19.5 9.5H9a4.75 4.75 0 0 0 0 9.5h3"/></svg></button>
 </div>
 <button id="pgno" hidden aria-label="ページの一覧"><span id="pg-c"></span> / <span id="pg-n"></span></button>
 <nav id="foot" aria-label="章の移動">
@@ -452,11 +467,17 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 </dialog>
 
 <div id="pop" hidden>
-  <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
-  <label id="pop-size"><span class="dot"></span><input type="range" min="1" max="12" step="0.2" aria-label="太さ"></label>
+  <div id="pop-pen">
+    <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
+    <div id="pop-size">
+      <div class="seg" role="group" aria-label="太さを選ぶ"><button type="button" aria-label="細"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="太"><span></span></button></div>
+      <input type="range" min="1" max="12" step="0.2" aria-label="太さ">
+    </div>
+  </div>
   <div id="pop-er">
     <div class="seg" role="group" aria-label="消し方"><button type="button" data-m="stroke">線ごと</button><button type="button" data-m="part">なぞった所</button></div>
     <label><span class="ring-box"><span class="ring"></span></span><input type="range" min="4" max="30" step="1" aria-label="消しゴムの大きさ"></label>
+    <button type="button" id="clear"></button>
   </div>
 </div>
 

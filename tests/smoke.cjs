@@ -127,18 +127,21 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#chap'); await p.click('#toc-main > h2'); console.log('inside tap keeps', await p.evaluate(() => document.getElementById('toc').open));
   await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
 
-  // ペン: 選んでいる色をもう一度押すと色の一覧 → 選んだ色で描ける。太さも同じ。ペンを止めて押さえると図形に直る
-  await p.click('#t-pen'); await p.click('#colors button:nth-child(2)'); await p.click('#colors button:nth-child(2)');
-  console.log('palette open', await p.isVisible('#pop-colors')); await p.screenshot({ path: path.join(OUT, 'palette.png'), clip: { x: 0, y: 0, width: 820, height: 260 } });
+  // ペン: 選んでいる「ペン」をもう一度押すと色と太さの小窓 → 選んだ色で描ける（書き始めると閉じる）。太さは3つから選び、つまみで変える。
+  // ペンを止めて押さえると図形に直る
+  const pens = () => p.evaluate(() => JSON.parse(localStorage.getItem('ink:pens')));
+  const penPop = async () => { if (await p.getAttribute('#t-pen', 'aria-pressed') !== 'true') await p.click('#t-pen'); if (await p.isHidden('#pop')) await p.click('#t-pen'); };
+  await penPop();
+  console.log('pen pop open', await p.isVisible('#pop-colors'), await p.isVisible('#pop-size')); await p.screenshot({ path: path.join(OUT, 'palette.png'), clip: { x: 0, y: 0, width: 820, height: 360 } });
   await p.click('#pop-colors button:nth-child(4)');
-  console.log('palette pick', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), 'closed', await p.isHidden('#pop'));
+  console.log('palette pick', (await pens()).c, await p.evaluate(() => document.querySelector('#t-pen .dot').style.background), 'still open', await p.isVisible('#pop'));
   const py = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[3]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top; });
   await line(150, py + 10); await p.waitForTimeout(200);
-  console.log('custom color fill', await p.evaluate(() => { const ps = [...document.querySelectorAll('#ink path')]; return ps[ps.length - 1].style.fill; }));
-  await p.click('#sizes button:nth-child(2)'); console.log('size pop', await p.isVisible('#pop-size'));
+  console.log('custom color fill', await p.evaluate(() => { const ps = [...document.querySelectorAll('#ink path')]; return ps[ps.length - 1].style.fill; }), 'closed by writing', await p.isHidden('#pop'));
+  await penPop(); await p.click('#pop-size .seg button:nth-child(2)'); console.log('size pop', await p.isVisible('#pop-size'));
   await p.evaluate(() => { const r = document.querySelector('#pop-size input'); r.value = '8'; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); });
-  await p.mouse.click(400, 1150); console.log('size', await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), 'closed', await p.isHidden('#pop'));
-  await p.click('#sizes button:nth-child(1)'); await p.click('#colors button:nth-child(1)');
+  await p.mouse.click(5, 400); console.log('size', JSON.stringify((await pens()).s), 'closed', await p.isHidden('#pop'));
+  await penPop(); await p.click('#pop-size .seg button:nth-child(1)'); await p.click('#pop-colors button:nth-child(1)'); await p.mouse.click(5, 400);
   const hold = async (pts) => { await p.mouse.move(...pts[0]); await p.mouse.down(); for (const q of pts) await p.mouse.move(q[0], q[1]); await p.waitForTimeout(650); const s = await p.textContent('#stat'); await p.mouse.up(); await p.waitForTimeout(100); return s; };
   // 直線: 書き始めに小さなはね、止めている間のぶれがあっても直線になる
   const wob = [[150, py + 206], [146, py + 203]]; for (let i = 0; i <= 30; i++) wob.push([150 + i * 10, py + 200 + (i % 3) * 2]);
@@ -170,8 +173,12 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#t-ls'); const lc = await toScr(400, 0); const cy0 = await p.evaluate(() => { const c = [...document.querySelectorAll('#ink path')]; return 0; });
   const circY = py + 330; const cp = [[320, circY - 80], [480, circY - 80], [480, circY + 80], [320, circY + 80], [320, circY - 78]];
   await p.mouse.move(...cp[0]); await p.mouse.down(); for (const q of cp) for (let k = 1; k <= 4; k++) await p.mouse.move(q[0], q[1]); await p.mouse.up(); await p.waitForTimeout(150);
-  console.log('lasso shape after reload', await p.textContent('#sel-n'), 'handles', (await hd()).length); await p.click('#sel-x'); await p.click('#t-pen');
-  console.log('pens after reload', await p.getAttribute('#colors button:nth-child(2)', 'data-c'), await p.getAttribute('#sizes button:nth-child(2)', 'data-s'), await p.evaluate(() => [...document.querySelectorAll('#ink path')].some((x) => x.style.fill === 'rgb(31, 138, 76)')));
+  console.log('lasso shape after reload', await p.textContent('#sel-n'), 'handles', (await hd()).length);
+  // 投げ縄で選んだ線は、メニューの「色・太さ」で変える（ペンの色は変わらない）
+  await p.click('#sel-pen'); await p.click('#pop-colors button:nth-child(3)'); await p.waitForTimeout(100);
+  console.log('lasso recolor', await p.evaluate(() => document.querySelectorAll('#ink path.b').length), 'pen', (await pens()).c, 'pop open', await p.isVisible('#pop'));
+  await p.click('#sel-x'); console.log('pop closed with selection', await p.isHidden('#pop')); await p.click('#t-pen');
+  console.log('pens after reload', JSON.stringify(await pens()), await p.evaluate(() => document.querySelector('#t-pen .dot').style.background), await p.evaluate(() => [...document.querySelectorAll('#ink path')].some((x) => x.style.fill === 'rgb(31, 138, 76)')));
   // 少し傾いて少し曲がった線も、水平な直線になる。傾いた四角形も水平・垂直にそろう
   const qy = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[9]; el.scrollIntoView({ block: 'start' }); return el.getBoundingClientRect().top + 80; });
   const tl = []; for (let i = 0; i <= 30; i++) tl.push([150 + i * 10, qy + 60 + i * 10 * Math.tan(7 * Math.PI / 180) + 8 * Math.sin(i / 30 * Math.PI)]);
@@ -220,6 +227,13 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#t-er'); await p.click('#pop-er [data-m=stroke]');
   await p.mouse.move(375, ly2 - 40); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(375, ly2 - 40 + i * 10); await p.mouse.up(); await p.waitForTimeout(150);
   console.log('stroke erase', await npath(), 'saved', await p.evaluate(() => Object.keys(localStorage).filter((k) => /eraser/.test(k)).map((k) => localStorage[k])));
+  // 全部消す: 消しゴムの小窓の中。1回目は確かめるだけ、もう一度押すと消え、戻すで戻る
+  await p.click('#t-er'); const n3 = await npath(); await p.click('#clear');
+  console.log('clear armed', await p.textContent('#clear'), await npath());
+  await p.click('#clear'); console.log('cleared', n3, '->', await npath(), 'pop closed', await p.isHidden('#pop'));
+  await p.click('#undo'); await p.waitForTimeout(100); console.log('undo clear', await npath());
+  // 戻す・進むの札は、ツールバーのすぐ下の左端
+  console.log('hist', await p.evaluate(() => { const h = document.getElementById('hist').getBoundingClientRect(), b = document.getElementById('bar').getBoundingClientRect(); return [Math.round(h.left), Math.round(h.top - b.bottom)]; }));
   await p.click('#t-pen');
 
   // ファイルから開く（GitHub なし）: 開く → 書く → 再読み込みで残る → GitHub の本に戻る
