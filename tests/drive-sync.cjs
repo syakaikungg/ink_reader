@@ -28,9 +28,7 @@ const drv = createDrive(), { files, calls, byPath, twins } = drv;
   await ctx.route('https://api.github.com/**', (r) => { calls.push('GITHUB ' + r.request().url()); r.fulfill({ status: 404, body: '{}' }); });
   await ctx.route('https://claude.ai/**', (r) => r.fulfill({ status: 200, body: 'claude' }));
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404|401/.test(m.text()) && errs.push(m.text()));
-  // 試験ページで入れたクライアント ID（設定に最初から入る）
-  await p.goto('http://localhost:8770/'); await p.evaluate(() => localStorage.setItem('ink-drive-test', JSON.stringify({ cid: 'cid-test.apps.googleusercontent.com' })));
-  await p.reload(); await p.waitForTimeout(300);
+  await p.goto('http://localhost:8770/'); await p.waitForTimeout(300);
   await p.setInputFiles('#empty .open-file', pdfPath);
   await p.waitForFunction((n) => document.querySelectorAll('#doc > .pg').length === n, N, { timeout: 30000 });
   await p.waitForTimeout(800);
@@ -42,11 +40,12 @@ const drv = createDrive(), { files, calls, byPath, twins } = drv;
 
   // 設定から「Google ドライブにつなぐ」
   await p.click('#gear'); await p.waitForTimeout(500);
-  check('クライアント ID は試験ページのものが入る', await p.inputValue('#cfg-dcid') === 'cid-test.apps.googleusercontent.com');
+  check('クライアント ID の欄はない（アプリに入っている）', !(await p.$('#cfg-dcid')));
   check('ボタンは「Google ドライブにつなぐ」', (await p.textContent('#cfg-drive')).trim() === 'Google ドライブにつなぐ');
   await p.click('#cfg-drive'); await p.waitForTimeout(400);
   console.log('drv-msg', await p.textContent('#drv-msg'));
   check('つながった表示', /つながりました/.test(await p.textContent('#drv-msg')));
+  check('アプリのクライアント ID でログインする', await p.evaluate(() => window.__cid) === '475510876028-4so1cqd8mfv7kbeq09fiapqe3vo8eetj.apps.googleusercontent.com');
   await p.click('#cfg button[value=cancel]');
   await p.waitForFunction(() => /ドライブに保存しました/.test(document.getElementById('stat').textContent), null, { timeout: 15000 }).catch(() => {});
   await p.waitForTimeout(1500);

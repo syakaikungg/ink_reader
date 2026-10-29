@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v64';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -432,6 +432,9 @@
   };
   // ドライブは、利用者のマイドライブの「Ink Reader」フォルダの下に置く（パスはその中から）。
   // ログインは Google のポップアップ（押した操作の中でしか開けない）。トークンは 1 時間で切れるので、切れる前後に画面に触れたとき、自動でつなぎ直す
+  // OAuth のクライアント ID はアプリに入れておく（Google Cloud の Ink Reader のプロジェクトのもの）。どの人もこれで自分のドライブにつなぐ。
+  // テスト中の間は、使う人のアドレスを Google Cloud の「テストユーザー」に足しておく
+  const DRIVE_CID = '475510876028-4so1cqd8mfv7kbeq09fiapqe3vo8eetj.apps.googleusercontent.com';
   const drive = (() => {
     const API = 'https://www.googleapis.com/', ROOT = 'Ink Reader', FOLDER = 'application/vnd.google-apps.folder';
     let tok = null, exp = 0, gis = null, who = '';
@@ -447,7 +450,7 @@
     const login = (again) => new Promise((ok, ng) => {
       if (!window.google || !google.accounts) { prep(); return ng(new Error('準備中です。もう一度押してください')); }
       google.accounts.oauth2.initTokenClient({
-        client_id: cfg.dcid, scope: 'https://www.googleapis.com/auth/drive',
+        client_id: DRIVE_CID, scope: 'https://www.googleapis.com/auth/drive',
         ...(again && who ? { login_hint: who } : {}),
         callback: async (r) => {
           if (r.error) return ng(new Error(r.error));
@@ -538,7 +541,7 @@
       },
     };
   })();
-  const driveOn = () => !!(cfg.drive && cfg.dcid);
+  const driveOn = () => !!cfg.drive;
   // 書き込み・画像・答えの置き場所。ドライブにつないでいなければ置き場所はなく、iPad に貯めておいて、つないだら送る
   const where = () => driveOn() ? drive : null;
   const hasRemote = () => driveOn();
@@ -2671,17 +2674,13 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
 
   // ---------- 設定画面 ----------
   const dlg = $('#cfg'), msg = $('#cfg-msg');
-  // Google ドライブ: 書き込み・画像・答えの置き場所。クライアント ID は、前に試験ページ（labs/drive.html）で入れたものがあれば使う
+  // Google ドライブ: 書き込み・画像・答えの置き場所
   function showDrive(m) {
-    if (!cfg.dcid) try { cfg.dcid = JSON.parse(store.get('ink-drive-test') || '{}').cid || ''; } catch {}
-    $('#cfg-dcid').value = cfg.dcid || '';
     $('#cfg-drive').textContent = cfg.drive ? (drive.ok() ? 'ドライブとのつながりを切る' : 'ドライブにつなぎ直す') : 'Google ドライブにつなぐ';
     $('#drv-msg').textContent = m || (cfg.drive ? (drive.ok() ? 'つながっています。書き込み・画像・Claude の答えは、ドライブの「Ink Reader」フォルダに置きます' : 'つながりが切れています（1時間ごとに切れます）') : '');
   }
   $('#cfg-drive').onclick = () => {
-    cfg.dcid = $('#cfg-dcid').value.trim();
     if (cfg.drive && drive.ok()) { cfg.drive = false; store.set(PREF + ':cfg', JSON.stringify(cfg)); return showDrive('切りました（書き込みはこのiPadに残ります）'); }
-    if (!cfg.dcid) return showDrive('クライアント ID を入れてください');
     drive.login().then(() => {
       cfg.drive = true; store.set(PREF + ':cfg', JSON.stringify(cfg)); relogin = false;
       showDrive('つながりました。書き込みを送ります');

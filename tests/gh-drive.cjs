@@ -48,7 +48,7 @@ const sha = (s) => 'h' + require('crypto').createHash('sha1').update(s).digest('
   const sent = () => log.filter((x) => !/^GET /.test(x));
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404|401|403/.test(m.text()) && errs.push(m.text()));
   await p.goto('http://localhost:8771/');
-  await p.evaluate((B) => { localStorage.setItem('ink:cfg', JSON.stringify({ token: 'test', book: B })); localStorage.setItem('ink-drive-test', JSON.stringify({ cid: 'cid-test.apps.googleusercontent.com' })); }, B);
+  await p.evaluate((B) => { localStorage.setItem('ink:cfg', JSON.stringify({ token: 'test', book: B })); }, B);
   await p.reload();
   await p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 30000 });
   await p.waitForTimeout(1500);
