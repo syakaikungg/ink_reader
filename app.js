@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v65';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2412,7 +2412,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   async function openToc(tab) {
     if (!book) return;
     if (!isPdf()) tab = 'main';
-    $('#toc-head').hidden = !isPdf();
+    $('#toc-head').hidden = false; $('#toc-tabs').hidden = !isPdf();   // md の本は「書き出す」だけ
     const ol = isPdf() ? await pdfOutline() : [];
     const label = (c) => (book.chapters.find((x) => x.id === c) || {}).label || c;
     const bms = loadBm().filter((m) => ids.includes(m.c)).sort((x, y) => ids.indexOf(x.c) - ids.indexOf(y.c) || x.b - y.b);
@@ -2534,23 +2534,45 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // ---------- 書き出し（PDF） ----------
   // ページの一覧の「書き出す」を押すと、縮小画像を押して書き出すページ（白紙も1枚ずつ）を選べる。選んだページを、書き込みを重ねた PDF にする。
   // 作り方は export.js（ドライブに置いて、クラウドの Claude も同じものを使う）。export.js と pdf-lib は書き出すときだけ読み込む（ふだんは重くしない）
-  let pick = null, exFile = null, exBusy = false;   // 選んでいるとき: Set('<ページ>:<白紙の番号（0 はページそのもの）>') / 作った PDF（選び直すと捨てる。それまでは、もう一度共有できる）/ 作っている
+  // md の本は、目次の「書き出す」で章を選ぶ。作り方は export-md.js（画面と同じ並びの文字を、字体を埋め込んで文字のまま PDF にする）
+  let pick = null, exFile = null, exBusy = false;   // 選んでいるとき: Set('<ページ>:<白紙の番号（0 はページそのもの）>')（md の本は Set(章の id)） / 作った PDF（選び直すと捨てる。それまでは、もう一度共有できる）/ 作っている
   const exMsg = (t) => { $('#ex-msg').textContent = t; };
   const mb = (f) => f.size < 1048576 ? Math.ceil(f.size / 1024) + 'KB' : (f.size / 1048576).toFixed(1) + 'MB';
   function exShow() {
-    const on = !!pick, pages = isPdf() && !$('#toc-pages').hidden;
+    const on = !!pick, pages = isPdf() && !$('#toc-pages').hidden, chaps = !isPdf() && !!book;
     toc.classList.toggle('picking', on);
-    $('#pg-go').hidden = !pages || on; $('#ex-on').hidden = !pages || on; $('#ex-bar').hidden = $('#ex-msg').hidden = !on;
+    $('#pg-go').hidden = !pages || on; $('#ex-on').hidden = !(pages || chaps) || on; $('#ex-bar').hidden = $('#ex-msg').hidden = !on;
     if (!on) return;
-    const all = grid.children.length && pick.size === grid.children.length;
-    $('#ex-n').textContent = `${pick.size}ページ`;
+    const n = isPdf() ? grid.children.length : book.chapters.length, all = n && pick.size === n;
+    $('#ex-n').textContent = isPdf() ? `${pick.size}ページ` : `${pick.size}章`;
     $('#ex-all').textContent = all ? '選択を解除' : 'すべて選択';
     const go = $('#ex-go');
     if (!go.classList.contains('busy')) { go.disabled = !pick.size; go.textContent = exFile ? '共有する' : 'PDF にする'; }
   }
-  $('#ex-on').onclick = () => { pick = new Set(); exFile = null; exMsg('書き出すページを押して選んでください。後ろの白紙も1枚ずつ選べます。'); exShow(); };
-  $('#ex-x').onclick = () => { pick = null; exFile = null; exShow(); };
+  $('#ex-on').onclick = () => {
+    pick = new Set(); exFile = null;
+    exMsg(isPdf() ? '書き出すページを押して選んでください。後ろの白紙も1枚ずつ選べます。' : '書き出す章を押して選んでください。');
+    exShow();
+    if (!isPdf()) pickChapters();
+  };
+  $('#ex-x').onclick = () => { pick = null; exFile = null; exShow(); if (!isPdf()) openToc('main'); };
+  // md の本: 目次を章だけの一覧にして、押すと印を付けたり外したりする
+  function pickChapters() {
+    $('#toc-list').replaceChildren(...book.chapters.map((c) => {
+      const li = tocItem(c.label, 'ck', () => {
+        if (!pick || exBusy) return;
+        if (pick.has(c.id)) pick.delete(c.id); else pick.add(c.id);
+        li.firstChild.classList.toggle('on', pick.has(c.id)); exFile = null; exShow();
+      });
+      li.firstChild.classList.toggle('on', pick.has(c.id));
+      return li;
+    }));
+  }
   $('#ex-all').onclick = () => {
+    if (!isPdf()) {
+      pick = new Set(pick.size === book.chapters.length ? [] : book.chapters.map((c) => c.id));
+      pickChapters(); exFile = null; exShow(); return;
+    }
     const ths = [...grid.children], all = pick.size === ths.length;
     pick = new Set(all ? [] : ths.map((th) => th.dataset.n + ':' + th.dataset.i));
     for (const th of ths) th.classList.toggle('on', !all);
@@ -2562,7 +2584,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!job || !job.size || exBusy) return;
     exBusy = true; go.classList.add('busy'); go.disabled = $('#ex-all').disabled = true;
     try {
-      const f = await exportPdf(new Set(job), (t) => { if (pick === job) go.textContent = t; });
+      const f = await (isPdf() ? exportPdf : exportMd)(new Set(job), (t) => { if (pick === job) go.textContent = t; });
       if (pick === job) {   // 作っている間に「やめる」を押したり閉じたりしていなければ渡す
         exFile = f; exMsg(`できました（${mb(f)}）`);
         await shareFile(f);
@@ -2596,6 +2618,31 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       L, pdf: await pdfBytes(await kv.get('pdf:' + src)), unlock: () => pdfDoc,
       sizes: book.sizes, title: book.title, ink, gaps: { ...gaps }, sps: spl, keys, say,
       viewT: async (n) => (await pdfDoc.getPage(n)).getViewport({ scale: 1 }).transform,   // 画面で見ていたページの向き・範囲
+    });
+    return new File([bytes], name, { type: 'application/pdf' });
+  }
+  // md の本: 選んだ章の本文（HTML）と書き込みを渡す。字体を埋め込む fontkit も書き出すときだけ読み込む
+  let fontkitP = null;
+  const loadFontkit = () => fontkitP ||= new Promise((ok, ng) => {
+    if (window.fontkit) return ok(window.fontkit);
+    const s = document.createElement('script');
+    s.src = 'vendor/pdf-lib/fontkit.umd.min.js'; s.onload = () => ok(window.fontkit);
+    s.onerror = () => { fontkitP = null; s.remove(); ng(new Error('書き出しの道具を読めませんでした（通信できるときに、もう一度押してください）')); };
+    document.head.append(s);
+  });
+  async function exportMd(chs, say) {
+    say('準備しています');
+    const [{ exportMd: make }, L, fontkit] = await Promise.all([import('./export-md.js'), import('./' + PDFLIB), loadFontkit()]);
+    const list = book.chapters.filter((c) => chs.has(c.id)), chapters = [];
+    for (const c of list) {
+      const html = await chapterHtml(c.id);
+      if (html == null) throw new Error(`「${c.label}」はまだこのiPadに保存されていません`);
+      // 開いている章は、まだ保存していない書き込みも入れる
+      chapters.push({ id: c.id, label: c.label, html, blocks: c.id === CH && cs ? serialize() : ((await kv.get(inkKey(c.id))) || {}).blocks || {} });
+    }
+    const { bytes, name } = await make({
+      L, fontkit, chapters, title: book.title, src: book.source || book.title || '', all: list.length === book.chapters.length, getStroke, say,
+      img: (f) => kv.get('img:' + book.imageDir + '/' + f),
     });
     return new File([bytes], name, { type: 'application/pdf' });
   }

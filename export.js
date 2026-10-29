@@ -7,7 +7,7 @@
 // - ページの境目をまたぐ線は、かかった紙それぞれに描く
 // すべて選んだときは元の PDF に手を入れて使い（目次・リンクが残る）、一部のときは選んだページだけを新しい PDF に写す
 const W = 680, PAGE_GAP = 14;   // app.js と同じ（紙の幅、ページの間の隙間）
-const INK = { k: '#15181f', r: '#d0302a', b: '#1d56d8' }, HL = '#ffd53d';   // 既定の3色（明るい画面のとき）とマーカー
+export const INK = { k: '#15181f', r: '#d0302a', b: '#1d56d8' }, HL = '#ffd53d';   // 既定の3色（明るい画面のとき）とマーカー（export-md.js も使う）
 const pageH = (sizes, n) => Math.round(W * sizes[n - 1][1] / sizes[n - 1][0]);
 // 行列 [a b c d e f]（PDF の cm）。mul(m, n) は m をかけてから n をかける
 const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
