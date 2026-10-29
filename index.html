@@ -169,7 +169,11 @@ html, body, body * { touch-action: manipulation; }
   background: conic-gradient(#e33, #e93, #ed3, #3c5, #3cd, #36e, #93e, #e3a, #e33); }
 #pop-colors .more input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 #ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-#pop-pen[hidden], #pop-er[hidden] { display: none; }
+#pop-pen[hidden], #pop-er[hidden], #pop-kind[hidden] { display: none; }
+/* ペンの種類: 太さ一定か、筆圧（筆圧の取れないペンは書く速さ）で太さが変わるか */
+#pop-kind { display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+#pop-kind button { flex: 1; }
+#pop-kind button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
 /* 太さ: 3つから選び、下のつまみで選んだ太さを変える */
 #pop-size { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
 #pop-size .seg { display: flex; gap: 6px; margin-bottom: 6px; }
@@ -468,6 +472,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 
 <div id="pop" hidden>
   <div id="pop-pen">
+    <div id="pop-kind" role="group" aria-label="ペンの種類"><button type="button" data-k="even">一定</button><button type="button" data-k="pr">筆圧</button></div>
     <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
     <div id="pop-size">
       <div class="seg" role="group" aria-label="太さを選ぶ"><button type="button" aria-label="細"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="太"><span></span></button></div>

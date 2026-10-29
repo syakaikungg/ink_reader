@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v52';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -57,11 +57,14 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   // ---------- geometry ----------
+  // 筆圧のペン（線の pr）: 点の筆圧で太さを変える。Safari の Apple Pencil の筆圧はふつうに書いて 0.1〜0.3 ほど（いちばん強く押すと 1）なので、
+  // PRESS 倍して perfect-freehand の真ん中（0.5 のときにペンの太さ）に合わせる。筆圧の取れないペンは、書く速さから作った筆圧を点に入れる（pressIn）
+  const PRESS = 2;
   function opts(s, last) {
     if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last,
       start: { cap: false }, end: { cap: false } };
-    // ペンは太さ一定（筆圧で太さを変えない）。点の筆圧は保存したままなので、筆圧で変わるペンを足すときに使える
-    return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
+    // ふつうのペンは太さ一定。図形に直した線も、筆圧のペンで書いたものでも太さ一定
+    return { size: s.s, thinning: s.pr && !s.g ? .65 : 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
   }
   function pathD(outline) {
     const n = outline.length;
@@ -117,7 +120,7 @@
     if (last) q = trimTail(q, Math.min(o.size, 3));   // 書いている途中に削ると、ペン先の手前が直線になる
     // perfect-freehand は線の終わりの長さ 3（座標の単位）を直線でつなぐ。紙の px のまま渡すと、拡大して書いたときに
     // ペン先の後ろについてくる短い棒に見えるので、10 倍して渡して戻す
-    const out = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, pr]), { ...o, size: o.size * 10 });
+    const out = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, Math.min(1, pr * PRESS)]), { ...o, size: o.size * 10 });
     s.el.setAttribute('d', pathD(out.map(([x, y]) => [x / 10, y / 10])));
   }
   function bbox(s) {
@@ -146,7 +149,7 @@
   }
 
   // ---------- serialize ----------
-  const ser = (s) => ({ t: s.tool, c: s.c, s: s.s, pen: !!s.pen,
+  const ser = (s) => ({ t: s.tool, c: s.c, s: s.s, pen: !!s.pen, ...(s.pr ? { pr: 1 } : {}),
     p: s.pts.flatMap(([x, y, p]) => [Math.round(x * 10), Math.round(y * 10), Math.round(p * 100)]),
     // 図形に直した線は、あとで形を変えられるよう図形の形も残す（k: line・poly・ellipse・circle、v: 頂点か [中心, 半径]、a: 傾き）
     ...(s.g ? { g: { k: s.g.k, v: s.g.v.flatMap(([x, y]) => [Math.round(x * 10), Math.round(y * 10)]), a: Math.round((s.g.a || 0) * 1000), p: Math.round(s.g.p * 100) } } : {}) });
@@ -159,7 +162,7 @@
       seen.push(k); if (seen.length > 16) seen.shift();
       pts.push([d.p[i] / 10, d.p[i + 1] / 10, d.p[i + 2] / 100]);
     }
-    const s = { id, b, tool: d.t, c: d.c, s: d.s, pen: d.pen, pts };
+    const s = { id, b, tool: d.t, c: d.c, s: d.s, pen: d.pen, ...(d.pr ? { pr: 1 } : {}), pts };
     if (d.g) { const v = []; for (let i = 0; i + 1 < d.g.v.length; i += 2) v.push([d.g.v[i] / 10, d.g.v[i + 1] / 10]); s.g = { k: d.g.k, v, a: d.g.a / 1000, p: d.g.p / 100 }; }
     bbox(s); return s;
   }
@@ -266,7 +269,7 @@
       const y = sy(x);
       if (rm && y >= rm[0] && y < rm[1]) del.push(x);
       else if (dy && y >= e) {
-        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
+        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, ...(x.pr ? { pr: 1 } : {}), pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
         if (x.g) m.g = moveG(x.g, 0, dy);
         bbox(m); old.push(x); moved.push(m);
       }
@@ -1052,7 +1055,15 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   let si = widths[pens.si] ? pens.si : 1;
   color = (Array.isArray(pens.c) ? pens.c[pens.ci] : pens.c) || 'k';   // 前の版はツールバーに色を3つ持っていた
   size = widths[si];
-  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si }));
+  let byPr = !!pens.pr;   // 筆圧のペン（小窓の一番上の「一定｜筆圧」）
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si, pr: byPr ? 1 : 0 }));
+  const kindBtns = [...document.querySelectorAll('#pop-kind button')];
+  // 投げ縄で選んだ線の「色・太さ」では出さない（ペンの種類は書くときに決める）
+  function showKind() {
+    $('#pop-kind').hidden = popFor === selPen;
+    kindBtns.forEach((x) => x.setAttribute('aria-pressed', String((x.dataset.k === 'pr') === byPr)));
+  }
+  kindBtns.forEach((x) => x.onclick = () => { byPr = x.dataset.k === 'pr'; savePens(); showKind(); });
   const ink = (c) => /^#/.test(c) ? c : `var(--ink-${c})`;
   const swatch = (el, c) => { el.className = 'sw'; el.style.background = ink(c); };
   const dotSize = (el, s) => { const w = Math.max(3, Math.min(16, s * 2)) + 'px'; el.style.width = el.style.height = w; };
@@ -1107,7 +1118,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     popFor = btn;
     popPen.hidden = kind !== 'p'; popEr.hidden = kind !== 'e';
     if (kind === 'e') { for (const x of popEr.querySelectorAll('[data-m]')) x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)); erRange.value = eraser.r; ringSize(eraser.r); armClear(false); }
-    else { showColors(); showSizes(); }
+    else { showKind(); showColors(); showSizes(); }
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
     pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
@@ -1259,7 +1270,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (pieces.has(s)) pieces.delete(s); else erased.push(s);
     for (const pts of runs) {
       if (pts.length < 2) continue;
-      const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts };
+      const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, ...(s.pr ? { pr: 1 } : {}), pts };
       bbox(n); addAll([n]); pieces.add(n);
     }
   }
@@ -1392,7 +1403,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       const abs = s.pts.map(([x, y, p]) => [x + dx, y + ty + dy, p]);
       let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
       const b = blockAt(minY), t = tops[b] - (toSto(b, minY - tops[b]) - (minY - tops[b]));   // たたんだ余白の下なら、開いたときの位置にする
-      const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
+      const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, ...(s.pr ? { pr: 1 } : {}), pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
       if (s.g) n.g = moveG(s.g, dx, ty + dy - t);
       bbox(n); return n;
     });
@@ -1931,7 +1942,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function endHandle() {
     const s = edit, { g0, pts0 } = hdrag; hdrag = null;
     if (JSON.stringify(s.g) === JSON.stringify(g0)) { s.g = g0; s.pts = pts0; render(s, null, true); showHandles(); return; }   // 触っただけ
-    const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, g: s.g, pts: s.pts };
+    const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, ...(s.pr ? { pr: 1 } : {}), g: s.g, pts: s.pts };
     s.g = g0; s.pts = pts0; render(s, null, true);
     bbox(n); removeAll([s]); addAll([n]); push({ type: 'replace', from: [s], to: [n] });
     if (sel.includes(s)) { sel = [n]; showSel(); }
@@ -1957,6 +1968,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const y = toPage(e)[1], b = blockAt(y);
     curTop = tops[b] - (toSto(b, y - tops[b]) - (y - tops[b]));   // たたんだ余白の下では、開いたときの位置で持つ
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
+    if (tool === 'pen' && byPr) { cur.pr = 1; prs = { x: e.clientX, y: e.clientY, t: e.timeStamp, f: .5, raw: [], lo: 1, hi: 0, real: false }; pressIn(e, cur.pts[0]); } else prs = null;
     cur.el = document.createElementNS(NS, 'path'); paint(cur.el, cur);
     hold = null; holdC = null; holdT = 0;
     mount(cur); render(cur, null, false);
@@ -1983,8 +1995,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!cur) return;
     if (loopT) { const [x, y] = toPage(list[list.length - 1]); if (Math.hypot(x - loopAt[0], y - loopAt[1]) > 5 / scale) { clearTimeout(loopT); loopT = 0; } }
     if (cur.shape) { adjustLive(toRel(list[list.length - 1])); return; }
-    for (const ev of list) pending.push(toRel(ev));
+    for (const ev of list) pending.push(prs ? pressIn(ev, toRel(ev)) : toRel(ev));
     predicted = e.getPredictedEvents ? clipAhead(pending[pending.length - 1], e.getPredictedEvents().map(toRel)) : [];
+    if (prs) for (const q of predicted) q[2] = pending[pending.length - 1][2];
     if (!raf) raf = requestAnimationFrame(frame);
     // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角。マーカーは直線だけ）
     if (cur.tool === 'pen' || cur.tool === 'hl') {
@@ -1993,6 +2006,22 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (!holdC || Math.hypot(c[0] - holdC[0], c[1] - holdC[1]) > 5) { hold = q; holdC = c; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
     }
   });
+  // 筆圧のペン: 筆圧の取れないペン（どの点も同じ値が来る）では、画面の上で書く速さから筆圧を作って点に入れる（ゆっくりは太く、速いと細い）。
+  // 画面の上の速さで決めるので、拡大率によらず同じ書き味になる。筆圧が変わりはじめたら（筆圧の取れるペン）、それまでの点も本当の筆圧に戻す
+  let prs = null;   // 書いている線の { x, y, t（前の点の画面の位置と時刻）, f（作った筆圧）, raw（届いた筆圧）, lo, hi, real }
+  function pressIn(ev, q) {
+    const c = prs;
+    c.raw.push(q[2]); c.lo = Math.min(c.lo, q[2]); c.hi = Math.max(c.hi, q[2]);
+    if (!c.real && c.hi - c.lo >= .03) { c.real = true; cur.pts.concat(pending).forEach((r, i) => { r[2] = c.raw[i]; }); }
+    if (c.real) return q;
+    // 速さ v は画面の px / ms。手で字を書く速さはふつう 0.1〜0.3（秒速 2〜6cm）、はね・はらいで 0.6 ほど。
+    // ふつうの速さでペンの太さの 0.9〜1.2 倍、はね・はらいで 0.5 倍ほど（筆圧 0.5 がペンの太さ）。30ms ほどかけて追いつかせる
+    const dt = ev.timeStamp > c.t ? ev.timeStamp - c.t : 4, v = Math.hypot(ev.clientX - c.x, ev.clientY - c.y) / dt;
+    c.f += (Math.max(.1, Math.min(.9, .75 - v)) - c.f) * (1 - Math.exp(-dt / 30));
+    c.x = ev.clientX; c.y = ev.clientY; c.t = ev.timeStamp;
+    q[2] = Math.round(c.f / PRESS * 100) / 100;
+    return q;
+  }
   // 予測点は、ペンの先から画面の 5px までにとどめる。長く伸ばすと、離したときにその分が消えて線の終わりが途切れて見える
   function clipAhead(from, list) {
     const out = []; let left = 5 / scale, q0 = from;
