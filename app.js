@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v63';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2720,6 +2720,25 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (await connect(false)) setTimeout(() => dlg.close(), 600);
   };
   $('#cfg-sync').onclick = () => connect(true);
+
+  // ---------- 見本の本 ----------
+  // sample/guide.md を決まった id の本にする。2回目からは端末にある本（と書き込み）をそのまま開く
+  const SAMPLE = 'local:sample';
+  async function openSample() {
+    if (!await kv.get('book:' + SAMPLE)) {
+      const r = await fetch('sample/guide.md');
+      if (!r.ok) throw new Error('見本の本が見つかりません');
+      const md = await r.text(), label = mdTitle(md, 'guide.md');
+      await kv.set('md:' + SAMPLE + ':c1', { sha: 'sample', md });
+      await addBook(SAMPLE, { title: label, local: true, chapters: [{ id: 'c1', label, file: 'guide.md' }], images: {} });
+    }
+    $('#hint').hidden = true; store.set(PREF + ':hint', '0');
+    if (src !== SAMPLE || !CH) await switchBook(SAMPLE);
+  }
+  for (const el of document.querySelectorAll('.open-sample')) el.onclick = () => {
+    const d = el.closest('dialog'); if (d) d.close();
+    openSample().catch((e) => { stat.textContent = '見本の本を開けませんでした: ' + (e.message || ''); });
+  };
 
   // ---------- 本（ファイルから開く・切り替え） ----------
   // ファイルから開いた本: kv 'book:local:<id>' = { title, local:true, chapters:[{id,label,file}] }、本文は 'md:local:<id>:<章>'
