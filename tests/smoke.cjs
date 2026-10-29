@@ -1,9 +1,10 @@
-// 手元確認用のスモークテスト（Playwright）。GitHub API をモックし、本は sakai_study のチェックアウトから読む。
+// 手元確認用のスモークテスト（Playwright）。GitHub API とドライブ API をモックし、本は sakai_study のチェックアウトから読む（書き込み・答えはドライブ）。
 // 使い方: node tests/smoke.cjs <sakai_study のパス> [スクリーンショットの出力先]
 // 確認すること: 接続して本を取得 → 線を書く → ぐちゃぐちゃ消し → 投げ縄で選ぶ → 「Claudeに聞く」の本文・画像・リンク → いつものセッションの保存 → ピンチで拡大・縮小 → 目次・しおり → 本文の検索 → ペン（色・太さ・図形補正）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http');
 const REPO = path.resolve(process.argv[2] || '../sakai_study'), APP = path.resolve(__dirname, '..'), OUT = process.argv[3] || require('os').tmpdir();
 const remote = {};   // path -> {content, sha}
+const { createDrive, GIS, FOLDER, connected } = require('./drive-mock.cjs'), drv = createDrive();
 let shaN = 1, putCount = 0;
 const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComponent(q.url.split('?')[0]) === '/' ? 'index.html' : decodeURIComponent(q.url.split('?')[0])); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } const ext = path.extname(f); r.writeHead(200, { 'content-type': { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }[ext] || 'application/octet-stream' }); r.end(b); }); }).listen(8767);
 (async () => {
@@ -17,10 +18,13 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
     const fp = path.join(REPO, p);
     if (!fs.existsSync(fp)) return route.fulfill({ status: 404, body: '{}' });
     if (fs.statSync(fp).isDirectory()) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fs.readdirSync(fp).map((n) => ({ name: n, sha: 'f' + fs.statSync(path.join(fp, n)).size }))) });
-    return route.fulfill({ status: 200, body: fs.readFileSync(fp) });
+    const fb = fs.readFileSync(fp);   // 本物の API と同じく、raw でなければ JSON（sha と base64 の中身）で返す
+    return route.fulfill({ status: 200, contentType: 'application/json', body: raw ? fb : JSON.stringify({ sha: 'f' + fb.length, content: fb.toString('base64') }) });
   });
+  await ctx.route('https://www.googleapis.com/**', drv.route);
+  await ctx.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errs.push(m.text()));
-  await p.goto('http://localhost:8767/'); await p.waitForTimeout(500);
+  await p.goto('http://localhost:8767/'); await p.evaluate((kv) => { for (const k in kv) localStorage.setItem(k, kv[k]); }, connected()); await p.reload(); await p.waitForTimeout(500);
   console.log('empty', await p.isVisible('#empty'));
   await p.click('#gear');
   await p.fill('#cfg-token', 'test'); await p.click('#cfg-save');
@@ -54,13 +58,16 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('btn', await p.textContent('#ask-code'), 'new hidden', await p.isHidden('#ask-new'));
   console.log('2', await go('#ask-code'), await p.textContent('#ask-msg'));
   console.log('3', await go('#ask-new')); await p.fill('#ask-q', '別の質問'); console.log('upd', decodeURIComponent(await p.getAttribute('#ask-open','href')).slice(-12));
-  const qid = decodeURIComponent(await p.getAttribute('#ask-new', 'href')).match(/質問ID:[+ ](\w+)/)[1];
+  const qid = decodeURIComponent(await p.getAttribute('#ask-new', 'href')).match(/ink-answer[+ ]id=(\w+)/)[1];
   await p.reload(); await p.waitForTimeout(1500); console.log('saved', await p.evaluate(() => JSON.parse(localStorage.getItem('ink:cfg')).session));
   // Claude の答え: 送った質問は薄い「Q」→ answers/<章>.md に答えが入ると濃い「Q」→ 押すと段落の下に開き、下の書き込みも一緒に下がる
   const marks = () => p.$$eval('#qs .qm', (m) => m.map((x) => x.textContent + (x.classList.contains('wait') ? '(待ち)' : '') + '@' + x.dataset.b));
   console.log('ask marks', await marks());
   const qb = await p.evaluate(() => +document.querySelector('#qs .qm').dataset.b);
-  remote['books/nishimori/answers/ch1.md'] = { sha: 'a1', content: Buffer.from(`# ch1 の答え\n\n<!-- ink-answer id=old b=${qb} -->\n> 質問: 前の質問\n\n前の答え\n\n<!-- ink-answer id=${qid} b=${qb},${qb + 1} -->\n> 質問: この式の意味は？\n\n$E=mc^2$ のことです。\n\n$$\\int_0^1 x\\,dx = \\tfrac12$$\n`) };
+  const ddir = 'Ink Reader/' + Object.values(drv.files).find((f) => f.mimeType === FOLDER && / \(nishimori\)$/.test(f.name)).name;
+  console.log('drive', ddir, 'ink', !!drv.byPath(ddir + '/ink/ch1.json'), 'asks', !!drv.byPath(ddir + '/asks/' + qid + '.png'), 'github puts', putCount);
+  drv.add(ddir + '/answers', 'ch1-old.md', `<!-- ink-answer id=old b=${qb} -->\n> 質問: 前の質問\n\n前の答え\n`);
+  drv.add(ddir + '/answers', `ch1-${qid}.md`, `<!-- ink-answer id=${qid} b=${qb},${qb + 1} -->\n> 質問: この式の意味は？\n\n$E=mc^2$ のことです。\n\n$$\\int_0^1 x\\,dx = \\tfrac12$$\n`);
   await p.reload(); await p.waitForTimeout(1500);
   console.log('answer marks', await marks());
   const lastY = () => p.evaluate(() => { const l = [...document.querySelectorAll('#ink path:not(.lasso)')].pop(); return l ? Math.round(l.getBoundingClientRect().top) : null; });
