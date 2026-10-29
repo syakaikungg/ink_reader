@@ -10,39 +10,8 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
 let ok = true;
 const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = false; };
 
-// ドライブのモック: ファイルとフォルダ（id -> { name, parents, mimeType, version, content, trashed }）
-const files = { root: { name: 'root', mimeType: 'folder' } }; let idN = 1; const calls = [];
-const FOLDER = 'application/vnd.google-apps.folder';
-const byPath = (p) => { let id = 'root'; for (const name of p.split('/')) { const hit = Object.entries(files).find(([, f]) => f.name === name && !f.trashed && (f.parents || []).includes(id)); if (!hit) return null; id = hit[0]; } return files[id]; };
-async function driveRoute(route) {
-  const req = route.request(), u = new URL(req.url()), m = req.method(), json = (o) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(o) });
-  calls.push(m + ' ' + u.pathname);
-  if (req.headers().authorization !== 'Bearer tok-ok') return route.fulfill({ status: 401, body: '{}' });
-  let mm;
-  if (m === 'GET' && u.pathname === '/drive/v3/files') {
-    const q = u.searchParams.get('q'), name = (q.match(/name='((?:[^'\\]|\\.)*)'/) || [])[1], pid = q.match(/'([^']+)' in parents/)[1], folder = /mimeType=/.test(q);
-    const list = Object.entries(files).filter(([, f]) => !f.trashed && (f.parents || []).includes(pid) && (name == null || f.name === name.replace(/\\(.)/g, '$1')) && (!folder || f.mimeType === FOLDER));
-    return json({ files: list.map(([id, f]) => ({ id, name: f.name, version: String(f.version) })) });
-  }
-  if (m === 'POST' && u.pathname === '/drive/v3/files') { const b = JSON.parse(req.postData()), id = 'f' + idN++; files[id] = { ...b, version: 1 }; return json({ id }); }
-  if (m === 'POST' && u.pathname === '/upload/drive/v3/files') {
-    const raw = req.postDataBuffer(), bd = '--' + req.headers()['content-type'].split('boundary=')[1], parts = [];
-    let i = raw.indexOf(bd); while (i >= 0) { const j = raw.indexOf(bd, i + bd.length); if (j < 0) break; parts.push(raw.slice(i + bd.length, j)); i = j; }
-    const body = (p) => p.slice(p.indexOf('\r\n\r\n') + 4, p.length - 2);
-    const meta = JSON.parse(body(parts[0]).toString()), id = 'f' + idN++;
-    files[id] = { ...meta, version: 1, content: body(parts[1]) };
-    return json({ version: '1' });
-  }
-  if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; f.content = req.postDataBuffer(); f.version++; return json({ version: String(f.version) }); }
-  if (m === 'PATCH' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) { Object.assign(files[mm[1]], JSON.parse(req.postData())); return json({}); }
-  if (m === 'GET' && u.pathname === '/drive/v3/about') return json({ user: { emailAddress: 'me@example.com' } });
-  if (m === 'GET' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) return route.fulfill({ status: 200, body: files[mm[1]].content });
-  return route.fulfill({ status: 404, body: '{}' });
-}
-// Google のログイン（GIS）のモック: 押すとすぐ tok-ok を返す
-// window.__fail を立てると、ポップアップを閉じたことにする
-const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
-  setTimeout(() => window.__fail ? o.error_callback({ type: 'popup_closed' }) : o.callback({ access_token: 'tok-ok', expires_in: 3600 }), 10); } }) } } };`;
+const { createDrive, GIS, FOLDER } = require('./drive-mock.cjs');
+const drv = createDrive(), { files, calls, byPath, twins } = drv;
 
 (async () => {
   const b = await chromium.launch();
@@ -54,7 +23,7 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
 
   const ctx = await b.newContext({ viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, hasTouch: true });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://localhost:8770' });
-  await ctx.route('https://www.googleapis.com/**', driveRoute);
+  await ctx.route('https://www.googleapis.com/**', drv.route);
   await ctx.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
   await ctx.route('https://api.github.com/**', (r) => { calls.push('GITHUB ' + r.request().url()); r.fulfill({ status: 404, body: '{}' }); });
   await ctx.route('https://claude.ai/**', (r) => r.fulfill({ status: 200, body: 'claude' }));
@@ -81,6 +50,7 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   await p.click('#cfg button[value=cancel]');
   await p.waitForFunction(() => /ドライブに保存しました/.test(document.getElementById('stat').textContent), null, { timeout: 15000 }).catch(() => {});
   await p.waitForTimeout(1500);
+  for (let i = 0; i < 40 && !Object.values(files).some((f) => f.name === 'pdf.json'); i++) await p.waitForTimeout(250);   // 重いときは送るのが遅れる
   const bookDir = Object.values(files).find((f) => f.mimeType === FOLDER && /^ink-drive \(/.test(f.name));
   const dir = 'Ink Reader/' + (bookDir && bookDir.name);
   console.log('dir', dir);
@@ -103,7 +73,6 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   console.log('  ' + made.trim().split('\n').pop());
   check('ドライブのものだけで、書き込みつきの PDF を作れる', /できました: out\.pdf（1枚/.test(made) && fs.readFileSync(path.join(work, 'out.pdf')).slice(0, 5).toString() === '%PDF-');
   check('GitHub には送らない', !calls.some((c) => /GITHUB/.test(c)));
-  const twins = () => { const k = Object.values(files).filter((f) => !f.trashed).map((f) => (f.parents || []).join() + '/' + f.name); return k.length !== new Set(k).size; };
   check('同じフォルダ・ファイルを二つ作らない', !twins());
 
   // 書き足すと上書き（版が上がる）
@@ -139,8 +108,7 @@ const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ 
   // Claude がドライブに答えのファイルを作る → アプリに戻ると Q 印
   const ans = byPath(dir + '/answers');
   check('答えのフォルダを作っておく', !!ans && ans.mimeType === FOLDER);
-  const ansId = Object.keys(files).find((k) => files[k] === ans);
-  files['f' + idN++] = { name: `pdf-${id}.md`, parents: [ansId], mimeType: 'text/markdown', version: 1, content: Buffer.from(`<!-- ink-answer id=${id} b=2 -->\n> 質問: ためし\n\n答えです。$a=b$\n`) };
+  drv.add(dir + '/answers', `pdf-${id}.md`, `<!-- ink-answer id=${id} b=2 -->\n> 質問: ためし\n\n答えです。$a=b$\n`);
   await p.reload(); await p.waitForTimeout(3000);
   check('答えが Q 印になる', await p.evaluate(() => [...document.querySelectorAll('#qs .qm:not(.wait)')].map((m) => m.dataset.b).includes('2')));
 
