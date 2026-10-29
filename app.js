@@ -591,6 +591,8 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 - \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。
 - \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「書き出す」と同じもの。使い方は下）。
 - \`いま.md\`・\`now.png\`・\`last.png\`: いま iPad で見ている所と、最後に書いた所（下の「いま見ている所」）。
+- \`<本>/marks.json\`: 答えごとに利用者が付けた「わかった」「まだ」。\`{ "<章>-<質問ID>": { "m": "ok"（わかった）| "no"（まだ）| null（外した）, "t": 押した時刻, "c": 章, "b": [段落] } }\`。理解度をつかむのに使ってください。
+- \`<本>/log/<日付>.md\`: その日の読んだ跡（何時から何時に、どの章のどの段落を見て、どこに書いたか）。
 
 ## いま見ている所（いま.md）
 
@@ -923,7 +925,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   async function refreshChapter() {   // 置き場所の書き込みと答えを取り込む（他の端末・Claude の変更）
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
-    pullAnswers(id); upPdf(); moveGhBook();
+    pullAnswers(id); upPdf(); moveGhBook(); syncRates();
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
       const remote = await pullInk(id);
@@ -1763,7 +1765,11 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     qs.replaceChildren(...[...g].map(([k, n]) => {
       const m = document.createElement('button');
       m.type = 'button'; m.className = 'qm'; m.dataset.b = k; m.textContent = n > 1 ? 'Q' + n : 'Q';
-      m.classList.toggle('wait', !answers.some((a) => anchor(a) === k));
+      const here = answers.filter((a) => anchor(a) === k), r = here.map(rateOf);
+      m.classList.toggle('wait', !here.length);
+      m.classList.toggle('ok', here.length > 0 && r.every((x) => x === 'ok'));   // 全部わかった: 薄く「Q✓」
+      m.classList.toggle('no', r.includes('no'));                               // まだ: 赤い縁
+      if (m.classList.contains('ok')) m.textContent = n > 1 ? 'Q✓' + n : 'Q✓';
       m.setAttribute('aria-expanded', String(openQ.has(k)));
       m.setAttribute('aria-label', 'Claudeの答え');
       return m;
@@ -1785,7 +1791,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const a of answers.filter((x) => anchor(x) === k)) {
       const d = document.createElement('div'); d.className = 'a';
       d.innerHTML = renderMarkdown(a.md, book && book.images);
-      box.append(d);
+      const mk = document.createElement('div'); mk.className = 'mk'; mk.dataset.id = a.id;
+      for (const [m, t] of [['ok', 'わかった'], ['no', 'まだ']]) {
+        const x = document.createElement('button'); x.type = 'button'; x.dataset.m = m; x.textContent = t;
+        x.setAttribute('aria-pressed', String(rateOf(a) === m)); mk.append(x);
+      }
+      d.append(mk); box.append(d);
     }
     blocks[k].after(box);
   }
@@ -1816,6 +1827,47 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (asks.length === 0 && answers.length) stat.textContent = 'Claudeの答えが届いています（右の「Q」）';
     } catch {}
   }
+
+  // ---------- わかった・まだ ----------
+  // 答えごとに「わかった」「まだ」を付ける（もう一度押すと外す）。AI が理解度をつかめるように、ドライブの <本>/marks.json に置く:
+  // { "<章>-<質問ID>": { m: "ok" | "no" | null（外した）, t: 押した時刻, c: 章, b: [段落] } }。端末は kv 'marks:<本>' = { m: 同じもの, dirty: 未送信 }。
+  // ほかの端末とは、押した時刻の新しい方を残してまとめる
+  let rates = {}, ratesDirty = false, ratesN = 0, ratesT = 0;
+  const ratesKey = () => 'marks:' + bookKey();
+  const rateOf = (a) => (rates[CH + '-' + a.id] || {}).m || null;
+  const saveRates = () => kv.set(ratesKey(), { m: rates, dirty: ratesDirty }).catch(() => {});
+  function useRates(v) { rates = (v && v.m) || {}; ratesDirty = !!(v && v.dirty); }
+  function setRate(a, m) {
+    rates[CH + '-' + a.id] = { m: rateOf(a) === m ? null : m, t: new Date().toISOString(), c: CH, b: a.b };
+    ratesDirty = true; ratesN++; saveRates(); showMarks();
+    stat.textContent = rateOf(a) === 'ok' ? '「わかった」にしました' : rateOf(a) === 'no' ? '「まだ」にしました（Q の縁が赤くなります）' : '印を外しました';
+    clearTimeout(ratesT); ratesT = setTimeout(syncRates, 2000);
+  }
+  const mergeRates = (a, b) => { const out = { ...a }; for (const k in b) if (!out[k] || (b[k].t || '') > (out[k].t || '')) out[k] = b[k]; return out; };
+  // ドライブの marks.json を取り込み、未送信の印があれば書き足す（他の端末が先に書いていたら、取り直してもう一度）
+  async function syncRates() {
+    if (!canPush() || !ghMoved() || !book) return;
+    const bk = bookKey(), R = where(), path = bookDir() + '/marks.json';
+    try {
+      for (let i = 0; i < 2; i++) {
+        const f = await R.get(path), n = ratesN, out = mergeRates(f ? JSON.parse(f.text || '{}') : {}, rates);
+        if (bk !== bookKey()) return;
+        if (ratesDirty) try { await R.put(path, JSON.stringify(out, null, 1), f ? f.sha : null); } catch (e) { if (e.status === 409) continue; throw e; }
+        if (bk !== bookKey()) return;
+        rates = mergeRates(out, rates);
+        if (n === ratesN) ratesDirty = false;
+        saveRates(); showMarks();
+        if (ratesDirty) { clearTimeout(ratesT); ratesT = setTimeout(syncRates, 2000); }
+        return;
+      }
+    } catch (e) { if (e.drive) needLogin(); }
+  }
+  // Pencil で押したときは click が来ないので pointerup で（「Q」と同じ）
+  let rateDown = null;
+  doc.addEventListener('pointerdown', (e) => { rateDown = e.target.closest('.mk button'); });
+  doc.addEventListener('pointerup', (e) => { const x = e.target.closest('.mk button'); if (x && x === rateDown) pickRate(x); rateDown = null; });
+  doc.addEventListener('click', (e) => { const x = e.target.closest('.mk button'); if (x && e.detail === 0) pickRate(x); });
+  function pickRate(x) { const a = answers.find((y) => y.id === x.parentElement.dataset.id); if (a) setRate(a, x.dataset.m); }
 
   // ---------- Claude と並べて勉強する（いま.md） ----------
   // iPad の画面を Claude アプリと分けて使うとき、チャットの質問が「どこのことか」Claude に分かるように、ドライブの「Ink Reader/いま.md」に
@@ -1959,16 +2011,20 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   async function upNow() {
     if (nowRun) { nowRun.again = true; return; }
-    if (!driveOn() || !drive.ok() || !online() || !CH || !book || doc.classList.contains('loading') || document.visibilityState === 'hidden') return;
+    if (!driveOn() || !CH || !book || doc.classList.contains('loading') || document.visibilityState === 'hidden') return;
     if (penDown || pinch || curId !== null) return nowSoon();
     const v = inView();
     // PDF のページの絵がまだ描けていなければ、少し待つ（3 回まで）
     if (isPdf() && v.bs.some((b) => !drawn.has(b)) && nowWait++ < 3) return nowSoon(1000);
     nowWait = 0;
+    noteRead(v);   // 読んだ跡は、ドライブとのつながりが切れている間も端末に貯める
+    if (!drive.ok() || !online()) return;
     const key = [bookKey(), CH, Math.round(v.y0 / 40), Math.round(v.y1 / 40), wrote && wrote.t].join('|');
     if (key === nowSent) return;
     const run = nowRun = {}, bk = bookKey(), ch = CH, busy = () => penDown || pinch || bk !== bookKey() || ch !== CH;
     try {
+      // 本のフォルダと answers を先に作っておく（まだ書いていない本でも、Claude が「段落に残して」で答えを置けるように）
+      if (ghMoved()) await upBook(bookDir(), bk, book, drive);
       // 最後に書いた所: 書いたあと最初の 1 回だけ、線のまわりを切り抜いて置く
       if (wrote && wrote.t !== lastSent && wrote.k === bk && wrote.c === ch) {
         const w = wrote, m = Math.max(120, (300 - (w.y[1] - w.y[0])) / 2), y0 = Math.max(0, w.y[0] - m), y1 = Math.min(page.offsetHeight, w.y[1] + m, y0 + 1600);
@@ -1991,6 +2047,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       }
       await drive.over('いま.md', nowText(v, hasNow));
       nowSent = key;
+      pushLog();
       // Claude が「段落に残して」と言われて答えを置いたかもしれないので、ときどき答えも見に行く（画面を分けているとアプリに戻ったことにならない）
       if (Date.now() - ansAt > 30000) { ansAt = Date.now(); pullAnswers(CH); }
     } catch (e) { if (e.drive) needLogin(); }
@@ -1999,6 +2056,44 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   addEventListener('scroll', () => nowSoon(), { passive: true });
   wrap.addEventListener('scroll', () => nowSoon(), { passive: true });
   addEventListener('resize', () => nowSoon());
+
+  // ---------- 読んだ跡 ----------
+  // AI が「いつ・どこを読み、どこに書いたか」をつかめるように、本ごと・日ごとに <本>/log/<日付>.md を書く（アプリだけが上書きする）。
+  // いま.md を書くとき（スクロールが止まった・書いた）に見えている段落を記録し、同じ章を 10 分以内に続けて見ていれば 1 行にまとめる。送るのは 1 分に 1 回まで
+  const LOG_GAP = 10 * 60000, LOG_MS = 60000;
+  let log = null, logAt = 0, logT = 0, logDirty = false;   // { k: 本, dir, title, pdf, d: 日付, rows: [{ c: 章, l: 章の名前, from, to, lo, hi: 見た段落, w: [書いた段落] }] }
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+  function noteRead(v) {
+    if (!v.bs.length) return;
+    const k = bookKey(), d = today(), now = Date.now(), lo = v.bs[0], hi = v.bs[v.bs.length - 1];
+    if (!log || log.k !== k || log.d !== d) {
+      if (log && logDirty) { logAt = 0; pushLog(); }   // 前の本・前の日の分を送ってから
+      let old = null; try { old = JSON.parse(store.get(PREF + ':log:' + k)); } catch {}
+      log = old && old.d === d ? old : { k, dir: bookDir(), title: book.title || '', pdf: isPdf(), d, rows: [] };
+    }
+    let r = log.rows[log.rows.length - 1];
+    if (!r || r.c !== CH || now - r.to > LOG_GAP) log.rows.push(r = { c: CH, l: (book.chapters.find((c) => c.id === CH) || {}).label || '', from: now, to: now, lo, hi, w: [] });
+    r.to = now; r.lo = Math.min(r.lo, lo); r.hi = Math.max(r.hi, hi);
+    if (wrote && wrote.k === k && wrote.c === CH && wrote.t >= r.from - 10000 && !r.w.includes(wrote.b)) { r.w.push(wrote.b); r.w.sort((a, b) => a - b); }
+    store.set(PREF + ':log:' + k, JSON.stringify(log));
+    logDirty = true;
+  }
+  function logText(L) {
+    const hm = (t) => clock(t).slice(0, 5), nums = (a, b) => a === b ? String(a) : a + '〜' + b, u = L.pdf ? 'ページ' : '';
+    return [`# ${L.d} の読んだ跡（「${L.title}」）`, '',
+      `Ink Reader（iPad）が書いています（書き換えないでください）。時刻は iPad の時計、番号は${L.pdf ? 'ページ' : '段落（章の上から数えたもの。いま.md と同じ）'}。`, '',
+      ...L.rows.map((r) => `- ${hm(r.from)}〜${hm(r.to)} ${L.pdf ? '' : `${r.c}「${r.l}」 段落 `}${nums(r.lo, r.hi)}${u}を見た${r.w.length ? `。書き込み: ${r.w.join(', ')}${u}` : ''}`),
+    ].join('\n') + '\n';
+  }
+  async function pushLog() {
+    clearTimeout(logT);
+    if (!logDirty || !log || !driveOn() || !drive.ok() || !online()) return;
+    const wait = logAt + LOG_MS - Date.now();
+    if (wait > 0) { logT = setTimeout(pushLog, wait); return; }
+    const L = log; logDirty = false; logAt = Date.now();
+    try { await drive.over(L.dir + '/log/' + L.d + '.md', logText(L)); } catch (e) { if (L === log) logDirty = true; if (e.drive) needLogin(); }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && logDirty) { logAt = 0; pushLog(); } });
 
   function frame() {
     raf = 0; frames++;
@@ -2556,8 +2651,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
-    const [saved, ans, wait] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id))]);
+    const [saved, ans, wait, rv] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey())]);
     if (my !== opening) return;
+    useRates(rv);
     for (const s of strokes) s.el.remove();
     strokes = []; setEdit(null); undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
@@ -2904,12 +3000,21 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         if (at >= 0 && hits.length < 200) hits.push({ c, b: i + 1, t, at });
       });
     }
+    // Claude の答えも探す（この iPad に読み込んである章の分）。押すとその段落へ飛んで、答えを開く
+    for (const c of book.chapters) {
+      for (const a of parseAnswers(await kv.get(ansKey(c.id)))) {
+        const t = a.md.replace(/^> ?/gm, '').replace(/[$#*`]/g, '').replace(/\s+/g, ' ').trim(), at = t.toLowerCase().indexOf(ql);
+        if (at >= 0 && hits.length < 200) hits.push({ c, b: anchor(a), t, at, ans: true });
+      }
+    }
+    if (my !== searchSeq) return;
     const rows = hits.map((h) => {
       const s = Math.max(0, h.at - 18), frag = document.createElement('span'), m = document.createElement('mark');
       m.textContent = h.t.slice(h.at, h.at + q.length);
       frag.append((s ? '…' : '') + h.t.slice(s, h.at), m, h.t.slice(h.at + q.length, h.at + q.length + 60));
-      const li = isPdf() ? tocItem(frag, '', async () => goTo(CH, h.b, true, pdfHitBox((await ptext)[h.b - 1], h.at, q.length)), h.b + 'ページ')
-        : tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
+      const li = h.ans ? tocItem(frag, 'ans', async () => { await goTo(h.c.id, h.b); if (CH === h.c.id && !openQ.has(h.b)) toggleAns(h.b); }, '答え・' + (isPdf() ? h.b + 'ページ' : h.c.label))
+        : isPdf() ? tocItem(frag, '', async () => goTo(CH, h.b, true, pdfHitBox((await ptext)[h.b - 1], h.at, q.length)), h.b + 'ページ')
+          : tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
       li.querySelector('.bm-at').className = 'at';
       return li;
     });
@@ -3007,6 +3112,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function setSrc(v) { src = v; store.set(PREF + ':book', v); }
   function leaveBook() {   // 今の章を保存してから本を切り替える
     showBack(null);
+    if (logDirty) { logAt = 0; pushLog(); }
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs) persist();
     if (cs && cs.pending.size) pushChapter(CH);

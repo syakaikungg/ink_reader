@@ -236,6 +236,13 @@ html, body, body * { touch-action: manipulation; }
   color: var(--paper); background: var(--accent); border: 1px solid var(--accent); border-radius: 13px 13px 13px 4px; }
 #qs .qm.wait { color: var(--accent); background: var(--paper); border-style: dashed; opacity: .55; }
 #qs .qm[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+#qs .qm.ok { opacity: .5; }
+#qs .qm.no { border-color: var(--ink-r); box-shadow: 0 0 0 2px var(--ink-r); }
+/* 答えの下の「わかった」「まだ」 */
+#doc .ans .mk { display: flex; gap: 6px; margin-top: 6px; }
+#doc .ans .mk button { height: 30px; font-size: 13px; font-weight: 600; border-color: var(--rule); background: var(--paper); color: var(--muted); }
+#doc .ans .mk button[aria-pressed="true"][data-m="ok"] { color: var(--paper); background: var(--accent); border-color: var(--accent); }
+#doc .ans .mk button[aria-pressed="true"][data-m="no"] { color: var(--paper); background: var(--ink-r); border-color: var(--ink-r); }
 #doc .ans { font: 15px/1.7 var(--f-ui); background: var(--bg); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 14px; margin: 0 0 18px;
   -webkit-user-select: text; user-select: text; }
 #doc .ans .a + .a, #doc .ans .wait + .a { border-top: 1px solid var(--rule); margin-top: 10px; padding-top: 10px; }
@@ -305,6 +312,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #toc .row { display: flex; justify-content: flex-end; }
 #toc-q { display: block; width: 100%; box-sizing: border-box; font: 15px/1.4 var(--f-ui); padding: 9px 12px; margin: 0 0 14px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); }
 #toc-hits .at { color: var(--muted); font-size: 12px; margin-right: 8px; }
+#toc-hits .ans .at { color: var(--accent); }
 #toc-hits mark { background: none; color: var(--accent); font-weight: 600; }
 #toc-hits .none { color: var(--muted); font-size: 13px; padding: 8px 10px; }
 /* 検索から飛んだ段落を一瞬だけ色付けする */

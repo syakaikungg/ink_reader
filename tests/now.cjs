@@ -6,7 +6,7 @@
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..'), N = 4;
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
-const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8771);
+const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8774);
 let ok = true;
 const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = false; };
 const { createDrive, GIS, connected } = require('./drive-mock.cjs');
@@ -24,12 +24,12 @@ const dims = (bf) => [bf.readUInt32BE(16), bf.readUInt32BE(20)];
   await mk.pdf({ path: pdfPath, format: 'A4' }); await mk.close();
 
   const ctx = await b.newContext({ viewport: { width: 590, height: 1000 }, deviceScaleFactor: 2, hasTouch: true });   // iPad を Claude と半分ずつにした幅
-  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://localhost:8771' });
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://localhost:8774' });
   await ctx.route('https://www.googleapis.com/**', drv.route);
   await ctx.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
   await ctx.route('https://api.github.com/**', (r) => r.fulfill({ status: 404, body: '{}' }));
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errs.push(m.text()));
-  await p.goto('http://localhost:8771/');
+  await p.goto('http://localhost:8774/');
   await p.evaluate((kv) => { for (const k in kv) localStorage.setItem(k, kv[k]); }, connected());
   await p.reload(); await p.waitForTimeout(300);
   await p.setInputFiles('#empty .open-file', mdPath);
@@ -126,7 +126,7 @@ const dims = (bf) => [bf.readUInt32BE(16), bf.readUInt32BE(20)];
   check('PDF は「1ページに書きました」', /1ページに書きました（いま画面に見えています）/.test(text()));
 
   // 設定: Claude への指示をコピー
-  await p.click('#gear'); await p.waitForTimeout(300);
+  await p.click('#more'); await p.click('#gear'); await p.waitForTimeout(300);   // 幅 590px なので設定は「…」の中
   await p.click('#cfg-claude'); await p.waitForTimeout(300);
   const note = await p.evaluate(() => navigator.clipboard.readText());
   check('Claude への指示をコピーできる', /Ink Reader\/いま\.md/.test(note) && /コピーしました/.test(await p.textContent('#drv-msg')));
