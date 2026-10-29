@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v48';
+  const APP_VERSION = 'ink-reader-v49';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -963,95 +963,112 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function press(group, btn) { for (const b of group) b.setAttribute('aria-pressed', String(b === btn)); }
   const toolBtns = [$('#t-pen'), $('#t-hl'), $('#t-er'), $('#t-ls')];
   toolBtns.forEach((b) => b.onclick = () => {
-    const again = b.id === 't-er' && tool === 'er';
+    const again = (b.id === 't-pen' && tool === 'pen') || (b.id === 't-er' && tool === 'er');
     loopBack = null;
     tool = { 't-pen': 'pen', 't-hl': 'hl', 't-er': 'er', 't-ls': 'ls' }[b.id]; press(toolBtns, b); setEdit(null);
     page.classList.toggle('erasing', tool === 'er');
     page.classList.toggle('lassoing', tool === 'ls');
     if (tool !== 'ls') clearSel();
-    if (again && popFor !== b) openPop(b, 'e'); else closePop();
+    if (again && popFor !== b) openPop(b, tool === 'pen' ? 'p' : 'e'); else closePop();
   });
-  // 投げ縄で選んでいるときは、色・太さボタンで選んだ線を変える。
-  // 選んでいるボタンをもう一度押すと、そのボタンの色・太さを変える小窓が出る（ボタンは3つのまま。端末に覚える）
+  // 戻す・進むの札は、ツールバーのすぐ下に置く（ツールバーは画面の幅で折り返して高さが変わる）
+  const bar = $('#bar');
+  new ResizeObserver(() => document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar);
+  // ペンの色と太さ: 選んでいる「ペン」をもう一度押すと小窓が出る。太さは3つから選び、つまみで選んでいる太さを変える（端末に覚える）。
+  // 投げ縄で選んだ線は、メニューの「色・太さ」から同じ小窓で変える
   const PALETTE = ['k', 'r', 'b', '#1f8a4c', '#e07b00', '#7b3fc4', '#8a5a2b', '#0f8b8d', '#d6338a', '#6b7280', '#c9a100', '#0b2f6b'];
-  const colorBtns = [...document.querySelectorAll('#colors button')];
-  const sizeBtns = [...document.querySelectorAll('#sizes button')];
-  const pop = $('#pop'), popColors = $('#pop-colors'), popSize = $('#pop-size'), popRange = popSize.querySelector('input'), popEr = $('#pop-er'), erRange = popEr.querySelector('input');
+  const pop = $('#pop'), popPen = $('#pop-pen'), popColors = $('#pop-colors'), popEr = $('#pop-er'), erRange = popEr.querySelector('input');
+  const sizeBtns = [...document.querySelectorAll('#pop-size .seg button')], popRange = $('#pop-size input'), selPen = $('#sel-pen');
   let popFor = null;
   const pens = (() => { try { return JSON.parse(store.get(PREF + ':pens')) || {}; } catch { return {}; } })();
-  // 色と太さのボタンの中身と、選んでいるボタン（ci, si）を端末に覚える（開き直しても同じペンで書ける）
-  const on = (list) => list.findIndex((b) => b.getAttribute('aria-pressed') === 'true');
-  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: colorBtns.map((b) => b.dataset.c), s: sizeBtns.map((b) => +b.dataset.s), ci: on(colorBtns), si: on(sizeBtns) }));
-  const swatch = (el, c) => { el.className = 'sw' + (/^#/.test(c) ? '' : ' ' + c); el.style.background = /^#/.test(c) ? c : ''; };
+  const widths = [2.2, 3.4, 5.5].map((v, i) => +(pens.s || [])[i] || v);
+  let si = widths[pens.si] ? pens.si : 1;
+  color = (Array.isArray(pens.c) ? pens.c[pens.ci] : pens.c) || 'k';   // 前の版はツールバーに色を3つ持っていた
+  size = widths[si];
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si }));
+  const ink = (c) => /^#/.test(c) ? c : `var(--ink-${c})`;
+  const swatch = (el, c) => { el.className = 'sw'; el.style.background = ink(c); };
   const dotSize = (el, s) => { const w = Math.max(3, Math.min(16, s * 2)) + 'px'; el.style.width = el.style.height = w; };
-  function setColorBtn(b, c) { b.dataset.c = c; swatch(b.firstElementChild, c); }
-  function setSizeBtn(b, s) { b.dataset.s = String(s); dotSize(b.firstElementChild, s); }
-  (pens.c || []).forEach((c, i) => colorBtns[i] && setColorBtn(colorBtns[i], c));
-  (pens.s || []).forEach((s, i) => sizeBtns[i] && setSizeBtn(sizeBtns[i], s));
-  if (colorBtns[pens.ci]) press(colorBtns, colorBtns[pens.ci]);
-  if (sizeBtns[pens.si]) press(sizeBtns, sizeBtns[pens.si]);
-  for (const b of sizeBtns) if (b.getAttribute('aria-pressed') === 'true') size = +b.dataset.s;
-  for (const b of colorBtns) if (b.getAttribute('aria-pressed') === 'true') color = b.dataset.c;
+  const penDot = $('#t-pen .dot');
+  function showPen() { penDot.style.background = ink(color); dotSize(penDot, size); }
+  showPen();
+  // 小窓に出す今の色・太さ。投げ縄で選んだ線なら、その線のもの（ばらばらなら null）
+  function penNow() {
+    if (popFor !== selPen) return { c: color, s: size };
+    const ss = sel.filter((s) => s.tool !== 'hl');
+    if (!ss.length) return { c: null, s: null };
+    return { c: ss.every((s) => s.c === ss[0].c) ? ss[0].c : null, s: ss.every((s) => s.s === ss[0].s) ? ss[0].s : null };
+  }
+  function showColors() {
+    const now = penNow();
+    popColors.replaceChildren(...PALETTE.map((c) => {
+      const x = document.createElement('button'); x.type = 'button'; x.setAttribute('aria-pressed', String(c === now.c));
+      const s = document.createElement('span'); swatch(s, c); x.append(s);
+      x.onclick = () => pickColor(c);
+      return x;
+    }));
+    // 一覧にない色は、iPad の色の選択画面から選ぶ
+    const more = document.createElement('label'), inp = document.createElement('input');
+    more.className = 'more'; more.title = 'ほかの色'; inp.type = 'color';
+    inp.value = !now.c ? '#15181f' : /^#/.test(now.c) ? now.c : INK[now.c];
+    inp.oninput = () => { if (popFor !== selPen) { color = inp.value; showPen(); showSizes(); } };
+    inp.onchange = () => pickColor(inp.value);
+    more.append(inp); popColors.append(more);
+    if (/^#/.test(now.c) && !PALETTE.includes(now.c)) more.style.boxShadow = '0 0 0 2px var(--accent)';
+  }
+  function showSizes() {
+    const now = penNow(), forSel = popFor === selPen;
+    sizeBtns.forEach((b, i) => {
+      b.setAttribute('aria-pressed', String(forSel ? now.s === widths[i] : i === si));
+      const ln = b.firstElementChild; ln.style.background = ink(now.c || color); ln.style.height = Math.max(2, Math.min(16, widths[i] * 1.6)) + 'px';
+    });
+    popRange.value = now.s ?? size;
+  }
+  function pickColor(c) {
+    if (popFor === selPen) restyle({ c }); else { color = c; showPen(); savePens(); }
+    showColors(); showSizes();
+  }
+  sizeBtns.forEach((b, i) => b.onclick = () => {
+    if (popFor === selPen) restyle({ s: widths[i] }); else { si = i; size = widths[i]; showPen(); savePens(); }
+    showSizes();
+  });
+  popRange.oninput = () => { if (popFor !== selPen) { widths[si] = size = +popRange.value; showPen(); showSizes(); } };
+  popRange.onchange = () => { if (popFor === selPen) { restyle({ s: +popRange.value }); showSizes(); } else savePens(); };
+  selPen.onclick = () => { if (popFor === selPen) closePop(); else openPop(selPen, 'p'); };
   function closePop() { pop.hidden = true; popFor = null; }
   function openPop(btn, kind) {
     popFor = btn;
-    popColors.hidden = kind !== 'c'; popSize.hidden = kind !== 's'; popEr.hidden = kind !== 'e';
-    if (kind === 'e') { for (const x of popEr.querySelectorAll('[data-m]')) x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)); erRange.value = eraser.r; ringSize(eraser.r); }
-    if (kind === 'c') popColors.replaceChildren(...PALETTE.map((c) => {
-      const x = document.createElement('button'); x.type = 'button'; x.setAttribute('aria-pressed', String(c === btn.dataset.c));
-      const s = document.createElement('span'); swatch(s, c); x.append(s);
-      x.onclick = () => { setColorBtn(btn, c); color = c; press(colorBtns, btn); savePens(); closePop(); };
-      return x;
-    }));
-    if (kind === 'c') {   // 一覧にない色は、iPad の色の選択画面から選ぶ
-      const more = document.createElement('label'), inp = document.createElement('input');
-      more.className = 'more'; more.title = 'ほかの色'; inp.type = 'color';
-      inp.value = /^#/.test(btn.dataset.c) ? btn.dataset.c : INK[btn.dataset.c];
-      inp.oninput = () => { setColorBtn(btn, inp.value); color = inp.value; press(colorBtns, btn); };
-      inp.onchange = () => { savePens(); closePop(); };
-      more.append(inp); popColors.append(more);
-      if (/^#/.test(btn.dataset.c) && !PALETTE.includes(btn.dataset.c)) more.style.boxShadow = '0 0 0 2px var(--accent)';
-    }
-    else { popRange.value = btn.dataset.s; dotSize(popSize.firstElementChild, +btn.dataset.s); }
+    popPen.hidden = kind !== 'p'; popEr.hidden = kind !== 'e';
+    if (kind === 'e') { for (const x of popEr.querySelectorAll('[data-m]')) x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)); erRange.value = eraser.r; ringSize(eraser.r); armClear(false); }
+    else { showColors(); showSizes(); }
     pop.hidden = false;
-    const r = btn.getBoundingClientRect(), w = pop.offsetWidth;
+    const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
     pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
-    pop.style.top = r.bottom + 6 + 'px';
+    pop.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - 6 - h) : r.bottom + 6) + 'px';
   }
   const ringSize = (r) => { const el = popEr.querySelector('.ring'); el.style.width = el.style.height = r * 2 + 'px'; };
   const saveEraser = () => store.set(PREF + ':eraser', JSON.stringify(eraser));
   for (const x of popEr.querySelectorAll('[data-m]')) x.onclick = () => { eraser.m = x.dataset.m; saveEraser(); closePop(); };
   erRange.oninput = () => { eraser.r = +erRange.value; ringSize(eraser.r); };
   erRange.onchange = saveEraser;
-  popRange.oninput = () => { const s = +popRange.value; setSizeBtn(popFor, s); dotSize(popSize.firstElementChild, s); size = s; };
-  popRange.onchange = () => { savePens(); if (sel.length) restyle({ s: size }); };
   document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target.closest('button') !== popFor) closePop(); }, true);
-  colorBtns.forEach((b) => b.onclick = () => {
-    const again = color === b.dataset.c && b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
-    color = b.dataset.c; press(colorBtns, b); savePens();
-    if (sel.length) restyle({ c: color }); else if (tool !== 'pen') toolBtns[0].click();
-    if (again && popFor !== b) openPop(b, 'c'); else closePop();
-  });
-  sizeBtns.forEach((b) => b.onclick = () => {
-    const again = b.getAttribute('aria-pressed') === 'true' && tool === 'pen' && !sel.length;
-    size = +b.dataset.s; press(sizeBtns, b); savePens();
-    if (sel.length) restyle({ s: size }); else if (tool !== 'pen') toolBtns[0].click();
-    if (again && popFor !== b) openPop(b, 's'); else closePop();
-  });
-  $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); };
+  // 全部消す（消しゴムの小窓の中。押し間違えないよう、もう一度押したときだけ消す。戻すで戻せる）
+  const clearBtn = $('#clear');
   let armT = 0;
-  $('#clear').onclick = (e) => {
-    const b = e.currentTarget;
-    if (!b.classList.contains('arm')) {
-      b.classList.add('arm'); b.textContent = 'もう一度押すと全消去';
-      armT = setTimeout(() => { b.classList.remove('arm'); b.textContent = '全消去'; }, 3000);
-      return;
-    }
-    clearTimeout(armT); b.classList.remove('arm'); b.textContent = '全消去';
+  function armClear(on) {
+    clearTimeout(armT); clearBtn.classList.toggle('arm', on);
+    clearBtn.textContent = on ? 'もう一度押すと全部消えます' : isPdf() ? 'この PDF の書き込みを全部消す' : 'この章の書き込みを全部消す';
+    if (on) armT = setTimeout(() => armClear(false), 3000);
+  }
+  clearBtn.onclick = () => {
+    if (!clearBtn.classList.contains('arm')) return armClear(true);
+    armClear(false); closePop();
     if (!strokes.length) return;
     clearSel();
     const list = strokes.slice(); removeAll(list); push({ type: 'erase', list });
+    stat.textContent = `${list.length}画を消しました（「戻す」で戻せます）`;
   };
+  $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); };
   $('#hint-x').onclick = () => { $('#hint').hidden = true; store.set(PREF + ':hint', '0'); };
   if (store.get(PREF + ':hint') === '0') $('#hint').hidden = true;
 
@@ -1270,6 +1287,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
     $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
     $('#sel-del').hidden = !sel.length;
+    selPen.hidden = !sel.some((s) => s.tool !== 'hl');
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
     $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
@@ -1277,6 +1295,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   function clearSel() {
     sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null);
+    if (popFor === selPen) closePop();
     if (loopBack) { loopBack = null; toolBtns[0].click(); }   // 丸で囲んで選んだときは、選び終わったらペンに戻る
   }
   function finishLasso() {
@@ -1297,7 +1316,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
     picked = [...set].sort((x, y) => x - y);
     showSel(); setEdit(sel.length === 1 ? sel[0] : null);
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・色や太さのボタンで変更）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・「色・太さ」で変更）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
   }
   // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
   function rebuild(dx, dy, patch) {
@@ -2244,12 +2263,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function syncNav(id) {
     const i = ids.indexOf(id);
     $('#chap-t').textContent = (book.chapters[i] || {}).label || '';
-    for (const b of [$('#prev'), $('#prev2')]) b.disabled = i <= 0;
-    for (const b of [$('#next'), $('#next2')]) b.disabled = i >= ids.length - 1;
+    $('#prev2').disabled = i <= 0;
+    $('#next2').disabled = i >= ids.length - 1;
   }
   const step = (d) => { const i = ids.indexOf(CH) + d; if (ids[i]) openChapter(ids[i], false); };
-  $('#prev').onclick = $('#prev2').onclick = () => step(-1);
-  $('#next').onclick = $('#next2').onclick = () => step(1);
+  $('#prev2').onclick = () => step(-1);
+  $('#next2').onclick = () => step(1);
   addEventListener('pagehide', () => { if (CH) store.set(memKey('pos:' + CH), String(scrollY)); });
 
   // ---------- 目次・しおり ----------
