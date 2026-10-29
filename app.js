@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v61';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2318,7 +2318,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
-    initBlocks(); markBm(); layout(); startPdf();
+    initBlocks(); markBm(); layout(); startPdf(); needCover();
     showBlocks(cs.blocks);
     openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
@@ -2733,7 +2733,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     closePdf();
   }
   async function switchBook(v) {
-    leaveBook(); setSrc(v);
+    leaveBook(); setSrc(v); markOpened(v);
     if (!await loadBook()) { $('#empty').hidden = false; chapSel.disabled = true; document.body.classList.remove('pdf'); doc.replaceChildren(srcLine); srcLine.textContent = ''; initBlocks(); showBlocks({}); setAnswers('', []); layout(); showPgno(); return; }
     $('#empty').hidden = true; chapSel.disabled = false;
     fillChapters();
@@ -2771,6 +2771,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         if (i % 25 === 0) stat.textContent = `PDF を読み込み中 ${i}/${pd.numPages}ページ`;
       }
       const title = f.name.replace(/\.pdf$/i, '');
+      await makeCover(id, pd);
       return await addBook(id, { title, local: true, pdf: true, chapters: [{ id: 'pdf', label: title, file: f.name }], sizes, images: {} });
     } catch (e) { kv.del('pdf:' + id).catch(() => {}); throw e; }
     finally { if (pd) pd.destroy(); }
@@ -2788,33 +2789,91 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     stat.textContent = `「${opened.map((b) => b.title).join('」「')}」をこのiPadに保存しました`;
   }
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
-  const shelf = $('#shelf');
-  async function showShelf() {
-    const list = (await kv.get('books')) || [];
-    const gh = cfg.token || await kv.get('book:' + cfg.repo + '@' + cfg.branch + ':' + cfg.book);
-    const rows = (gh ? [{ id: 'gh', title: 'GitHub: ' + cfg.book.split('/').pop() }] : []).concat(list);
-    $('#shelf-list').replaceChildren(...rows.map((r) => {
-      const li = document.createElement('li'), b = document.createElement('button');
-      b.type = 'button'; b.className = 'open'; b.textContent = r.title; b.setAttribute('aria-current', String(r.id === src));
-      b.onclick = () => { shelf.close(); if (r.id !== src || !CH) switchBook(r.id); };
-      li.append(b);
-      if (r.id !== 'gh') {   // ファイルから開いた本だけ消せる（2回押す）
-        const d = document.createElement('button'); d.type = 'button'; d.className = 'del'; d.textContent = '削除';
-        d.onclick = async () => {
-          if (!d.classList.contains('arm')) { d.classList.add('arm'); d.textContent = 'もう一度押すと削除'; return; }
-          const meta = await kv.get('book:' + r.id);
-          for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + r.id + ':' + c.id);
-          await kv.del('book:' + r.id); await kv.del('pdf:' + r.id); await kv.del('ptext:' + r.id);
-          await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== r.id));
-          if (r.id === src) { CH = null; cs = null; await switchBook('gh'); }
-          showShelf();
-        };
-        li.append(d);
-      }
-      return li;
-    }));
-    if (!shelf.open) shelf.showModal();
+  // 本棚: 表紙を最近開いた順に並べる。PDF は1ページ目の縮小画像（開いたときに一度だけ作って端末に保存）、md は題名の札。
+  // 押すとその本を開く。ファイルから開いた本は、表紙の下の「…」から消せる（2回押す）
+  const shelf = $('#shelf'), shelfList = $('#shelf-list'), bkMenu = $('#bk-menu'), bkDel = $('#bk-del');
+  const openedAt = () => { try { return JSON.parse(store.get(PREF + ':opened')) || {}; } catch { return {}; } };   // 本 -> 最後に開いた時刻
+  function markOpened(id) { const o = openedAt(); o[id] = Date.now(); store.set(PREF + ':opened', JSON.stringify(o)); }
+  const COVER_W = 300;
+  async function makeCover(id, pd) {
+    try {
+      const pg = await pd.getPage(1), w1 = pg.getViewport({ scale: 1 }).width, vp = pg.getViewport({ scale: COVER_W / w1 }), cv = document.createElement('canvas');
+      cv.width = COVER_W; cv.height = Math.round(vp.height);
+      await pg.render({ canvas: cv, viewport: vp }).promise;
+      const bl = await new Promise((r) => cv.toBlob(r, 'image/jpeg', .8));
+      cv.width = cv.height = 0; pg.cleanup();
+      if (bl) await kv.set('cover:' + id, bl);
+    } catch {}
   }
+  // 表紙のない PDF の本（表紙を作る前の版で開いたもの）は、開いたときに作る
+  function needCover() {
+    const id = src, pd = pdfDoc;
+    if (!isPdf() || !isLocal() || !pd) return;
+    kv.get('cover:' + id).then((v) => v || setTimeout(() => { if (pd === pdfDoc && !penDown) makeCover(id, pd); }, 2000)).catch(() => {});
+  }
+  let coverUrls = [], bkAt = null;
+  async function showShelf() {
+    const list = (await kv.get('books')) || [], ghMeta = await kv.get('book:' + cfg.repo + '@' + cfg.branch + ':' + cfg.book), o = openedAt();
+    const rows = (cfg.token || ghMeta ? [{ id: 'gh', title: (ghMeta && ghMeta.title) || cfg.book.split('/').pop() }] : []).concat(list)
+      .map((r, i) => ({ ...r, i })).sort((a, b) => (o[b.id] || 0) - (o[a.id] || 0) || a.i - b.i);
+    const urls = [];
+    const els = await Promise.all(rows.map(async (r) => {
+      const meta = r.id === 'gh' ? ghMeta : await kv.get('book:' + r.id), sz = meta && meta.pdf && meta.sizes && meta.sizes[0];
+      const el = document.createElement('div'), cv = document.createElement('button'), lb = document.createElement('div'), nm = document.createElement('span');
+      el.className = 'bk'; el.dataset.id = r.id;
+      cv.type = 'button'; cv.className = 'cv'; cv.setAttribute('aria-current', String(r.id === src)); cv.setAttribute('aria-label', `「${r.title}」を開く`);
+      cv.style.aspectRatio = sz ? `${sz[0]} / ${sz[1]}` : '210 / 297';
+      const bl = sz && await kv.get('cover:' + r.id).catch(() => null);
+      if (bl) { const im = document.createElement('img'); im.alt = ''; im.src = URL.createObjectURL(bl); urls.push(im.src); cv.append(im); }
+      else {
+        const t = document.createElement('span'), f = document.createElement('small'), n = meta && meta.chapters ? meta.chapters.length : 0;
+        cv.classList.add('card'); t.textContent = r.title;
+        f.textContent = r.id === 'gh' ? 'GitHub' : sz ? 'PDF' : n > 1 ? `${n}章` : '';
+        cv.append(t, f);
+      }
+      lb.className = 'lb'; nm.className = 'nm'; nm.textContent = r.title; lb.append(nm);
+      if (r.id !== 'gh') { const m = document.createElement('button'); m.type = 'button'; m.className = 'bk-m'; m.textContent = '…'; m.setAttribute('aria-label', 'この本の操作'); lb.append(m); }
+      el.append(cv, lb);
+      return el;
+    }));
+    for (const u of coverUrls) URL.revokeObjectURL(u);
+    coverUrls = urls;
+    shelfList.replaceChildren(...els);
+    bkMenu.hidden = true;
+    if (!shelf.open) shelf.showModal();
+    const cur = shelfList.querySelector('[aria-current="true"]'); if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+  shelfList.addEventListener('click', (e) => {
+    const bk = e.target.closest('.bk');
+    if (!bk) return;
+    const id = bk.dataset.id;
+    if (e.target.closest('.bk-m')) {
+      bkAt = id; bkDel.classList.remove('arm'); bkDel.textContent = '削除';
+      const r = e.target.getBoundingClientRect();
+      bkMenu.hidden = false;
+      bkMenu.style.left = Math.max(8, Math.min(innerWidth - bkMenu.offsetWidth - 8, r.right - bkMenu.offsetWidth)) + 'px';
+      bkMenu.style.top = Math.min(innerHeight - bkMenu.offsetHeight - 8, r.bottom + 4) + 'px';
+      return;
+    }
+    if (!e.target.closest('.cv')) return;
+    shelf.close();
+    if (id !== src || !CH) switchBook(id);
+  });
+  shelf.addEventListener('click', (e) => { if (!bkMenu.hidden && !e.target.closest('#bk-menu, .bk-m')) bkMenu.hidden = true; });
+  shelf.addEventListener('close', () => { bkMenu.hidden = true; for (const u of coverUrls) URL.revokeObjectURL(u); coverUrls = []; shelfList.replaceChildren(); });
+  // ファイルから開いた本を、この iPad から消す（ドライブに送った分はドライブに残る）
+  bkDel.onclick = async () => {
+    if (!bkDel.classList.contains('arm')) { bkDel.classList.add('arm'); bkDel.textContent = 'もう一度押すと削除'; return; }
+    const id = bkAt; bkMenu.hidden = true;
+    if (!id) return;
+    const meta = await kv.get('book:' + id);
+    for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + id + ':' + c.id);
+    for (const k of ['book:', 'pdf:', 'ptext:', 'cover:']) await kv.del(k + id);
+    await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== id));
+    const o = openedAt(); delete o[id]; store.set(PREF + ':opened', JSON.stringify(o));
+    if (id === src) { CH = null; cs = null; await switchBook('gh'); }
+    if (shelf.open) showShelf();
+  };
   $('#books').onclick = showShelf;
 
   // ---------- boot ----------
@@ -2827,7 +2886,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     await loadBook();
     if (!book && canSync()) { try { await syncBook(); } catch (e) { stat.textContent = '本をダウンロードできませんでした: ' + (e.message || ''); } }
     if (!book) { $('#empty').hidden = false; chapSel.disabled = true; return; }
-    fillChapters();
+    fillChapters(); markOpened(src);
     const fromHash = location.hash.slice(1);
     await openChapter(ids.includes(fromHash) ? fromHash : (store.get(memKey('chapter')) || 'ch1'), true);
     pushAll();
