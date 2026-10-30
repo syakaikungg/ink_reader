@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v75';
+  const APP_VERSION = 'ink-reader-v76';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -3495,7 +3495,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
-    const [saved, ans, wait0, rv, seen, ab] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey()), kv.get(hsKey(id)), kv.get(ansbKey(id))]);
+    const [saved, ans, wait0, rv, seen, ab, lz] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey()), kv.get(hsKey(id)), kv.get(ansbKey(id)), isPdf() ? null : kv.get(htsKey(id))]);
     if (my !== opening) return;
     let wait = wait0;
     ansMoved = ab || {};
@@ -3507,8 +3507,11 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
-    if (!isPdf()) renderMarkdown.fit(doc);
     initBlocks();
+    // 長い章: 前に測った高さがあれば、画面から遠い段落は描かずに開く（速い）。なければ全部並べてから測って覚える
+    const lk = lazyKey(), lzHit = !isPdf() && blocks.length > LAZY_N && lz && lz.key === lk;
+    lzCur = lzHit ? { id, ...lz } : null;
+    if (lzHit) lazyOn(lz.hs, lz.fs); else if (!isPdf()) renderMarkdown.fit(doc);
     if (!isPdf()) wait = reanchor(id, saved, seen, ans, wait);
     markBm(); layout(); startPdf(); needCover();
     showBlocks(cs.blocks);
@@ -3516,7 +3519,11 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     doc.classList.remove('loading');
     scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
-    if (document.fonts) document.fonts.ready.then(() => { if (!isPdf()) renderMarkdown.fit(doc); layout(); });
+    if (document.fonts) document.fonts.ready.then(() => {
+      if (!isPdf() && !lzHit) renderMarkdown.fit(doc);
+      layout();
+      if (!isPdf() && !lzHit && blocks.length > LAZY_N && CH === id && my === opening) lazyMeasure(id, lk);
+    });
     // 今の置き場所にまだ送っていない書き込み（つなぐ前に書いたもの・置き場所を変えたもの）を送る。GitHub の本は moveGhBook で写してから
     if (hasRemote() && ghMoved() && Object.keys(cs.blocks).length) { const n = cs.pending.size; moveTo(cs, where()); if (cs.pending.size !== n) { persist(); schedulePush(1500); } }
     // ページの画像の作り方を変えたときは、書き込みのあるページの画像を作り直す
@@ -3531,6 +3538,62 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     needViews(id);
     showPending();
     lastPull = Date.now(); refreshChapter(); nowSoon();
+  }
+  // ---------- 長い章を軽く ----------
+  // 長い md の章（段落が LAZY_N より多い）は、画面から遠い段落を描かない（content-visibility: auto。描く・当たり判定・並べ直しが画面の近くだけになる）。
+  // 段落の高さは覚えさせる（contain-intrinsic-height）ので、段落の位置（書き込みの位置）は変わらない。高さは字体を読んだあとに一度全部並べて測り、
+  // 端末に覚える（kv 'hts:<本>:<章>' = { key, hs: 段落ごとの中身の高さ（描かないと高さが変わる段落は null）, fs: 縮めた長い式 }）。次からはそれを使うので、開くのも速い
+  const LAZY_N = 200;
+  const htsKey = (id) => 'hts:' + bookKey() + ':' + id;
+  // 覚えた高さが使えるか: アプリの版（CSS）・md の描き方・本文（段落のハッシュ）が同じ
+  const lazyKey = () => { let h = 5381; const t = APP_VERSION + renderMarkdown.version + hashes.join(); for (let i = 0; i < t.length; i++) h = (h * 33 + t.charCodeAt(i)) >>> 0; return h.toString(36) + ':' + blocks.length; };
+  function lazyOn(hs, fs) {
+    const ks = fs && fs.length ? doc.querySelectorAll('.katex-display') : [];
+    for (const [i, f] of fs || []) if (ks[i]) ks[i].style.fontSize = f;
+    blocks.forEach((el, b) => { if (b && hs[b] != null) { el.style.containIntrinsicHeight = 'auto ' + hs[b] + 'px'; el.classList.add('lz'); } });
+  }
+  function lazyOff(b) { const el = blocks[b]; el.classList.remove('lz'); el.style.containIntrinsicHeight = ''; }
+  // 段落の中身の高さ（余白の padding と枠を除く。contain-intrinsic-height はこの高さ）
+  // getComputedStyle の height（並べた結果の高さ。getBoundingClientRect は章の下の方で端数がずれる）を、ブラウザが並べる 1/64 px 刻みにそろえる
+  // （height は 6 桁ほどで丸めて返るので、そのまま使うと 1/64 px ずつ低くなり、段落の数だけたまる）
+  const innerH = (el) => {
+    const c = getComputedStyle(el), h = parseFloat(c.height) - (c.boxSizing !== 'border-box' ? 0 : ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((a, k) => a + parseFloat(c[k]), 0));
+    return Math.round(h * 64) / 64;
+  };
+  let lzCur = null, lzT = 0;   // 今の章の覚えた高さ { id, key, hs, fs }
+  // 覚えた高さと違っていた段落（端末の字体が変わったなど）は、描いたときに覚え直す
+  doc.addEventListener('contentvisibilityautostatechange', (e) => {
+    const el = e.target, c = lzCur;
+    if (e.skipped || !c || c.id !== CH || !el.classList || !el.classList.contains('lz')) return;
+    const b = blocks.indexOf(el), h = innerH(el);
+    if (b < 1 || c.hs[b] == null || Math.abs(h - c.hs[b]) < .5) return;
+    c.hs[b] = h; el.style.containIntrinsicHeight = 'auto ' + h + 'px';
+    const k = htsKey(c.id); clearTimeout(lzT); lzT = setTimeout(() => kv.set(k, { key: c.key, hs: c.hs, fs: c.fs }).catch(() => {}), 2000);
+  });
+  async function lazyMeasure(id, key) {
+    const bk = bookKey(), pos = () => blocks.map((el) => el.offsetTop).concat(page.offsetHeight);
+    // 横にはみ出す段落（描かないと切れる）と画像のある段落（あとから読めて高さが変わる）は、いつも描く
+    const before = pos(), hs = blocks.map((el, b) => !b || el.scrollWidth > el.clientWidth + 1 || el.querySelector('img') ? null : innerH(el));
+    // 描くとき・描かないときで位置が変わる段落（中の余白が外に出る並べ方。ゆるいリスト・details など）は、いつも描く。
+    // 描いているとき（中に閉じ込める並べ方）は contain で、描かないときは content-visibility: auto を付けて 2 こま待って（一度描いてから並べ方が変わる）比べる
+    const drop = () => {
+      for (let n = 0; n < 6; n++) {
+        const now = pos(), bad = [];
+        for (let b = 1; b < blocks.length; b++) if (hs[b] != null && Math.abs((now[b + 1] - now[b]) - (before[b + 1] - before[b])) > 1.5) bad.push(b);
+        if (!bad.length) return;
+        for (const b of bad) { hs[b] = null; lazyOff(b); blocks[b].style.contain = ''; }
+      }
+    };
+    blocks.forEach((el, b) => { if (hs[b] != null) el.style.contain = 'layout'; });
+    drop();
+    for (const el of blocks) el.style.contain = '';
+    lazyOn(hs);
+    for (let i = 0; i < 2; i++) await new Promise((ok) => requestAnimationFrame(ok));
+    if (bk !== bookKey() || id !== CH) return;
+    drop();
+    const fs = [...doc.querySelectorAll('.katex-display')].flatMap((k, i) => k.style.fontSize ? [[i, k.style.fontSize]] : []);
+    if (bk === bookKey() && id === CH) { lzCur = { id, key, hs, fs }; kv.set(htsKey(id), { key, hs, fs }).catch(() => {}); }
+    layout();
   }
   // 本文が変わった章（GitHub の本の直し・ファイルの md の新しい版）を開いたとき、段落の字で付け直す。
   // 書き込みは、書いたときの段落の分け方（記録の hs。前の版の記録は段落ごとの h）と比べる。しおり・答え待ち・答えの段落は、前に開いたときの分け方（kv 'hs:<本>:<章>'）と比べる
@@ -4559,7 +4622,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     const meta = await kv.get('book:' + id);
     for (const c of (meta && meta.chapters) || []) {
       for (const f of picNames(((await kv.get('ink:' + id + ':' + c.id)) || {}).blocks)) await kv.del(picKey(f, id));   // 貼った画像
-      for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:', 'view:drive:', 'viewv:drive:']) await kv.del(k + id + ':' + c.id);
+      for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:', 'view:drive:', 'viewv:drive:', 'hts:']) await kv.del(k + id + ':' + c.id);
     }
     for (const f of Object.keys((meta && meta.local && meta.images) || {})) await kv.del('img:' + meta.imageDir + '/' + f);   // ファイルの md の図
     for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:', 'imgup:drive:']) await kv.del(k + id);
