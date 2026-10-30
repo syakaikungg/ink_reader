@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v70';
+  const APP_VERSION = 'ink-reader-v71';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -35,6 +35,13 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  // この端末の名前（ドライブの いま.md と、読んだ跡のファイル名に出す）。同じ種類の端末を見分けられるよう、端末ごとに決めた 4 字を付ける
+  const DEV = store.get(PREF + ':dev') || (() => {
+    const u = navigator.userAgent, k = /iPad/.test(u) || /Macintosh/.test(u) && navigator.maxTouchPoints > 1 ? 'iPad' : /iPhone/.test(u) ? 'iPhone' : /Android/.test(u) ? 'Android' : 'PC';
+    const d = k + '-' + Math.random().toString(36).slice(2, 6);
+    store.set(PREF + ':dev', d);
+    return d;
+  })();
 
   // ---------- IndexedDB（本・図・書き込みの端末内保存） ----------
   const kv = (() => {
@@ -660,9 +667,11 @@
     };
   })();
   const driveOn = () => !!cfg.drive;
-  // 書き込み・画像・答えの置き場所。ドライブにつないでいなければ置き場所はなく、iPad に貯めておいて、つないだら送る
-  const where = () => driveOn() ? drive : null;
-  const hasRemote = () => driveOn();
+  // 今の本をドライブと同期するか。ファイルから開いた本は、本棚の「…」で「この端末だけ」にできる（本の情報の nosync。ドライブには何も送らず、ドライブから取り込みもしない）
+  const synced = () => driveOn() && !(isLocal() && book && book.nosync);
+  // 書き込み・画像・答えの置き場所。ドライブと同期しなければ置き場所はなく、端末に貯めておいて、同期したら送る
+  const where = () => synced() ? drive : null;
+  const hasRemote = () => synced();
   // ドライブのトークンが切れる（10分前から）・切れた: 次に画面に触れたとき（ペンを離したときも）自動でつなぎ直す。
   // うまくいかなければ 2 分おいて、また触れたときに。下の表示を押してもつなぎ直せる
   let relogin = false, logging = false, nextTry = 0;
@@ -690,7 +699,7 @@
   // ドライブの「Ink Reader」フォルダに置く、AI（Claude などのドライブ連携）への説明
   const README = `# Ink Reader のフォルダ
 
-iPad の手書きリーダー「Ink Reader」が置いているフォルダです。本ごとにフォルダがあります。
+手書きのリーダー「Ink Reader」（iPad などで使う）が置いているフォルダです。本ごとにフォルダがあります。いくつかの端末から同じフォルダを使うこともあります。
 
 - \`<本>/book.json\`: 題名と章の一覧。PDF の本は \`pdf: true\` と各ページの大きさ。\`from: "github"\` の本は、本文が GitHub の \`repo\` の \`path\` にあり（章の md は \`path\` からの \`file\`）、このフォルダには書き込み・画像・答えだけを置く。
 - \`<本>/book.pdf\`: PDF の本の元の PDF（10MB までの本だけ。それより大きい本は置かない）。
@@ -699,10 +708,10 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 - \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
 - \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。段落ごとの \`pics\` は、紙に貼った画像の名前と位置。
 - \`<本>/pics/<名前>.jpg\`（.png）: 利用者が紙に貼った画像（写真・図・スクリーンショットなど）。ページの画像・now.png・last.png にも貼った所に入っている。
-- \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「書き出す」と同じもの。使い方は下）。
-- \`いま.md\`・\`now.png\`・\`last.png\`: いま iPad で見ている所と、最後に書いた所（下の「いま見ている所」）。
+- \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「エクスポート」と同じもの。使い方は下）。
+- \`いま.md\`・\`now.png\`・\`last.png\`: いま端末で見ている所と、最後に書いた所（下の「いま見ている所」）。
 - \`<本>/marks.json\`: 答えごとに利用者が付けた「わかった」「まだ」。\`{ "<章>-<質問ID>": { "m": "ok"（わかった）| "no"（まだ）| null（外した）, "t": 押した時刻, "c": 章, "b": [段落] } }\`。理解度をつかむのに使ってください。
-- \`<本>/log/<日付>.md\`: その日の読んだ跡（何時から何時に、どの章のどの段落を見て、どこに書いたか）。
+- \`<本>/log/<日付>_<端末>.md\`: その日の読んだ跡（何時から何時に、どの章のどの段落を見て、どこに書いたか）。端末ごとに別のファイル（\`<端末>\` は \`iPad-k3f9\` のような名前）。前の版は \`<日付>.md\`。
 
 ## いま見ている所（いま.md）
 
@@ -722,16 +731,16 @@ iPad で Ink Reader と Claude を画面に並べて使うときのために、�
 
 ## 書き込みつきの PDF を作るとき（課題の提出など）
 
-PDF の本は、アプリの「書き出す」と同じ PDF（元のページに手書きを重ね、ページの途中の余白・後ろの白紙も入れたもの）を作れます。コマンドを動かせる環境（Claude Code など）で:
+PDF の本は、アプリの「エクスポート」と同じ PDF（元のページに手書きを重ね、ページの途中の余白・後ろの白紙も入れたもの）を作れます。コマンドを動かせる環境（Claude Code など）で:
 
 1. ドライブから4つをダウンロードする: \`Ink Reader/ink_export.mjs\`、\`<本>/book.json\`、\`<本>/book.pdf\`、\`<本>/ink/pdf.json\`（紙に画像を貼ってあれば \`<本>/pics/\` の画像も、作業フォルダの \`pics/\` に）
 2. 作業フォルダに \`ink_export.mjs\` を置き、そこで \`npm i pdf-lib@1.17.1 perfect-freehand@1.2.2\`（鍵のかかった PDF は \`pdfjs-dist@5.7.284\` も）
 3. \`node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <pdf.json> --pages 3-5 --out <名前>.pdf\`
-   - \`--pages\` は書き出すページ（そのページの後ろに入れた白紙も一緒に入る）。省くとすべて
+   - \`--pages\` は PDF に入れるページ（そのページの後ろに入れた白紙も一緒に入る）。省くとすべて
    - 貼った画像は作業フォルダの \`pics/\` から入れる（別の所に置いたら \`--pics <フォルダ>\`）
 
-\`book.pdf\` がない本（10MB より大きい）は作れないので、iPad のアプリで、右下のページ番号から開くページの一覧の「書き出す」で作ってもらってください。
-iPad で書いた直後は、ドライブに届くまで少し待ってから（アプリの下に「ドライブに保存しました」と出る）ダウンロードしてください。
+\`book.pdf\` がない本（10MB より大きい）は作れないので、アプリで、右下のページ番号から開くページの一覧の「エクスポート」で作ってもらってください。
+書いた直後は、ドライブに届くまで少し待ってから（アプリの下に「ドライブに保存しました」と出る）ダウンロードしてください。
 `;
 
   // ---------- 本のダウンロード（端末に保存） ----------
@@ -805,15 +814,16 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
 
   // ---------- 書き込みの保存と同期 ----------
-  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号], at:置き場所 }。置き場所: <本>/ink/<章>.json = { chapter, blocks }
-  // pending の段落は端末側を正とし、それ以外は置き場所の側を正としてまとめる
+  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号], at:置き場所, base }。置き場所: <本>/ink/<章>.json = { chapter, blocks }
+  // pending でない段落は置き場所の側を正とする。pending の段落は、前に置き場所とそろえたときの形（base: 段落ごとの線・画像の id と余白など）と比べ、
+  // 端末で増やした線・消した線だけを置き場所の側に反映する（ほかの端末が同じ段落に書いた線も残る）。線は動かしても書き直しても新しい id になるので、id の出入りを見ればよい
   // 置き場所: どの本もドライブ（つないでいるとき）。前は GitHub の本は GitHub、ファイルの本もトークンがあれば GitHub に送っていた（at が無く sha があれば GitHub）
   let cs = null;   // 今の章の { blocks, sha, pending:Set, at }
   const inkKey = (id) => 'ink:' + bookKey() + ':' + id;
   const inkPath = (id, dir = bookDir()) => dir + '/ink/' + id + '.json';
   const tag = (R) => R === hub ? '' : 'drive:';   // 置き場所ごとに覚えること（送った本・画像）のキーの頭
   let saveT = 0;
-  const saved = (st) => ({ blocks: st.blocks, sha: st.sha, pending: [...st.pending], at: st.at });
+  const saved = (st) => ({ blocks: st.blocks, sha: st.sha, pending: [...st.pending], at: st.at, base: st.base });
   function persist() {
     clearTimeout(saveT);
     const key = inkKey(CH), st = cs;
@@ -831,10 +841,34 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   let pushT = 0;
   function schedulePush(ms = 4000) { clearTimeout(pushT); pushT = setTimeout(() => pushChapter(CH), ms); }
+  const PROPS = ['gap', 'fold', 'sp', 'gr'];   // 段落ごとの線・画像のほかの値（余白・たたむ・方眼）
+  const idsOf = (d) => d ? Object.keys(d.strokes || {}).concat(Object.keys(d.pics || {})) : [];
+  function baseOf(blocks) {
+    const out = {};
+    for (const b in blocks || {}) { const d = blocks[b], o = out[b] = { ids: idsOf(d) }; for (const k of PROPS) if (d[k] != null) o[k] = d[k]; }
+    return out;
+  }
+  const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
   function merge(st, remote) {   // remote: {b: block}
     const out = {};
     for (const b in remote || {}) if (!st.pending.has(+b)) out[b] = remote[b];
-    for (const b of st.pending) if (st.blocks[b]) out[b] = st.blocks[b];
+    for (const b of st.pending) {
+      const L = st.blocks[b], R = remote && remote[b];
+      if (!st.base && st.sha) { if (L) out[b] = L; continue; }   // 前の版で保存した章（base がない）: 前と同じく端末の段落を正にする
+      if (!L && !R) continue;
+      const B = (st.base && st.base[b]) || { ids: [] }, had = new Set(B.ids), mine = new Set(idsOf(L)), d = { ...(L || R), strokes: {} };
+      delete d.pics; for (const k of PROPS) delete d[k];
+      // 置き場所の線から端末で消したものを除き、端末で増やしたものを足す
+      for (const kind of ['strokes', 'pics']) {
+        const o = {};
+        for (const [id, v] of Object.entries((R && R[kind]) || {})) if (mine.has(id) || !had.has(id)) o[id] = v;
+        for (const [id, v] of Object.entries((L && L[kind]) || {})) if (!had.has(id)) o[id] = v;
+        if (kind === 'strokes' || Object.keys(o).length) d[kind] = o;
+      }
+      // 余白などは、端末で変えたものは端末の値、ほかは置き場所の値
+      for (const k of PROPS) { const v = !same((L || {})[k], B[k]) ? (L || {})[k] : (R || {})[k]; if (v != null) d[k] = v; }
+      if (Object.keys(d.strokes).length || d.pics || PROPS.some((k) => d[k] != null)) out[b] = d;
+    }
     return out;
   }
   async function pullInk(id, dir = bookDir(), R = where()) {
@@ -846,14 +880,15 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function moveTo(st, R) {
     const at = atOf(st);
     if (!R || at === R.name) return;
-    st.sha = null; st.at = R.name;
+    st.sha = null; st.at = R.name; st.base = {};   // 新しい置き場所に前からある分（ほかの端末が置いた分）とは、両方を残してまとめる
     for (const b in st.blocks) st.pending.add(+b);
   }
   let pushing = false;
   async function pushChapter(id) {
     if (pushing || !canPush()) { showPending(); return; }
     if (!ghMoved()) { moveGhBook(); return; }
-    const key = inkKey(id), dir = bookDir(), bk = bookKey(), meta = book, R = where();   // 送信中に本を切り替えても、元の本に保存する
+    const key = inkKey(id), bk = bookKey(), meta = book, R = where();   // 送信中に本を切り替えても、元の本に保存する
+    let dir = bookDir();
     const st = id === CH ? cs : await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
     if (!st) return;
     moveTo(st, R);
@@ -861,14 +896,15 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     pushing = true;
     let sent = null;
     try {
-      await upBook(dir, bk, meta, R);
+      dir = await upBook(dir, bk, meta, R);
       for (let tryNo = 0; tryNo < 2; tryNo++) {
         sent = new Set(st.pending);
         if (id === CH) st.blocks = serialize();
         await upPics(dir, bk, st.blocks, R);
-        const body = JSON.stringify({ chapter: id, blocks: st.blocks }, null, 0);
+        const out = st.blocks, body = JSON.stringify({ chapter: id, blocks: out }, null, 0);
         try {
           st.sha = await R.put(inkPath(id, dir), body, st.sha, `ink: ${dir.split('/').pop()} ${id}`);
+          st.base = baseOf(out);
           for (const b of sent) if (id !== CH || sameBlock(b, st.blocks[b])) st.pending.delete(b);
           break;
         } catch (e) {
@@ -876,7 +912,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
           // 他の端末が先に保存していた: 取り直してまとめ、もう一度
           const remote = await pullInk(id, dir, R);
           st.sha = remote.sha;
-          st.blocks = merge(st, remote.blocks);
+          st.blocks = merge(st, remote.blocks); st.base = baseOf(remote.blocks);
           if (id === CH) { showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist(); }
         }
       }
@@ -898,11 +934,28 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     return now === Object.keys({ ...(sentBlock && sentBlock.strokes), ...(sentBlock && sentBlock.pics) }).sort().join();
   }
   // 本の情報を、最初に一度だけ置く。ファイルの md の本は本文も置く（GitHub の本の本文は GitHub にあるので、場所だけ書く）。
-  // ドライブには AI への説明（README.md）と道具も置く
-  async function upBook(dir, bk, meta, R) {
+  // ドライブには AI への説明（README.md）と道具も置く。ファイルから開いた本をはじめて置くとき、同じ本がもうドライブにあれば
+  // （ほかの端末が、ドライブにつなぐ前に開いて置いた本）、そのフォルダにつなぐ（本の情報の dir。書き込みは両方を残してまとめる）。
+  // 本のフォルダ（つないだら、そのフォルダ）を返す。二つ同時に走って同じファイルを二つ作らないよう、本ごとに一つずつ
+  const upping = new Map();
+  function upBook(dir, bk, meta, R) {
+    const k = tag(R) + bk;
+    if (!upping.has(k)) upping.set(k, upBook1(dir, bk, meta, R).finally(() => upping.delete(k)));
+    return upping.get(k);
+  }
+  async function upBook1(dir, bk, meta, R) {
     if (R === drive) await upTools().catch((e) => { if (e.drive) throw e; });
-    if (!meta || await kv.get('up:' + tag(R) + bk)) return;
+    if (!meta || await kv.get('up:' + tag(R) + bk)) return dir;
     const local = bk.startsWith('local:'), put = async (path, text) => { if (!await R.sha(path)) await R.put(path, text, null, `book: ${dir.split('/').pop()}`); };
+    if (R === drive && local && !meta.dir) {
+      const d = await sameOnDrive(meta, bk, dir);
+      if (d) {
+        meta.dir = dir = d.dir;
+        const m = await kv.get('book:' + bk);
+        if (m) await kv.set('book:' + bk, { ...m, dir });
+        if (!d.json.fp && meta.fp) await drive.put(dir + '/book.json', JSON.stringify({ ...d.json, fp: meta.fp }, null, 1), await drive.sha(dir + '/book.json'));
+      }
+    }
     if (R === drive) await drive.mkdir(dir + '/answers');   // 答えを置くフォルダを先に作っておく
     const chapters = meta.chapters.map((c) => meta.pdf || !local ? { id: c.id, label: c.label, file: c.file } : { id: c.id, label: c.label, file: 'chapters/' + c.id + '.md' });
     for (const c of meta.pdf || !local ? [] : meta.chapters) {
@@ -912,6 +965,17 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const from = local ? { from: 'file' } : { from: 'github', repo: cfg.repo, branch: cfg.branch, path: cfg.book };
     await put(dir + '/book.json', JSON.stringify({ title: meta.title, ...from, pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}), ...(meta.fp ? { fp: meta.fp } : {}) }, null, 1));
     await kv.set('up:' + tag(R) + bk, true);
+    return dir;
+  }
+  // ドライブにある、この本と同じ本のフォルダ（自分のフォルダ dir は除く）
+  async function sameOnDrive(meta, bk, dir) {
+    const texts = meta.pdf ? null : await Promise.all(meta.chapters.map(async (c) => ((await kv.get('md:' + bk + ':' + c.id)) || {}).md));
+    const x = { pdf: !!meta.pdf, fp: meta.fp, title: meta.title, sizes: meta.sizes, texts: texts || [] };
+    for (const d of await drive.books()) {
+      if (d.dir === dir || d.json.from !== 'file') continue;
+      if (await sameBook(d.json, x, async (c) => { const f = await drive.get(d.dir + '/' + c.file); return f && f.text; })) return d;
+    }
+    return null;
   }
   // GitHub の本をドライブにつないだとき、一度だけ: GitHub にある書き込み（iPad でまだ開いていない章も）と答えをドライブへ写す。
   // 書き込みは iPad の分とまとめて全部送り直し、答え（<章>.md に追記してきたもの）は 1 問ずつのファイルに分ける。以後 GitHub の ink・answers は使わない
@@ -932,7 +996,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (live && (s !== cs || atOf(s) === drive.name)) return moveInk(id);   // 待っている間に章を開き直した
       if (s === cs) s.blocks = serialize();
       s.blocks = merge(s, remote.blocks);   // いつもの取り込みと同じ: iPad の未送信の段落はそのまま、ほかは GitHub（ドライブ）の分
-      s.sha = done.sha; s.at = drive.name;
+      s.sha = done.sha; s.at = drive.name; s.base = done.sha ? baseOf(done.blocks) : {};
       if (!done.sha) for (const b in s.blocks) s.pending.add(+b);
       if (s === cs) { showBlocks(s.blocks); undoStack.length = redoStack.length = 0; syncHist(); persist(); }
       else if (Object.keys(s.blocks).length) await kv.set(key, saved(s));
@@ -974,10 +1038,10 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   let pdfUp = null;
   function upPdf() {
     if (!isPdf() || where() !== drive || pdfUp) return;
-    const dir = bookDir(), bk = bookKey();
+    const bk = bookKey(), meta = book;
     pdfUp = (async () => {
-      await upTools();
       if (await kv.get('pdfup:drive:' + bk)) return;
+      const dir = await upBook(bookDir(), bk, meta, drive);   // 同じ本がもうドライブにあれば、そのフォルダに
       const v = await kv.get('pdf:' + bk), f = v && new Blob([v], { type: 'application/pdf' });
       if (!f) return;
       if (f.size <= PDF_MAX && !await drive.sha(dir + '/book.pdf')) await drive.put(dir + '/book.pdf', f, null);
@@ -1027,7 +1091,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         }
         const cv = await pageImage(n), bl = await pngOf(cv);
         cv.width = cv.height = 0;
-        shas[n] = await R.put(path, bl, shas[n], msg);
+        try { shas[n] = await R.put(path, bl, shas[n], msg); }
+        catch (e) { if (e.status !== 409) throw e; shas[n] = await R.put(path, bl, await R.sha(path), msg); }   // ほかの端末が同じページの画像を置いていた（今の線は、まとめたあとのもの）
       } catch (e) { delete shas[n]; if (e.drive) { needLogin(); break; } }
     }
     await kv.set(key, shas);
@@ -1046,8 +1111,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
       const remote = await pullInk(id);
-      if (id !== CH || remote.sha === st.sha) return;
-      st.sha = remote.sha; st.blocks = merge(st, remote.blocks);
+      if (id !== CH) return;
+      if (remote.sha === st.sha) { if (!st.base && st.sha) { st.base = baseOf(remote.blocks); persist(); } return; }   // 前の版で保存した章は、ここで base を覚える
+      st.sha = remote.sha; st.blocks = merge(st, remote.blocks); st.base = baseOf(remote.blocks);
       showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist();
       persist();
       if (st.pending.size) schedulePush(500);
@@ -1058,8 +1124,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   let lastPull = 0;
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { if (cs && cs.pending.size) pushChapter(CH); }
-    // 答えを待っているときは、戻るたびに確かめる
-    else if (Date.now() - lastPull > (asks.length ? 5000 : 60000)) { lastPull = Date.now(); refreshChapter(); }
+    // 戻るたびに（5 秒に 1 回まで）、ほかの端末で書いた分と Claude の答えを取り込む
+    else if (Date.now() - lastPull > 5000) { lastPull = Date.now(); refreshChapter(); }
   });
   // Claude と画面を分けているときは、アプリに戻っても上の visibilitychange が来ない。Claude の側から戻ったとき（focus）に答えを見に行く
   addEventListener('focus', () => { if (Date.now() - lastPull > 5000) { lastPull = Date.now(); refreshChapter(); } });
@@ -1367,6 +1433,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 戻す・進むの札は、ツールバーのすぐ下に置く（ツールバーは画面の幅で折り返して高さが変わる）
   const bar = $('#bar');
   new ResizeObserver(() => { document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px'); placeRail(); }).observe(bar);
+  new ResizeObserver(() => placeRail()).observe($('#hist'));   // 本がない画面（戻す・進むの札が隠れている）から本を開いたとき、色・太さの札を札の下へ置き直す
   // ペンの色と太さ: 選んでいる「ペン」をもう一度押すと小窓が出る。太さは3つから選び、つまみで選んでいる太さを変える（端末に覚える）。
   // 投げ縄で選んだ線は、メニューの「色・太さ」から同じ小窓で変える
   const PALETTE = ['k', 'r', 'b', '#1f8a4c', '#e07b00', '#7b3fc4', '#8a5a2b', '#0f8b8d', '#d6338a', '#6b7280', '#c9a100', '#0b2f6b'];
@@ -2147,7 +2214,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   let askImg = null, askId = '';
   // ドライブにつないでいるとき: 書き込み・画像・答えはドライブにあるので、場所と答えの置き方を伝える（Claude のドライブ連携で読む）
-  const viaDrive = () => driveOn();
+  const viaDrive = () => synced();
   const driveDir = () => 'Ink Reader/' + bookDir();
   // 答えの置き方。Claude アプリでも sakai_study のセッションでも同じ
   const answerText = () => `答えはチャットで返したうえで、Google ドライブの「${driveDir()}/answers」に新しいファイル「${CH}-${askId}.md」を作って保存してください。1行目は <!-- ink-answer id=${askId} b=${picked.join(',')} --> にします。`;
@@ -2168,8 +2235,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     addAsk({ id: askId, b: picked.slice(), q: $('#ask-q').value.trim() });
     if (cs && cs.pending.size) pushChapter(CH);
     try {
-      if (askImg) await drive.put(bookDir() + '/asks/' + askId + '.png', await pngOf(askImg), null);
-      if (isPdf()) await upPages(bookDir(), bookKey(), picked.slice(), true, drive);
+      const dir = await upBook(bookDir(), bookKey(), book, drive);
+      if (askImg) await drive.put(dir + '/asks/' + askId + '.png', await pngOf(askImg), null);
+      if (isPdf()) await upPages(dir, bookKey(), picked.slice(), true, drive);
     } catch (e) { if (e.drive) needLogin(); }
   }
   function askText(withImg) {
@@ -2227,8 +2295,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     $('#ask-new').hidden = !sessUrl() || noRepo;
     $('#ask-code').hidden = $('.sess').hidden = noRepo;
     // PDF は画像がないと伝わらないので、ドライブにつないでいなければ、画像を渡せる「共有」を主にする
-    $('#ask-open').classList.toggle('primary', isLocal() && (driveOn() || !isPdf()));
-    $('#ask-share').classList.toggle('primary', isLocal() && !driveOn() && isPdf());
+    $('#ask-open').classList.toggle('primary', isLocal() && (synced() || !isPdf()));
+    $('#ask-share').classList.toggle('primary', isLocal() && !synced() && isPdf());
   }
   $('#ask-sess').onchange = () => { cfg.session = $('#ask-sess').value.trim(); store.set(PREF + ':cfg', JSON.stringify(cfg)); syncSess(); links(); };
   // GitHub の本を sakai_study のセッションで聞く。本文はリポジトリ、手書きの画像と答えはドライブ。
@@ -2433,12 +2501,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 最後に書いた所 { k: 本, title, c: 章, label, b: 段落, t: 時刻, y: [上, 下]（紙の px）, md: 段落の本文（絵を作ったときに入れる） }。開き直しても残す
   let wrote = (() => { try { return JSON.parse(store.get(PREF + ':wrote')) || null; } catch { return null; } })();
   function nowSoon(ms = NOW_MS) {
-    if (!driveOn()) return;
+    if (!synced()) return;
     clearTimeout(nowT); nowT = setTimeout(upNow, ms);
   }
   // 書いた・消した・動かした線の場所を覚える（touch から）
   function noteWrite(list) {
-    if (!CH || !book || !driveOn()) return;
+    if (!CH || !book || !synced()) return;
     let b = null, y0 = Infinity, y1 = -Infinity;
     for (const s of list) if (s.bbox) { const t = top(s); y0 = Math.min(y0, s.bbox[1] + t); y1 = Math.max(y1, s.bbox[3] + t); b = s.b; }
     if (b == null) { b = list.length ? list[list.length - 1].b : null; if (!blocks[b]) return; y0 = tops[b]; y1 = y0 + 40; }   // 余白だけ変えたとき
@@ -2536,9 +2604,10 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const src = pdf ? `元の PDF は ${d}/book.pdf（10MB より大きい本は置いていません）`
       : isLocal() ? `本文: ${d}/chapters/${CH}.md` : `本文: GitHub の ${cfg.repo} の ${cfg.book}/${ch.file || ''}`;
     const out = [
-      '<!-- Ink Reader（iPad）が書き直し続けるファイルです。書き換えないでください -->',
+      '<!-- Ink Reader が書き直し続けるファイルです。書き換えないでください -->',
       '# いま Ink Reader で見ている所', '',
-      `更新: ${clock(Date.now(), true)}（iPad で書くかスクロールして、約2秒たつと書き直します。話と合わないほど古いときは、iPad のアプリがドライブにつながっていないかもしれません）`, '',
+      `更新: ${clock(Date.now(), true)}（書くかスクロールして、約2秒たつと書き直します。話と合わないほど古いときは、アプリがドライブにつながっていないかもしれません）`, '',
+      `- 端末: ${DEV}（いくつかの端末で使っているときは、最後に使った端末が書きます）`,
       `- 本: 「${book.title || ''}」（ドライブのフォルダ: ${d}）`,
       pdf ? '- PDF の本です。番号はページ番号（アプリの書き込み・答えの番号と同じ）' : `- 章: ${CH}「${ch.label || ''}」`,
       `- ${src}`,
@@ -2567,7 +2636,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   async function upNow() {
     if (nowRun) { nowRun.again = true; return; }
-    if (!driveOn() || !CH || !book || doc.classList.contains('loading') || document.visibilityState === 'hidden') return;
+    if (!synced() || !CH || !book || doc.classList.contains('loading') || document.visibilityState === 'hidden') return;
     if (penDown || pinch || curId !== null) return nowSoon();
     const v = inView();
     // PDF のページの絵がまだ描けていなければ、少し待つ（3 回まで）
@@ -2639,7 +2708,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function logText(L) {
     const hm = (t) => clock(t).slice(0, 5), nums = (a, b) => a === b ? String(a) : a + '〜' + b, u = L.pdf ? 'ページ' : '';
     return [`# ${L.d} の読んだ跡（「${L.title}」）`, '',
-      `Ink Reader（iPad）が書いています（書き換えないでください）。時刻は iPad の時計、番号は${L.pdf ? 'ページ' : '段落（章の上から数えたもの。いま.md と同じ）'}。`, '',
+      `Ink Reader（${DEV}）が書いています（書き換えないでください。端末ごとに別のファイル）。時刻はこの端末の時計、番号は${L.pdf ? 'ページ' : '段落（章の上から数えたもの。いま.md と同じ）'}。`, '',
       ...L.rows.map((r) => `- ${hm(r.from)}〜${hm(r.to)} ${L.pdf ? '' : `${r.c}「${r.l}」 段落 `}${nums(r.lo, r.hi)}${u}を見た${r.w.length ? `。書き込み: ${r.w.join(', ')}${u}` : ''}`),
     ].join('\n') + '\n';
   }
@@ -2648,8 +2717,13 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!logDirty || !log || !driveOn() || !drive.ok() || !online()) return;
     const wait = logAt + LOG_MS - Date.now();
     if (wait > 0) { logT = setTimeout(pushLog, wait); return; }
-    const L = log; logDirty = false; logAt = Date.now();
-    try { await drive.over(L.dir + '/log/' + L.d + '.md', logText(L)); } catch (e) { if (L === log) logDirty = true; if (e.drive) needLogin(); }
+    const L = log, here = L.k === bookKey();
+    if (here && !synced()) { logDirty = false; return; }   // 「この端末だけ」にした本
+    logDirty = false; logAt = Date.now();
+    try {
+      const dir = here && ghMoved() ? await upBook(bookDir(), L.k, book, drive) : L.dir;   // 同じ本がもうドライブにあれば、そのフォルダに
+      await drive.over(dir + '/log/' + L.d + '_' + DEV + '.md', logText(L));   // 端末ごとに別のファイル（同じ日に二つの端末で読んでも消し合わない）
+    } catch (e) { if (L === log) logDirty = true; if (e.drive) needLogin(); }
   }
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && logDirty) { logAt = 0; pushLog(); } });
 
@@ -3241,7 +3315,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const s of strokes) s.el.remove();
     strokes = []; setEdit(null); undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
-    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []), at: saved && saved.at };
+    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []), at: saved && saved.at, base: saved && saved.base };
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
@@ -3360,7 +3434,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   async function openToc(tab) {
     if (!book) return;
     if (!isPdf()) tab = 'main';
-    $('#toc-head').hidden = false; $('#toc-tabs').hidden = !isPdf();   // md の本は「書き出す」だけ
+    $('#toc-head').hidden = false; $('#toc-tabs').hidden = !isPdf();   // md の本は「エクスポート」だけ
     const ol = isPdf() ? await pdfOutline() : [];
     const label = (c) => (book.chapters.find((x) => x.id === c) || {}).label || c;
     const bms = loadBm().filter((m) => ids.includes(m.c)).sort((x, y) => ids.indexOf(x.c) - ids.indexOf(y.c) || x.b - y.b);
@@ -3512,7 +3586,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   $('#ex-on').onclick = () => {
     pick = new Set(); exFile = null;
-    exMsg(isPdf() ? '書き出すページを押して選んでください。後ろの白紙も1枚ずつ選べます。' : '書き出す章を押して選んでください。');
+    exMsg(isPdf() ? 'PDF に入れるページを押して選んでください。後ろの白紙も1枚ずつ選べます。' : 'PDF に入れる章を押して選んでください。');
     exShow();
     if (!isPdf()) pickChapters();
   };
@@ -3550,7 +3624,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         exFile = f; exMsg(`できました（${mb(f)}）`);
         await shareFile(f);
       }
-    } catch (e) { if (pick === job) exMsg('書き出せませんでした: ' + (e && e.message || e)); }
+    } catch (e) { if (pick === job) exMsg('エクスポートできませんでした: ' + (e && e.message || e)); }
     exBusy = false; go.classList.remove('busy'); $('#ex-all').disabled = false; exShow();
   };
   // iPad の共有シート（ファイルに保存・AirDrop・ほかのアプリ）で渡す。共有シートは押した直後しか開けないので、作るのに時間がかかったときはもう一度押してもらう
@@ -3590,7 +3664,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (window.fontkit) return ok(window.fontkit);
     const s = document.createElement('script');
     s.src = 'vendor/pdf-lib/fontkit.umd.min.js'; s.onload = () => ok(window.fontkit);
-    s.onerror = () => { fontkitP = null; s.remove(); ng(new Error('書き出しの道具を読めませんでした（通信できるときに、もう一度押してください）')); };
+    s.onerror = () => { fontkitP = null; s.remove(); ng(new Error('エクスポートの道具を読めませんでした（通信できるときに、もう一度押してください）')); };
     document.head.append(s);
   });
   async function exportMd(chs, say) {
@@ -3857,15 +3931,17 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     }
     return null;
   }
-  // この iPad の本のドライブのフォルダ名
-  async function localDirs() {
-    const out = new Set();
-    for (const r of (await kv.get('books')) || []) { const m = await kv.get('book:' + r.id); if (m) out.add(m.dir || dirName(m.title, r.id.slice(-4))); }
+  // この端末の本と、そのドライブのフォルダ名・指紋: [{ id, dir, fp }]
+  async function localBooks() {
+    const out = [];
+    for (const r of (await kv.get('books')) || []) { const m = await kv.get('book:' + r.id); if (m) out.push({ id: r.id, dir: m.dir || dirName(m.title, r.id.slice(-4)), fp: m.fp }); }
     return out;
   }
+  // ドライブの本 d と同じ、この端末の本（フォルダ名か指紋が同じもの）
+  const onDevice = (d, local) => local.find((x) => x.dir === d.dir || (x.fp && x.fp === d.json.fp)) || null;
   const driveReady = () => driveOn() && drive.ok() && online();
   // ドライブにある、この iPad にない本（ファイルから開いた本だけ。GitHub の本は設定から）
-  async function driveOnly() { const local = await localDirs(); return (await drive.books()).filter((d) => d.json.from === 'file' && !local.has(d.dir)); }
+  async function driveOnly() { const local = await localBooks(); return (await drive.books()).filter((d) => d.json.from === 'file' && !onDevice(d, local)); }
   async function findOnDrive(x) {
     if (!driveReady()) return null;
     try {
@@ -3944,7 +4020,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const f of files.filter(isPdfFile)) got.push(await importPdf(f));
     const mds = files.filter((f) => !isPdfFile(f));
     if (mds.length) got.push(await importMd(mds));
-    shelf.close();
+    shelf.close(); opener.close();
     await switchBook(got[got.length - 1].id);
     const say = (k) => got.filter(k).map((b) => `「${b.title}」`).join('');
     stat.textContent = [[(b) => !b.again && !b.drive, 'をこのiPadに保存しました'], [(b) => b.again, 'は前に開いた本です（書き込みもそのまま）'], [(b) => b.drive, 'をドライブの書き込みとつなぎました']]
@@ -3953,7 +4029,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
   // 本棚: 表紙を最近開いた順に並べる。PDF は1ページ目の縮小画像（開いたときに一度だけ作って端末に保存）、md は題名の札。
   // 押すとその本を開く。ファイルから開いた本は、表紙の下の「…」から消せる（2回押す）
-  const shelf = $('#shelf'), shelfList = $('#shelf-list'), bkMenu = $('#bk-menu'), bkDel = $('#bk-del'), shelfMsg = $('#shelf-msg'), SHELF_MSG = shelfMsg.textContent;
+  const shelf = $('#shelf'), shelfList = $('#shelf-list'), bkMenu = $('#bk-menu'), bkDel = $('#bk-del'), bkSync = $('#bk-sync'), shelfMsg = $('#shelf-msg'), SHELF_MSG = shelfMsg.textContent;
   const openedAt = () => { try { return JSON.parse(store.get(PREF + ':opened')) || {}; } catch { return {}; } };   // 本 -> 最後に開いた時刻
   function markOpened(id) { const o = openedAt(); o[id] = Date.now(); store.set(PREF + ':opened', JSON.stringify(o)); }
   const COVER_W = 300;
@@ -3993,6 +4069,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         f.textContent = r.id === 'gh' ? 'GitHub' : sz ? 'PDF' : n > 1 ? `${n}章` : '';
         cv.append(t, f);
       }
+      if (driveOn() && !(meta && meta.nosync)) cv.append(syncMark());
       lb.className = 'lb'; nm.className = 'nm'; nm.textContent = r.title; lb.append(nm);
       if (r.id !== 'gh') { const m = document.createElement('button'); m.type = 'button'; m.className = 'bk-m'; m.textContent = '…'; m.setAttribute('aria-label', 'この本の操作'); lb.append(m); }
       el.append(cv, lb);
@@ -4003,7 +4080,6 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     shelfList.replaceChildren(...els);
     bkMenu.hidden = true; shelfMsg.textContent = SHELF_MSG;
     if (!shelf.open) shelf.showModal();
-    showDriveBooks();
     const cur = shelfList.querySelector('[aria-current="true"]'); if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
   shelfList.addEventListener('click', (e) => {
@@ -4012,6 +4088,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const id = bk.dataset.id;
     if (e.target.closest('.bk-m')) {
       bkAt = id; bkDel.classList.remove('arm'); bkDel.textContent = '削除';
+      bkSync.hidden = !driveOn(); bkSync.textContent = bk.querySelector('.sy') ? 'この端末だけにする' : 'ドライブと同期する';
       const r = e.target.getBoundingClientRect();
       bkMenu.hidden = false;
       bkMenu.style.left = Math.max(8, Math.min(innerWidth - bkMenu.offsetWidth - 8, r.right - bkMenu.offsetWidth)) + 'px';
@@ -4023,50 +4100,66 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (id !== src || !CH) switchBook(id);
   });
   onOutside('#bk-menu, .bk-m', () => !bkMenu.hidden, () => { bkMenu.hidden = true; });
-  // ドライブにある本（この iPad にない）: ドライブにつないでいるときだけ、表紙の下に並べる。押すと本文と書き込みごと戻る。
-  // PDF は 10MB までならドライブの book.pdf から。それより大きい本は book.pdf を置いていないので、元のファイルを選んでもらう
-  const shelfDrive = $('#shelf-drive'), shelfDl = $('#shelf-dl');
+  // 「ファイルから開く」: ドライブにつないでいるときは窓を開き、この端末のファイルと、ドライブの本（同期している本）から選ぶ。
+  // ドライブの本は、この端末にあれば「開く」、なければ「インポート」（本文と書き込みごと取り込む）。PDF は 10MB までならドライブの book.pdf から。
+  // それより大きい本は book.pdf を置いていないので、元のファイルを選んでもらう。ドライブにつないでいなければ、今までどおりすぐにファイルを選ぶ
+  const opener = $('#opener'), opDl = $('#op-dl'), opMsg = $('#op-msg'), opRe = $('#op-re'), OP_MSG = opMsg.textContent;
+  for (const el of document.querySelectorAll('.open-file')) {
+    const lb = el.closest('label');
+    if (!lb.closest('#opener')) lb.addEventListener('click', (e) => { if (!driveOn() || e.target === el) return; e.preventDefault(); showOpener(); });
+  }
   let dlSeq = 0;
-  async function showDriveBooks() {
+  async function showOpener() {
     const my = ++dlSeq;
-    if (!driveReady()) { shelfDrive.hidden = true; return; }
-    let list;
-    try { list = await driveOnly(); } catch (e) { list = []; if (e.drive) needLogin(); }
-    if (my !== dlSeq || !shelf.open) return;
-    shelfDrive.hidden = !list.length;
-    shelfDl.replaceChildren(...list.map((d) => {
-      const li = document.createElement('li'), t = document.createElement('span'), j = d.json;
+    opMsg.textContent = OP_MSG; opDl.replaceChildren(); opRe.hidden = true;
+    if (!opener.open) opener.showModal();
+    if (!driveReady()) { opMsg.textContent = online() ? 'ドライブとの接続が切れています' : '通信できないので、ドライブの本は出せません'; opRe.hidden = !online(); return; }
+    opMsg.textContent = 'ドライブの本を探しています…';
+    let list, local, err = null;
+    try { [list, local] = await Promise.all([drive.books(), localBooks()]); } catch (e) { list = []; local = []; err = e; }
+    if (my !== dlSeq || !opener.open) return;
+    if (err) { opMsg.textContent = 'ドライブの本を読めませんでした'; opRe.hidden = !err.drive; return; }
+    list = list.filter((d) => d.json.from === 'file');
+    opMsg.textContent = list.length ? OP_MSG : 'ドライブに同期している本はまだありません';
+    opDl.replaceChildren(...list.map((d) => {
+      const li = document.createElement('li'), t = document.createElement('span'), j = d.json, here = onDevice(d, local);
       t.className = 'nm'; t.textContent = j.title + (j.pdf ? `（PDF${d.pdf ? '・' + mb({ size: d.pdf }) : ''}）` : '');
       li.append(t);
-      if (!j.pdf || d.pdf) {
-        const b = document.createElement('button'); b.type = 'button'; b.className = 'back'; b.textContent = '戻す';
-        b.onclick = () => restoreFrom(d, b);
+      if (here) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'back'; b.textContent = '開く'; b.title = 'この端末にある本';
+        b.onclick = () => { opener.close(); shelf.close(); if (here.id !== src || !CH) switchBook(here.id); };
+        li.append(b);
+      } else if (!j.pdf || d.pdf) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'back'; b.textContent = 'インポート';
+        b.onclick = () => importFrom(d, b);
         li.append(b);
       } else {
         const l = document.createElement('label'), inp = document.createElement('input');
         l.className = 'back'; l.textContent = 'ファイルを選ぶ'; l.title = '大きい PDF はドライブに置いていないので、元のファイルを選んでください';
         inp.type = 'file'; inp.accept = '.pdf,application/pdf'; inp.hidden = true;
-        inp.onchange = () => { const f = inp.files[0]; inp.value = ''; if (f) restoreFrom(d, l, f); };
+        inp.onchange = () => { const f = inp.files[0]; inp.value = ''; if (f) importFrom(d, l, f); };
         l.append(inp); li.append(l);
       }
       return li;
     }));
   }
-  async function restoreFrom(d, btn, file) {
+  async function importFrom(d, btn, file) {
     if (btn.classList.contains('busy')) return;
     const was = btn.firstChild.textContent;
-    btn.classList.add('busy'); btn.firstChild.textContent = '戻しています…';
+    btn.classList.add('busy'); btn.firstChild.textContent = 'インポート中…';
     try {
       const r = file ? await importPdf(file, d) : await restoreBook(d);
-      shelf.close();
+      opener.close(); shelf.close();
       await switchBook(r.id);
-      stat.textContent = `「${r.title}」をドライブから戻しました`;
+      stat.textContent = `「${r.title}」をドライブからインポートしました`;
     } catch (e) {
-      btn.firstChild.textContent = was; shelfMsg.textContent = '戻せませんでした: ' + (e.message || '');
+      btn.firstChild.textContent = was; opMsg.textContent = 'インポートできませんでした: ' + (e.message || '');
       if (e.drive) needLogin();
     } finally { btn.classList.remove('busy'); }
   }
-  shelf.addEventListener('close', () => { bkMenu.hidden = true; dlSeq++; shelfDrive.hidden = true; shelfDl.replaceChildren(); for (const u of coverUrls) URL.revokeObjectURL(u); coverUrls = []; shelfList.replaceChildren(); });
+  opRe.onclick = () => drive.login(true).then(() => { relogin = false; pushAll(); refreshChapter(); showOpener(); }).catch((e) => { opMsg.textContent = e.message; });
+  opener.addEventListener('close', () => { dlSeq++; opDl.replaceChildren(); });
+  shelf.addEventListener('close', () => { bkMenu.hidden = true; for (const u of coverUrls) URL.revokeObjectURL(u); coverUrls = []; shelfList.replaceChildren(); });
   // ファイルから開いた本を、この iPad から消す（ドライブに送った分はドライブに残る）
   bkDel.onclick = async () => {
     if (!bkDel.classList.contains('arm')) { bkDel.classList.add('arm'); bkDel.textContent = 'もう一度押すと削除'; return; }
@@ -4082,6 +4175,26 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const o = openedAt(); delete o[id]; store.set(PREF + ':opened', JSON.stringify(o));
     if (id === src) { CH = null; cs = null; await switchBook('gh'); }
     if (shelf.open) showShelf();
+  };
+  // ドライブと同期するか（本ごと）。「この端末だけ」にした本は、書き込み・いま.md・読んだ跡・質問の画像をドライブに送らず、取り込みもしない。
+  // ドライブにもう置いた分は消さない。同期に戻すと、その間に書いた分を送り、ほかの端末で書いた分とまとめる
+  const SY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18.5h10.5a4 4 0 0 0 .4-7.98A6 6 0 0 0 6.3 9.1 4.7 4.7 0 0 0 7 18.5z"/></svg>';
+  function syncMark() { const m = document.createElement('span'); m.className = 'sy'; m.title = 'ドライブと同期'; m.setAttribute('aria-label', 'ドライブと同期'); m.innerHTML = SY_SVG; return m; }
+  bkSync.onclick = async () => {
+    const id = bkAt, el = shelfList.querySelector(`.bk[data-id="${CSS.escape(id || '')}"]`);
+    bkMenu.hidden = true;
+    if (!id || !el) return;
+    const off = !!el.querySelector('.sy');   // これから「この端末だけ」にする
+    const m = await kv.get('book:' + id);
+    if (!m) return;
+    if (off) m.nosync = true; else delete m.nosync;
+    await kv.set('book:' + id, m);
+    if (id === src && book) { if (off) book.nosync = true; else delete book.nosync; }
+    const cv = el.querySelector('.cv');
+    if (off) el.querySelector('.sy').remove(); else cv.append(syncMark());
+    const t = el.querySelector('.nm').textContent;
+    shelfMsg.textContent = off ? `「${t}」はこの端末だけにしました（ドライブにもう置いた分は消しません）` : `「${t}」をドライブと同期します`;
+    if (id === src && !off && cs) { const n = cs.pending.size; moveTo(cs, where()); if (cs.pending.size !== n) persist(); pushAll(); lastPull = Date.now(); refreshChapter(); nowSoon(); }
   };
   $('#books').onclick = showShelf;
 

@@ -250,9 +250,9 @@ export function readInk(blocks, getStroke) {
 }
 
 // ---------- node で動かす（クラウドの Claude 用） ----------
-const USAGE = `書き込みつき PDF を作ります（Ink Reader の「書き出す」と同じもの）。
+const USAGE = `書き込みつき PDF を作ります（Ink Reader の「エクスポート」と同じもの）。
 使い方: node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <ink/pdf.json> [--pages 3-5,8] [--pics <フォルダ>] [--out <出す PDF>]
-  --pages  書き出すページ（ページの後ろの白紙も一緒に入る）。省くとすべて
+  --pages  PDF に入れるページ（ページの後ろの白紙も一緒に入る）。省くとすべて
   --pics   紙に貼った画像のフォルダ（ドライブの <本>/pics/）。省くと、今のフォルダかインクの JSON の隣の pics/
   --out    出すファイル（省くと「<題名>（書き込み …）.pdf」）
 先に、このファイルと同じフォルダか今のフォルダで npm i pdf-lib@1.17.1 perfect-freehand@1.2.2 をしておく。`;

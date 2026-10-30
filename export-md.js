@@ -205,7 +205,7 @@ export async function exportMd({ L, fontkit, chapters, title, src = '', all = tr
   const font = (f) => {
     if (!fonts.has(f)) fonts.set(f, (async () => {
       const r = await fetch(f.startsWith('k:') ? 'vendor/fonts/pdf/' + f.slice(2) + '.ttf' : FONTS[f]);
-      if (!r.ok) throw new Error('字体を読めませんでした（通信できるときに、もう一度書き出してください）');
+      if (!r.ok) throw new Error('字体を読めませんでした（通信できるときに、もう一度エクスポートしてください）');
       const ft = await pdf.embedFont(new Uint8Array(await r.arrayBuffer()), { subset: true });
       sets.set(f, new Set(ft.getCharacterSet()));
       return ft;

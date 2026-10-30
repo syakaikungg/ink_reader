@@ -1,8 +1,8 @@
-// ドライブから本と書き込みを戻す確認（Playwright）。ドライブ API はモックし、iPad ごとに新しいブラウザの環境を作る（GitHub は使わない）
+// ドライブから本と書き込みをインポートする確認（Playwright）。ドライブ API はモックし、iPad ごとに新しいブラウザの環境を作る（GitHub は使わない）
 // 使い方: node tests/restore.cjs
 // 確認すること: iPad A で PDF と md を開いて書く（book.json に本の指紋）→ 同じファイルを開き直しても新しい本を作らない
-// → 新しい iPad B の本棚に「ドライブにある本」→「戻す」で本文と書き込みが戻る（同じフォルダのまま）
-// → iPad C で同じ PDF を「ファイルから開く」とドライブの書き込みとつながる → 大きい PDF（book.pdf がない）は「ファイルを選ぶ」（違う PDF は断る）
+// → 新しい iPad B で「ファイルから開く」→「ドライブの本」→「インポート」で本文と書き込みが入る（同じフォルダのまま。この端末にある本は「開く」）
+// → iPad C で同じ PDF を「この端末のファイル」から開くとドライブの書き込みとつながる → 大きい PDF（book.pdf がない）は「ファイルを選ぶ」（違う PDF は断る）
 // → 指紋のない前の版の book.json でも、PDF は題名とページの大きさ、md は題名と本文でつながる（指紋を足しておく）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..');
@@ -44,6 +44,13 @@ const drv = createDrive(), { files, byPath } = drv;
   const books = (p) => p.evaluate(() => new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => { const q = r.result.transaction('kv').objectStore('kv').get('books'); q.onsuccess = () => res(q.result || []); }; }));
   const folders = () => Object.values(files).filter((f) => f.mimeType === FOLDER && !f.trashed && (f.parents || []).includes(Object.keys(files).find((k) => files[k].name === 'Ink Reader'))).map((f) => f.name).sort();
   const json = (d) => JSON.parse(byPath('Ink Reader/' + d + '/book.json').content);
+  // 「ファイルから開く」→ ドライブの本の一覧
+  const opener = async (p) => {
+    if (await p.isVisible('#empty')) await p.click('#empty label.pick');
+    else { await p.click('#books'); await p.waitForFunction(() => document.getElementById('shelf').open); await p.click('#shelf label.pick'); }
+    await p.waitForFunction(() => document.getElementById('opener').open && !/探して/.test(document.getElementById('op-msg').textContent), null, { timeout: 10000 });
+    return p.$$eval('#op-dl li', (l) => l.map((x) => x.textContent));
+  };
 
   // ---- iPad A: PDF と md を開いて書く ----
   const A = await iPad();
@@ -64,31 +71,32 @@ const drv = createDrive(), { files, byPath } = drv;
   check('書き込みもそのまま', await strokes(A) === 1);
   await openFile(A, 'note.md', '線形代数');
   check('同じ md を開き直すと前の本', (await books(A)).length === 2 && await strokes(A) === 1);
-  await A.click('#books'); await A.waitForTimeout(800);
-  check('この iPad にある本は「ドライブにある本」に出さない', await A.isHidden('#shelf-drive'));
-  await A.click('#shelf button[value=cancel]');
+  const rowsA = await opener(A);
+  check('この端末にある本は「開く」', rowsA.length === 2 && rowsA.every((t) => /開く$/.test(t)), rowsA);
+  await A.click('#op-dl li:has-text("線形代数") .back'); await A.waitForTimeout(800);
+  check('「開く」でその本に切り替わる', !(await A.evaluate(() => document.getElementById('opener').open || document.getElementById('shelf').open)) && /線形代数/.test(await A.textContent('#chap-t')));
 
-  // ---- 新しい iPad B: 本棚の「ドライブにある本」から戻す ----
+  // ---- 新しい iPad B: 「ファイルから開く」→ ドライブの本 → インポート ----
   const B = await iPad();
-  await B.click('#books'); await B.waitForTimeout(1200);
-  const rows = await B.$$eval('#shelf-dl li', (l) => l.map((x) => x.textContent));
+  const rows = await opener(B);
   console.log('drive rows', rows);
-  check('ドライブにある本が出る', rows.length === 2 && rows.some((t) => /lecture（PDF・\d+KB）戻す/.test(t)) && rows.some((t) => /線形代数ノート戻す/.test(t)));
-  await B.click('#shelf-dl li:has-text("線形代数") .back');
+  check('ドライブの本が出る', rows.length === 2 && rows.some((t) => /lecture（PDF・\d+KB）インポート/.test(t)) && rows.some((t) => /線形代数ノートインポート/.test(t)));
+  check('この端末のファイルも選べる', await B.isVisible('#opener label.pick'));
+  await B.click('#op-dl li:has-text("線形代数") .back');
   await title(B, '線形代数'); await B.waitForTimeout(2000);
-  check('md を戻すと書き込みも出る', await strokes(B) === 1);
-  check('md の本文も戻る', /二つ目の段落/.test(await B.textContent('#doc')));
-  await B.click('#books'); await B.waitForTimeout(1200);
-  check('戻した本はドライブの一覧から消える', (await B.$$eval('#shelf-dl li', (l) => l.length)) === 1);
-  await B.click('#shelf-dl li .back');
+  check('md をインポートすると書き込みも出る', await strokes(B) === 1 && /インポートしました/.test(await B.textContent('#stat')));
+  check('md の本文も入る', /二つ目の段落/.test(await B.textContent('#doc')));
+  const rows2 = await opener(B);
+  check('インポートした本は「開く」になる', rows2.filter((t) => /開く$/.test(t)).length === 1 && rows2.some((t) => /lecture.*インポート$/.test(t)), rows2);
+  await B.click('#op-dl li:has-text("lecture") .back');
   await title(B, 'lecture'); await B.waitForTimeout(2500);
-  check('PDF を戻すと書き込みも出る', await strokes(B) === 1 && await B.evaluate(() => document.querySelectorAll('#doc > .pg').length === 3));
+  check('PDF をインポートすると書き込みも出る', await strokes(B) === 1 && await B.evaluate(() => document.querySelectorAll('#doc > .pg').length === 3));
   await line(B, await B.evaluate(() => { const el = document.querySelector('#doc > .pg[data-n="2"]'); el.scrollIntoView(); return el.getBoundingClientRect().top + 300; }));
   await saved(B); await B.waitForTimeout(1500);
-  check('戻した本に書くと、同じフォルダに送る', JSON.stringify(folders()) === JSON.stringify(dirs) && Object.keys(JSON.parse(byPath(`Ink Reader/${pdfDir}/ink/pdf.json`).content).blocks).sort().join() === '1,2');
+  check('インポートした本に書くと、同じフォルダに送る', JSON.stringify(folders()) === JSON.stringify(dirs) && Object.keys(JSON.parse(byPath(`Ink Reader/${pdfDir}/ink/pdf.json`).content).blocks).sort().join() === '1,2');
   await B.waitForTimeout(2500);
   await B.click('#books'); await B.waitForTimeout(800);
-  check('戻した PDF にも表紙ができる', await B.evaluate(() => { const im = document.querySelector('#shelf-list .bk:first-child img'); return !!(im && im.naturalWidth); }));
+  check('インポートした PDF にも表紙ができる', await B.evaluate(() => { const im = document.querySelector('#shelf-list .bk:first-child img'); return !!(im && im.naturalWidth); }));
   await B.click('#shelf button[value=cancel]');
 
   // ---- iPad C: 同じ PDF を「ファイルから開く」と、ドライブの書き込みとつながる ----
@@ -103,14 +111,14 @@ const drv = createDrive(), { files, byPath } = drv;
   // ---- 大きい PDF（book.pdf を置いていない）: 「ファイルを選ぶ」。違う PDF は断る ----
   byPath(`Ink Reader/${pdfDir}/book.pdf`).trashed = true;
   const D = await iPad();
-  await D.click('#books'); await D.waitForTimeout(1200);
-  const pick = '#shelf-dl li:has-text("lecture") .back';
+  await opener(D);
+  const pick = '#op-dl li:has-text("lecture") .back';
   check('book.pdf がない PDF は「ファイルを選ぶ」', (await D.textContent(pick)) === 'ファイルを選ぶ');
   await D.setInputFiles(pick + ' input', path.join(dir, 'other.pdf')); await D.waitForTimeout(1500);
-  check('違う PDF は戻さない', /違う PDF/.test(await D.textContent('#shelf-msg')) && (await books(D)).length === 0, await D.textContent('#shelf-msg'));
+  check('違う PDF はインポートしない', /違う PDF/.test(await D.textContent('#op-msg')) && (await books(D)).length === 0, await D.textContent('#op-msg'));
   await D.setInputFiles(pick + ' input', path.join(dir, 'lecture.pdf'));
   await title(D, 'lecture'); await D.waitForTimeout(2500);
-  check('元の PDF を選ぶと書き込みごと戻る', await strokes(D) === 2);
+  check('元の PDF を選ぶと書き込みごと入る', await strokes(D) === 2);
 
   // ---- 指紋のない前の版の book.json でも、題名とページの大きさ・本文でつながる ----
   for (const d of [pdfDir, mdDir]) { const f = byPath(`Ink Reader/${d}/book.json`), j = JSON.parse(f.content); delete j.fp; f.content = Buffer.from(JSON.stringify(j)); f.version++; }
