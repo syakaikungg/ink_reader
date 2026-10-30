@@ -26,9 +26,9 @@ function createDrive() {
       const body = (p) => p.slice(p.indexOf('\r\n\r\n') + 4, p.length - 2);
       const meta = JSON.parse(body(parts[0]).toString()), id = 'f' + idN++;
       files[id] = { ...meta, version: 1, content: body(parts[1]) };
-      return json({ version: '1' });
+      return json({ id, version: '1' });
     }
-    if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; f.content = req.postDataBuffer(); f.version++; return json({ version: String(f.version) }); }
+    if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; if (!f) return r.fulfill({ status: 404, body: '{}' }); f.content = req.postDataBuffer(); f.version++; return json({ id: mm[1], version: String(f.version) }); }
     if (m === 'PATCH' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) { Object.assign(files[mm[1]], JSON.parse(req.postData())); return json({}); }
     if (m === 'GET' && u.pathname === '/drive/v3/about') return json({ user: { emailAddress: 'me@example.com' } });
     if (m === 'GET' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) return r.fulfill({ status: 200, body: files[mm[1]].content });

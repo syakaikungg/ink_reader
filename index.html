@@ -98,6 +98,29 @@ button:disabled { opacity: .35; }
   #stat { display: block; width: auto; flex-basis: 100%; height: 1.4em; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
   #chap { max-width: 12em; }
 }
+/* 拡大率・指で書く・設定は、幅が広いときはそのまま並べ、Claude と画面を分けたときなど狭いときは「…」の中に入れる */
+#more { display: none; font-size: 18px; letter-spacing: 1px; }
+#more-box { display: contents; }
+#g-more { position: relative; }
+@media (max-width: 700px) {
+  /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
+  #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
+  #chap { max-width: none; min-width: 0; flex: 0 1 auto; }
+  .grp + .grp { padding-left: 6px; }
+  #bar button { padding: 0 7px; }
+  #more { display: inline-flex; align-items: center; justify-content: center; }
+  #bar.finger #more { color: var(--accent); }   /* 指で書くがオンのときは「…」を青く */
+  #more-box { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; flex-direction: column; align-items: stretch; gap: 6px;
+    padding: 8px; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
+  #bar.more #more-box { display: flex; }
+  #more-box #zoomv { width: auto; max-width: none; }
+  #more-box button { text-align: left; }
+}
+@media (max-width: 480px) {
+  #bar { gap: 4px; }
+  #bar button { padding: 0 5px; }
+  .grp + .grp { padding-left: 4px; }
+}
 @media (max-width: 800px) { #chap { max-width: 8em; } }
 #chap-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 select {
@@ -169,7 +192,14 @@ html, body, body * { touch-action: manipulation; }
   background: conic-gradient(#e33, #e93, #ed3, #3c5, #3cd, #36e, #93e, #e3a, #e33); }
 #pop-colors .more input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 #ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-#pop-pen[hidden], #pop-er[hidden] { display: none; }
+/* 投げ縄で選んだ枠のつまみ（角の四角: 大きさ、上の丸: 回転） */
+#ink .grip rect, #ink .grip circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+#ink .grip line { stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+#pop-pen[hidden], #pop-er[hidden], #pop-kind[hidden] { display: none; }
+/* ペンの種類: 太さ一定か、筆圧（筆圧の取れないペンは書く速さ）で太さが変わるか */
+#pop-kind { display: flex; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+#pop-kind button { flex: 1; }
+#pop-kind button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
 /* 太さ: 3つから選び、下のつまみで選んだ太さを変える */
 #pop-size { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
 #pop-size .seg { display: flex; gap: 6px; margin-bottom: 6px; }
@@ -213,6 +243,13 @@ html, body, body * { touch-action: manipulation; }
   color: var(--paper); background: var(--accent); border: 1px solid var(--accent); border-radius: 13px 13px 13px 4px; }
 #qs .qm.wait { color: var(--accent); background: var(--paper); border-style: dashed; opacity: .55; }
 #qs .qm[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+#qs .qm.ok { opacity: .5; }
+#qs .qm.no { border-color: var(--ink-r); box-shadow: 0 0 0 2px var(--ink-r); }
+/* 答えの下の「わかった」「まだ」 */
+#doc .ans .mk { display: flex; gap: 6px; margin-top: 6px; }
+#doc .ans .mk button { height: 30px; font-size: 13px; font-weight: 600; border-color: var(--rule); background: var(--paper); color: var(--muted); }
+#doc .ans .mk button[aria-pressed="true"][data-m="ok"] { color: var(--paper); background: var(--accent); border-color: var(--accent); }
+#doc .ans .mk button[aria-pressed="true"][data-m="no"] { color: var(--paper); background: var(--ink-r); border-color: var(--ink-r); }
 #doc .ans { font: 15px/1.7 var(--f-ui); background: var(--bg); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 14px; margin: 0 0 18px;
   -webkit-user-select: text; user-select: text; }
 #doc .ans .a + .a, #doc .ans .wait + .a { border-top: 1px solid var(--rule); margin-top: 10px; padding-top: 10px; }
@@ -300,6 +337,7 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #toc .row { display: flex; justify-content: flex-end; }
 #toc-q { display: block; width: 100%; box-sizing: border-box; font: 15px/1.4 var(--f-ui); padding: 9px 12px; margin: 0 0 14px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--fg); }
 #toc-hits .at { color: var(--muted); font-size: 12px; margin-right: 8px; }
+#toc-hits .ans .at { color: var(--accent); }
 #toc-hits mark { background: none; color: var(--accent); font-weight: 600; }
 #toc-hits .none { color: var(--muted); font-size: 13px; padding: 8px 10px; }
 /* 検索から飛んだ段落を一瞬だけ色付けする */
@@ -343,6 +381,15 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(20,30,60,.1);
   font: 600 14px/1 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; }
 #pg-c { color: var(--fg); }
+/* 飛んだあと左下に出る「‹ 〜に戻る」（右下のページ番号と同じ見た目） */
+#back { position: fixed; z-index: 15; left: max(12px, env(safe-area-inset-left, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px)); max-width: calc(100% - 140px);
+  display: flex; align-items: center; height: 36px; border: 1px solid var(--rule); border-radius: 18px;
+  background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(20,30,60,.1); }
+#back[hidden] { display: none; }
+#back button { height: 34px; border: 0; font: 600 14px/1 var(--f-ui); }
+#back-go { color: var(--accent); padding: 0 6px 0 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#back-x { color: var(--muted); min-width: 0; width: 34px; padding: 0; }
+#empty:not([hidden]) ~ #back { display: none; }
 /* 目次の画面のタブとページの一覧 */
 #toc.pages { width: min(720px, calc(100vw - 32px)); max-width: min(720px, calc(100vw - 32px)); }
 /* タブと番号の欄は、一覧をスクロールしても上に残す */
@@ -389,9 +436,11 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="t-pen" aria-pressed="true" title="ペン（もう一度押すと色・太さ）"><span class="dot"></span>ペン</button>
     <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
     <button id="t-er" aria-pressed="false" title="消しゴム（もう一度押すと消し方・大きさ）">消しゴム</button>
-    <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・色変更・削除）">投げ縄</button>
+    <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・大きさ・向き・複製・色変更・削除）">投げ縄</button>
   </div>
-  <div class="grp">
+  <div class="grp" id="g-more">
+    <button id="more" aria-label="拡大率・指で書く・設定" aria-expanded="false" title="拡大率・指で書く・設定">…</button>
+    <div id="more-box">
     <select id="zoomv" aria-label="拡大率" title="2本指のピンチでも拡大・縮小できます">
       <option value="" disabled hidden selected>100%</option>
       <option value="fit">画面幅に合わせる</option>
@@ -400,12 +449,13 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     </select>
     <button id="finger" aria-pressed="false" title="オンにすると指でも書ける（スクロールはできなくなる）">指で書く</button>
     <button id="gear" aria-label="設定">設定</button>
+    </div>
   </div>
   <div id="stat" aria-live="polite">Pencilで書いてみてください</div>
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。「ペン」をもう一度押すと、色と太さを選べます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。左上の矢印で、戻す・進むができます。「投げ縄」で囲むと、ドラッグで移動、「色・太さ」で変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（Claude の答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。設定で Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。「ペン」をもう一度押すと、色と太さを選べます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。左上の矢印か、紙を2本指で軽くたたくと戻す、3本指でたたくと進むができます。「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（Claude の答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。設定で Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -431,6 +481,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="sel-ask">Claudeに聞く</button>
     <button id="sel-gap">下に余白</button>
     <button id="sel-ungap">余白を消す</button>
+    <button id="sel-dup">複製</button>
     <button id="sel-del">削除</button>
     <button id="sel-x">解除</button>
   </div>
@@ -440,6 +491,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   <button id="undo" disabled aria-label="元に戻す" title="元に戻す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5 4 9.5 8.5 14M4.5 9.5H15a4.75 4.75 0 0 1 0 9.5h-3"/></svg></button>
   <button id="redo" disabled aria-label="やり直す" title="やり直す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5 20 9.5 15.5 14M19.5 9.5H9a4.75 4.75 0 0 0 0 9.5h3"/></svg></button>
 </div>
+<div id="back" hidden><button id="back-go">‹ <span id="back-t"></span>に戻る</button><button id="back-x" aria-label="戻る札を消す">×</button></div>
 <button id="pgno" hidden aria-label="ページの一覧"><span id="pg-c"></span> / <span id="pg-n"></span></button>
 <nav id="foot" aria-label="章の移動">
   <button id="prev2">‹ 前の章</button>
@@ -456,6 +508,8 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
       <label>クライアント ID<input id="cfg-dcid" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="….apps.googleusercontent.com"></label>
       <div class="row"><button type="button" class="primary" id="cfg-drive">Google ドライブにつなぐ</button></div>
       <p id="drv-msg" aria-live="polite"></p>
+      <p>Claude アプリと画面を並べて勉強するときは、いま見ている所と最後に書いた所を、アプリがドライブの「いま.md」に書き続けます。下の文を Claude のプロジェクトの指示に一度貼っておくと、Claude はそれを見てから答えます。</p>
+      <div class="row"><button type="button" id="cfg-claude">Claude への指示をコピー</button></div>
     </section>
     <h3>GitHub</h3>
     <p>sakai_study の本文を読める GitHub のトークン（fine-grained、Contents: Read-only で足ります）を入れてください。トークンはこのiPadの中だけに保存されます。</p>
@@ -488,6 +542,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 
 <div id="pop" hidden>
   <div id="pop-pen">
+    <div id="pop-kind" role="group" aria-label="ペンの種類"><button type="button" data-k="even">一定</button><button type="button" data-k="pr">筆圧</button></div>
     <div id="pop-colors" role="group" aria-label="色を選ぶ"></div>
     <div id="pop-size">
       <div class="seg" role="group" aria-label="太さを選ぶ"><button type="button" aria-label="細"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="太"><span></span></button></div>
