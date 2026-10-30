@@ -13,7 +13,7 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
   fs.writeFileSync(path.join(dir, 'lasso.md'), '# 投げ縄のテスト\n\n' + [...Array(12)].map((_, i) => `段落${i + 1}。$x^${i}$ の式を含む本文です。`.repeat(3)).join('\n\n'));
   const ctx = await b.newContext({ viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, hasTouch: true });
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errs.push(m.text()));
-  await p.goto('http://localhost:8771/'); await p.waitForTimeout(300);
+  await p.goto('http://localhost:8772/'); await p.waitForTimeout(300);
   await p.setInputFiles('#empty .open-file', path.join(dir, 'lasso.md'));
   await p.waitForFunction(() => document.querySelectorAll('#doc > p').length > 10); await p.waitForTimeout(500);
   await p.evaluate(() => { document.querySelectorAll('#doc > p')[2].scrollIntoView(); scrollBy(0, -300); });
