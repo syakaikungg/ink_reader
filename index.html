@@ -220,6 +220,8 @@ html, body, body * { touch-action: manipulation; }
 #clear.arm { color: var(--ink-r); border-color: var(--ink-r); font-weight: 600; }
 #ink .er-ring { fill: var(--accent); fill-opacity: .12; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 #ink .r { fill: var(--ink-r); } #ink .b { fill: var(--ink-b); }
+#ink .pic rect { fill: none; }
+#ink .pic.miss rect { fill: var(--rule); fill-opacity: .35; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }   /* 画像がまだ読めていない（ドライブにつなぐと読む） */
 #ink .hl { fill: var(--hl); opacity: var(--hl-op); mix-blend-mode: var(--hl-blend); }
 
 #doc {
@@ -449,6 +451,8 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
     <button id="t-er" aria-pressed="false" title="消しゴム（もう一度押すと消し方・大きさ）">消しゴム</button>
     <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・大きさ・向き・複製・色変更・削除）">投げ縄</button>
+    <button id="t-pic" title="画像を貼る（写真・ファイルから）">画像</button>
+    <input type="file" id="pic-file" accept="image/*" multiple hidden>
   </div>
   <div class="grp" id="g-more">
     <button id="more" aria-label="拡大率・指で書く・設定" aria-expanded="false" title="拡大率・指で書く・設定">…</button>
@@ -528,6 +532,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
         <li>線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。</li>
         <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。「ペン」をもう一度押すと、色と太さを選べます。</li>
         <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
+        <li>「画像」で写真やファイルの画像を紙に貼れます（ほかのアプリからドラッグしても貼れます）。貼った画像は指で軽くたたくか、投げ縄でペンを軽く当てると選べて、動かす・大きさ・向き・複製・削除ができます（選んだ枠の中は指でも動かせます）。画像の上にも書けます。</li>
         <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。</li>
         <li>章の名前を押すと、目次・しおり・本文の検索が開きます。段落を指で長押しすると、しおりが付きます。</li>
         <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
