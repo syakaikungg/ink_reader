@@ -39,8 +39,9 @@ const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
   }));
   const top = (n) => p.evaluate((n) => { const el = document.querySelectorAll('#doc > p')[n]; el.scrollIntoView({ block: 'start' }); scrollBy(0, -120); return el.getBoundingClientRect().top; }, n);
 
-  // 小窓: 一番上に「一定｜筆圧」。はじめは一定
-  await p.click('#t-pen');
+  // 小窓（札の「…」）: 一番上に「一定｜筆圧」。はじめは一定
+  const penPop = async () => { if (await p.isHidden('#rail')) await p.click('#t-pen'); await p.click('#rail-pen .rm'); };
+  await penPop();
   ok('小窓に一定｜筆圧', await p.isVisible('#pop-kind') && (await p.textContent('#pop-kind')) === '一定筆圧');
   ok('はじめは一定', await p.getAttribute('#pop-kind [data-k=even]', 'aria-pressed') === 'true');
   await p.click('#pop-kind [data-k=pr]');
@@ -76,7 +77,7 @@ const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
   ok('届いた筆圧をそのまま入れる', got.length >= 50 && got.slice(0, 50).every((v, i) => Math.abs(v - Math.round(real[i][2] * 100) / 100) < .011), JSON.stringify(got.slice(0, 8)));
 
   // 一定に戻すと、太さ一定（印なし）
-  await p.click('#t-pen'); await p.click('#pop-kind [data-k=even]'); await p.mouse.click(5, 600);
+  await penPop(); await p.click('#pop-kind [data-k=even]'); await p.mouse.click(5, 600);
   y = await top(18);
   await pen(hline(150, y + 20, 2, 60)); await pen(hline(150, y + 70, 30, 16));
   st = await saved();
@@ -99,14 +100,14 @@ const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
   await p.reload(); await p.waitForTimeout(1200);
   const d1 = await boxes();
   ok('再読み込みしても同じ形', d0.length === d1.length && d0.every((r, i) => r.every((v, j) => Math.abs(v - d1[i][j]) < .3)), JSON.stringify([d0.slice(0, 2), d1.slice(0, 2)]));
-  await p.click('#t-pen');
+  await penPop();
   ok('一定を覚えている', await p.getAttribute('#pop-kind [data-k=even]', 'aria-pressed') === 'true');
   // 見本の画像: 同じ動き（ゆっくり書き始めて、はらいで速くなる線）を、上は一定、下は筆圧のペンで
   const harai = (x, y) => { const out = []; let px = x, py = y; for (let i = 0; i < 70; i++) { const v = i < 40 ? 1.2 : 1.2 + (i - 40) * .5; px += v; py += v * (i < 40 ? .1 : .6); out.push([px, py, .12]); } return out; };
   const tate = (x, y) => [...Array(60)].map((_, i) => [x + Math.sin(i / 10) * 2, y + i * (i < 45 ? 1.5 : 1.5 + (i - 45) * .6), .12]);
   await p.mouse.click(5, 600); y = await top(24);
   for (const [k, dy] of [['even', 20], ['pr', 130]]) {
-    await p.click('#t-pen'); await p.click(`#pop-kind [data-k=${k}]`); await p.mouse.click(5, 600);
+    await penPop(); await p.click(`#pop-kind [data-k=${k}]`); await p.mouse.click(5, 600);
     await pen(harai(160, y + dy)); await pen(tate(380, y + dy - 10)); await pen(harai(450, y + dy));
   }
   await p.screenshot({ path: path.join(OUT, 'pen-lines.png'), clip: { x: 0, y: Math.max(0, y - 20), width: 820, height: 260 } });

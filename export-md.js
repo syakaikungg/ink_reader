@@ -3,7 +3,7 @@
 // 章の HTML を画面と同じ CSS で見えない所に並べ、文字の位置（Range の矩形）をそのまま PDF に写す。
 // - 文字は字体を埋め込んで文字のまま（選べる・探せる）。日本語は Noto Serif JP、英数字は Source Serif 4、数式は KaTeX の字体。字体にない字は画面の字を絵にする
 // - 分数の線などの罫線・背景は四角、根号などの SVG と図は絵、本の図（img）はその画像
-// - 書き込みは export.js と同じ輪郭（書き込み JSON から作る）を線のまま重ねる。余白（gap）はたたんでいても開いて出す
+// - 書き込みは export.js と同じ輪郭（書き込み JSON から作る）を線のまま重ねる。余白（gap）はたたんでいても開いて出す（方眼 gr なら方眼も）
 // - 紙に貼った画像は、画面と同じく本文の上・線の下に入れる
 // - ページは A4（紙の幅 680px を 595pt に）。段落の切れ目（長い段落は行の切れ目）で分け、章ごとに新しいページから始める
 import { readInk, mul, INK, HL } from './export.js';
@@ -55,7 +55,7 @@ async function layChapter(sheet, c, { getStroke, img, pic, src }) {
   const s0 = document.createElement('p'); s0.className = 'src'; s0.textContent = src;
   doc.append(s0); doc.insertAdjacentHTML('beforeend', c.html);
   const blocks = [...doc.children];
-  const { ink, gaps, pics } = readInk(c.blocks || {}, getStroke);
+  const { ink, gaps, pics, grs } = readInk(c.blocks || {}, getStroke);
   for (const b in gaps) if (blocks[b]) blocks[b].style.paddingBottom = gaps[b] + 'px';   // 余白は開いて出す
   void doc.offsetHeight;
   if (document.fonts) await document.fonts.ready;
@@ -131,6 +131,13 @@ async function layChapter(sheet, c, { getStroke, img, pic, src }) {
   for (const im of doc.querySelectorAll('img[data-img]')) {
     const q = im.getBoundingClientRect();
     if (q.width && q.height) items.push({ t: 'img', ...at(q), name: im.dataset.img });
+  }
+  // 方眼にした余白: 段落の下の余白に、紙の 16px ごとの目を背景として引く（画面と同じく左右 8px 内側から）
+  for (const b of grs) {
+    if (!gaps[b] || !blocks[b]) continue;
+    const q = at(blocks[b].getBoundingClientRect()), y0 = q.y + q.h - gaps[b], line = { t: 'rect', color: 'rgb(176,191,219)', bg: true };
+    for (let x = 8; x <= W - 8; x += 16) items.push({ ...line, x, y: y0, w: .6, h: gaps[b] });
+    for (let y = 0; y <= gaps[b]; y += 16) items.push({ ...line, x: 8, y: y0 + y, w: W - 16, h: .6 });
   }
   // 書き込み（段落の上端から）
   const onTop = (s) => { const t = tops[Math.min(s.b, tops.length - 1)] || 0; return { ...s, top: t, y0: t + s.y0, y1: t + s.y1 }; };

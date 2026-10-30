@@ -89,27 +89,30 @@ button:disabled { opacity: .35; }
 /* 「ペン」の前の点は、いま書く色と太さ（app.js の showPen） */
 #t-pen { display: inline-flex; align-items: center; gap: 6px; }
 #t-pen .dot { flex: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 12%, transparent); }
+/* 読むだけのときは、選んでいるツールを目立たせない（ツールを押すと書けるように戻る） */
+#bar.reading .grp [id^="t-"][aria-pressed="true"] { background: transparent; border-color: transparent; color: var(--muted); }
 #zoomv { font-variant-numeric: tabular-nums; width: 80px; }
 /* 文言の長さでツールバーが折り返し直して紙が動かないよう、大きさを固定（2行まで） */
 #stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; width: 13em; height: 2.6em; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; }
 #chap { border-color: var(--rule); background: var(--paper); max-width: 15em; display: inline-flex; align-items: center; gap: 4px; }
 /* 縦向きなど幅が足りないときは、ツールを1行にまとめ、知らせはその下の細い1行にする */
-@media (max-width: 940px) {
+@media (max-width: 1100px) {
   #stat { display: block; width: auto; flex-basis: 100%; height: 1.4em; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
-  #chap { max-width: 12em; }
+  /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
+  #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
+  #chap { max-width: 12em; min-width: 0; flex: 0 1 auto; }
 }
-/* 拡大率・指で書く・設定は、幅が広いときはそのまま並べ、Claude と画面を分けたときなど狭いときは「…」の中に入れる */
+@media (max-width: 880px) {
+  .grp + .grp { padding-left: 6px; }
+  #bar button { padding: 0 7px; }
+}
+/* 拡大率・指で書く・読むだけ・設定は、幅が広いときはそのまま並べ、Claude と画面を分けたときや iPad mini の縦など狭いときは「…」の中に入れる */
 #more { display: none; font-size: 18px; letter-spacing: 1px; }
 #more-box { display: contents; }
 #g-more { position: relative; }
-@media (max-width: 700px) {
-  /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
-  #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
-  #chap { max-width: none; min-width: 0; flex: 0 1 auto; }
-  .grp + .grp { padding-left: 6px; }
-  #bar button { padding: 0 7px; }
+@media (max-width: 760px) {
   #more { display: inline-flex; align-items: center; justify-content: center; }
-  #bar.finger #more { color: var(--accent); }   /* 指で書くがオンのときは「…」を青く */
+  #bar.finger #more, #bar.reading #more { color: var(--accent); }   /* 指で書く・読むだけがオンのときは「…」を青く */
   #more-box { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; flex-direction: column; align-items: stretch; gap: 6px;
     padding: 8px; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
   #bar.more #more-box { display: flex; }
@@ -121,7 +124,6 @@ button:disabled { opacity: .35; }
   #bar button { padding: 0 5px; }
   .grp + .grp { padding-left: 4px; }
 }
-@media (max-width: 800px) { #chap { max-width: 8em; } }
 #chap-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 select {
   font: 600 13px/1 var(--f-ui); color: var(--fg); background: var(--paper);
@@ -142,6 +144,37 @@ select {
 #hist svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #hist button:disabled { opacity: .3; }
 #empty:not([hidden]) ~ #hist { display: none; }
+/* 色・太さの札: 戻す・進むの札の下（左の端）か、右の端に縦に並ぶ。見た目は戻す・進むと同じ半透明。位置（top）は app.js の placeRail */
+#rail { position: fixed; z-index: 15; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 56px) + 62px);
+  width: 48px; padding: 4px 0; box-sizing: border-box; border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--bar); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(20,30,60,.1);
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#rail.r { left: auto; right: max(12px, env(safe-area-inset-right, 0px)); }
+#rail.moving { box-shadow: 0 8px 28px rgba(20,30,60,.25); opacity: .9; }
+#empty:not([hidden]) ~ #rail { display: none; }
+#rail > div, #rail .rc, #rail .rw, #rail .re, #rail .rs { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+#rail > div[hidden] { display: none; }
+#rail button { min-width: 0; width: 40px; height: 40px; padding: 0; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+#rail hr { width: 26px; border: 0; border-top: 1px solid var(--rule); margin: 3px 0; }
+#rail .rc span { width: 22px; height: 22px; border-radius: 50%; display: block; box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 12%, transparent); }
+#rail .rc button[aria-pressed="true"] { background: transparent; border-color: transparent; }
+#rail .rc button[aria-pressed="true"] span { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent); }
+#rail .rw span { width: 22px; border-radius: 6px; background: var(--fg); display: block; }   /* 太さの見本（高さは app.js が入れる） */
+#rail .rw button[aria-pressed="true"] span { background: var(--accent); }
+#rail .re button { height: 46px; font-size: 11px; line-height: 1.15; font-weight: 600; }
+#rail .rl button { font-size: 12px; font-weight: 600; }
+#rail .rs span { border: 1.5px solid var(--fg); border-radius: 50%; display: block; box-sizing: border-box; }
+#rail .rs button[aria-pressed="true"] span { border-color: var(--accent); }
+#rail .rm { font-size: 16px; color: var(--muted); letter-spacing: 1px; }
+#rail .rm[aria-expanded="true"] { color: var(--accent); }
+/* 画面を半分にしたときなど、紙の左の余白が狭いときは細くして本文にかからないようにする */
+@media (max-width: 700px) {
+  #rail { width: 40px; padding: 2px 0; }
+  #rail button { width: 34px; height: 36px; }
+  #rail .rc span { width: 20px; height: 20px; }
+  #rail .re button { height: 42px; font-size: 10px; }
+  #rail hr { width: 22px; }
+}
 
 #hint {
   max-width: 680px; margin: 0 auto 14px; padding-top: 46px; font-size: 13px; line-height: 1.6; color: var(--muted);   /* 上は戻す・進むの札の分あける */
@@ -369,6 +402,15 @@ body.pdf #sps { --sp-line: rgba(0,0,0,.16); --sp-text: rgba(0,0,0,.42); --sp-bg:
 #sps .sph.fold { left: 0; width: 100%; height: 28px; margin-top: 0; border: 0; border-radius: 0; background: none; color: var(--sp-text); font: 11px/1 var(--f-ui); }
 #sps .sph.fold::before { position: absolute; left: 8px; right: 8px; top: 50%; width: auto; height: 0; margin: 0; border-top: 1px dashed var(--sp-line); border-bottom: 0; }
 #sps .sph.fold span { position: relative; padding: 2px 8px; background: var(--sp-bg); }
+/* 方眼: 余白・白紙の右上の切り替えと、方眼の目（5mm ほど。線の下に敷く） */
+#sps .spg { position: absolute; right: 14px; height: 22px; min-width: 0; padding: 0 8px; border: 1px solid var(--sp-line); border-radius: 11px;
+  background: var(--sp-knob); color: var(--sp-text); font: 600 11px/1 var(--f-ui); }
+#sps .spg[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+body.pdf #sps .spg { right: 6px; }
+#grs { position: absolute; z-index: 1; left: 0; top: 0; width: 100%; height: 0; pointer-events: none; }
+#grs div, #doc > .pg .blank.grid { background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px); background-size: 16px 16px; }
+#grs div { position: absolute; left: 8px; right: 8px; border: 1px solid transparent; border-radius: 6px; }
+#page { --grid-line: rgba(80,110,170,.18); }
 #bms { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
 #bms i { position: absolute; left: 18px; margin-top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
@@ -465,6 +507,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
       <option value="1.5">150%</option><option value="2">200%</option><option value="2.5">250%</option><option value="3">300%</option>
     </select>
     <button id="finger" aria-pressed="false" title="オンにすると指でも書ける（スクロールはできなくなる）">指で書く</button>
+    <button id="readonly" aria-pressed="false" title="オンにすると Apple Pencil でスクロールできる（書き込みはしない）">読むだけ</button>
     <button id="gear" aria-label="設定">設定</button>
     </div>
   </div>
@@ -494,6 +537,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <article id="doc">
       <p class="src"></p>
     </article>
+    <div id="grs" aria-hidden="true"></div>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="qs"></div>
     <div id="bms" aria-hidden="true"></div>
@@ -515,6 +559,26 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   <button id="undo" disabled aria-label="元に戻す" title="元に戻す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5 4 9.5 8.5 14M4.5 9.5H15a4.75 4.75 0 0 1 0 9.5h-3"/></svg></button>
   <button id="redo" disabled aria-label="やり直す" title="やり直す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5 20 9.5 15.5 14M19.5 9.5H9a4.75 4.75 0 0 0 0 9.5h3"/></svg></button>
 </div>
+<!-- 札: 選んでいるペン・消しゴム・投げ縄をもう一度押すと出る・しまう。書いている間も出たまま。長押しして左右の端へ動かせる -->
+<div id="rail" hidden role="toolbar" aria-orientation="vertical">
+  <div id="rail-pen">
+    <div class="rc" role="group" aria-label="よく使う色"></div>
+    <hr>
+    <div class="rw" role="group" aria-label="太さ"><button type="button" aria-label="細"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="太"><span></span></button></div>
+    <hr>
+    <button type="button" class="rm" aria-label="ほかの色・太さ・筆圧" title="ほかの色・太さ・筆圧">…</button>
+  </div>
+  <div id="rail-er">
+    <div class="re" role="group" aria-label="消し方"><button type="button" data-m="stroke" aria-label="線ごと消す">線<br>ごと</button><button type="button" data-m="part" aria-label="なぞった所だけ消す">なぞ<br>った所</button></div>
+    <hr>
+    <div class="rs" role="group" aria-label="消しゴムの大きさ"><button type="button" aria-label="小"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="大"><span></span></button></div>
+    <hr>
+    <button type="button" class="rm" aria-label="大きさ・全部消す" title="大きさ・全部消す">…</button>
+  </div>
+  <div id="rail-ls">
+    <div class="rl" role="group" aria-label="囲み方"><button type="button" data-k="free" aria-label="自由に囲む">自由</button><button type="button" data-k="rect" aria-label="四角で囲む">四角</button></div>
+  </div>
+</div>
 <div id="back" hidden><button id="back-go">‹ <span id="back-t"></span>に戻る</button><button id="back-x" aria-label="戻る札を消す">×</button></div>
 <button id="pgno" hidden aria-label="ページの一覧"><span id="pg-c"></span> / <span id="pg-n"></span></button>
 <nav id="foot" aria-label="章の移動">
@@ -531,12 +595,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
       <ul>
         <li>Apple Pencil で書き込み、指でスクロール、2本指のピンチで拡大・縮小します（拡大率の数字を押すと一覧からも選べます）。左上の矢印か、紙を2本指で軽くたたくと戻す、3本指でたたくと進むができます。</li>
         <li>線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。</li>
-        <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。「ペン」をもう一度押すと、色と太さを選べます。</li>
-        <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
+        <li>選んでいる「ペン」をもう一度押すと、紙の横に色（よく使う4色。ほかの色を選ぶと、一番長く使っていない色と入れ替わります）と太さの札が出て、書いている間も出たままになります。もう一度押すとしまえます。札の「…」で、ほかの色・太さのつまみ・筆圧を選べます。札は長押しして引っぱると、左右の端や上下の位置に動かせます。</li>
+        <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すかなぞった所だけ消すかと、丸の大きさの札が出ます（「…」から書き込みを全部消せます）。</li>
+        <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。投げ縄をもう一度押すと、自由に囲むか四角で囲む（ななめに引く）かを選べます。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
         <li>「画像」で写真やファイルの画像を紙に貼れます（ほかのアプリからドラッグしても貼れます）。貼った画像は指で軽くたたくか、投げ縄でペンを軽く当てると選べて、動かす・大きさ・向き・複製・削除ができます（選んだ枠の中は指でも動かせます）。画像の上にも書けます。</li>
-        <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。</li>
+        <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄（自由）で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。余白や白紙の右上の「方眼」を押すと方眼になります。</li>
         <li>章の名前を押すと、目次・しおり・本文の検索が開きます。段落を指で長押しすると、しおりが付きます。設定・本・目次などの窓は、まわりの暗い所を触ると閉じます。</li>
-        <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
+        <li>「読むだけ」をオンにすると、Apple Pencil でスクロールでき、書き込みはしません（ツールを押すと書けるように戻ります）。</li>
+        <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、縮小画像の「…」から前や後ろに白紙を入れられます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
         <li>本と書き込みはこの iPad に保存されるので、通信なしでも開けます。Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</li>
       </ul>
       <div class="row"><button type="button" class="open-sample">見本の本を開く</button></div>
@@ -615,9 +681,9 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     </div>
     <div id="toc-pages" hidden>
       <div id="pg-grid"></div>
-      <p>縮小画像を押すとそのページへ飛びます。「…」から、後ろに白紙のページを入れたり、白紙を消したりできます。「書き出す」では、ページを選んで書き込みごと PDF にできます。</p>
+      <p>縮小画像を押すとそのページへ飛びます。「…」から、前や後ろに白紙のページを入れたり、白紙を消したりできます。「書き出す」では、ページを選んで書き込みごと PDF にできます。</p>
     </div>
-    <div id="th-menu" hidden><button type="button" id="th-add">後ろに白紙を入れる</button><button type="button" id="th-del">この白紙を消す</button></div>
+    <div id="th-menu" hidden><button type="button" id="th-pre">前に白紙を入れる</button><button type="button" id="th-add">後ろに白紙を入れる</button><button type="button" id="th-del">この白紙を消す</button></div>
     <div class="row"><button value="cancel">閉じる</button></div>
   </form>
 </dialog>
