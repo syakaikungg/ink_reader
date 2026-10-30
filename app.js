@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v74';
+  const APP_VERSION = 'ink-reader-v75';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -769,6 +769,7 @@
 - \`<本>/book.pdf\`: PDF の本の元の PDF（10MB までの本だけ。それより大きい本は置かない）。
 - \`<本>/chapters/<章>.md\`: md の本の本文（数式は TeX）。段落番号は、空行で区切った段落・見出し・数式のかたまりを上から 1, 2, … と数えたもの。
 - \`<本>/view/p<ページ>.png\`: PDF の本の、書き込みのあるページ（と質問されたページ）の画像。ページの絵に手書きを重ねてある。
+- \`<本>/view/<章>-b<段落>.png\`: md の本の、書き込みのある段落の画像。本文の文字（数式・図も）に手書きを重ね、段落を枠で囲んである（左の青い札が段落番号。前後の段落が少し入ることがある）。章の書き込みを振り返るときは、ink の座標ではなくこれを見てください。
 - \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
 - \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。段落ごとの \`pics\` は、紙に貼った画像の名前と位置。
 - \`<本>/pics/<名前>.jpg\`（.png）: 利用者が紙に貼った画像（写真・図・スクリーンショットなど）。ページの画像・now.png・last.png にも貼った所に入っている。
@@ -995,6 +996,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       await kv.set(key, saved(st));
       // PDF は座標だけでは AI に分からないので、書き込みを変えたページを画像にして送る
       if (meta && meta.pdf && id === CH && bk === bookKey()) { await upPages(dir, bk, [...sent], false, R); kv.set('viewv:' + tag(R) + bk, VIEWV).catch(() => {}); }
+      else if (meta && id === CH && bk === bookKey()) await upBlocks(dir, bk, id, [...sent], R);   // md は書き込みを変えた段落の絵
       if (id === CH && !st.pending.size) stat.textContent = R.name + 'に保存しました';
     } catch (e) {
       if (e.drive) needLogin();
@@ -1184,6 +1186,56 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     }
     await kv.set(key, shas);
   }
+  // md の本: 書き込みのある段落の絵を <本>/view/<章>-b<段落>.png に置く（AI が章の書き込みを振り返れるように。now.png と同じ描き方で、段落の枠と番号の札つき）。
+  // list: 書き込みを変えた段落。書き込みがなくなった段落の絵は消す（付け直して番号が変わったときの前の番号の絵も、覚えている分は消す）
+  const MDVIEWV = 1;   // 段落の絵の作り方の版（変えたら上げる）
+  function upBlocks(...a) { return pagesQ = pagesQ.then(() => upBlocks1(...a)).catch(() => {}); }
+  // miss: 絵をまだ置いていない段落だけ（前の版で書いた章に置くとき。書いて送った段落は置き直さない）
+  async function upBlocks1(dir, bk, id, list, R = where(), miss = false) {
+    const key = 'view:' + tag(R) + bk + ':' + id, shas = (await kv.get(key)) || {}, want = new Set(list);
+    for (const n of new Set([...list, ...Object.keys(shas).map(Number)])) {
+      const path = dir + '/view/' + id + '-b' + n + '.png', msg = `ink: ${dir.split('/').pop()} ${id} b${n}`;
+      try {
+        if (isPdf() || bk !== bookKey() || id !== CH) break;
+        if (!blocks[n] || !strokes.some((s) => s.b === n)) {
+          if (want.has(n) && !shas[n]) shas[n] = await R.sha(path);
+          if (shas[n]) await R.del(path, shas[n], msg);
+          delete shas[n];
+          continue;
+        }
+        if (!want.has(n) || (miss && shas[n])) continue;
+        if (!shas[n]) shas[n] = await R.sha(path);
+        const bl = await paperPng(...blockSpan(n));
+        try { shas[n] = await R.put(path, bl, shas[n], msg); }
+        catch (e) { if (e.status !== 409) throw e; shas[n] = await R.put(path, bl, await R.sha(path), msg); }
+      } catch (e) { delete shas[n]; if (e.drive) { needLogin(); break; } }
+    }
+    await kv.set(key, shas);
+  }
+  // 書き込みのある段落の絵をまだ置いていない章（前の版で書いた章・ほかの端末で書いた分を取り込んだ章）は、全部置く。章を開いたときと取り込んだとき
+  let viewing = '';
+  function needViews(id) {
+    if (isPdf() || !canPush() || !ghMoved()) return;
+    const bk = bookKey(), R = where(), vk = 'viewv:' + tag(R) + bk + ':' + id;
+    if (viewing === vk) return;
+    viewing = vk;
+    kv.get(vk).then((v) => v === MDVIEWV ? (viewing = '') : setTimeout(async () => {
+      try {
+        if (bk !== bookKey() || id !== CH || R !== where() || !strokes.length || await kv.get(vk) === MDVIEWV) return;
+        // まだ送っていない段落は、送るときに置く（ここで置くと二度置く）。作り方の版を上げたときは全部置き直す
+        const list = [...new Set(strokes.map((x) => x.b))].filter((n) => !cs.pending.has(n));
+        if (list.length) await upBlocks(await upBook(bookDir(), bk, book, R), bk, id, list, R, v == null);
+        kv.set(vk, MDVIEWV);
+      } finally { viewing = ''; }
+    }, 3000));
+  }
+  // 段落の絵にする紙の範囲: 段落（下の余白も）と、そこからはみ出して書いた線
+  function blockSpan(n) {
+    let y0 = tops[n] - 12, y1 = n + 1 < blocks.length ? tops[n + 1] : page.offsetHeight;
+    for (const s of strokes) if (s.b === n && !s.hid) { const t = top(s); y0 = Math.min(y0, s.bbox[1] + t - 12); y1 = Math.max(y1, s.bbox[3] + t + 12); }
+    y0 = Math.max(0, y0);
+    return [y0, Math.min(y1, y0 + 4000)];
+  }
   async function pushAll() {
     if (!canPush() || !book) return;
     for (const c of book.chapters) await pushChapter(c.id);
@@ -1202,7 +1254,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       if (remote.sha === st.sha) { if (!st.base && st.sha) { st.base = baseOf(remote.blocks); persist(); } return; }   // 前の版で保存した章は、ここで base を覚える
       st.sha = remote.sha; st.blocks = merge(st, remote.blocks); st.base = baseOf(remote.blocks);
       showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist();
-      persist();
+      persist(); needViews(id);
       if (st.pending.size) schedulePush(500);
     } catch (e) { if (e.drive) needLogin(); }
   }
@@ -2627,6 +2679,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     for (let node; (node = tw.nextNode()) && n < 20000;) {
       const t = node.data, pe = node.parentElement;
       if (!t.trim() || pe.closest('.katex-mathml')) continue;   // 読み上げ用の隠れた数式は描かない
+      const fs = pe.closest('svg'); if (fs && figImgs.has(fs)) continue;   // 絵にした SVG の図の中の字
       const cs = getComputedStyle(pe);
       g.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       for (let i = 0; i < t.length;) {
@@ -2650,7 +2703,38 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       for (const d of sv.querySelectorAll('path')) g.fill(new Path2D(d.getAttribute('d')));
       g.restore();
     }
-    for (const im of el.querySelectorAll('img')) { const [x, y, w, h] = at(im.getBoundingClientRect()); g.strokeRect(x, y, w, h); g.fillText('図', x + 6, y + 12); }
+    // 図: 読めた画像（この端末の図・data:）と、絵にした md の中の SVG。描けない図（ウェブの画像・ない図）は枠と「図」
+    const figs = [...el.querySelectorAll('img')].concat([...el.querySelectorAll('svg')].filter((sv) => !sv.closest('.katex')));
+    for (const f of figs) {
+      const [x, y, w, h] = at(f.getBoundingClientRect()), im = f.tagName === 'IMG' ? (drawable(f) ? f : null) : figImgs.get(f);
+      if (!w || !h) continue;
+      if (im) g.drawImage(im, x, y, w, h);
+      else if (f.tagName === 'IMG') { g.strokeRect(x, y, w, h); g.fillText('図', x + 6, y + 12); }
+    }
+  }
+  // 絵（キャンバス）に描ける画像か。ほかのサイトの画像を描くとキャンバスが読めなくなるので、この端末の図（blob:）と data: と同じサイトの画像だけ
+  const drawable = (im) => im.complete && im.naturalWidth > 0 && !im.classList.contains('miss') && (/^(blob|data):/.test(im.src) || new URL(im.src, location.href).origin === location.origin);
+  // md の中の SVG の図は、drawText（同期）の前に絵にしておく。色は画面の色（currentColor・var(--accent)）を書き込み、暗い画面の明るい色は白い紙の色にする
+  const figImgs = new WeakMap();
+  const paperColor = (c, dark) => {
+    const m = dark && /^rgba?\(([\d.]+), ([\d.]+), ([\d.]+)/.exec(c);
+    if (!m) return c;
+    const [r, gr, b] = m.slice(1).map(Number);
+    return .299 * r + .587 * gr + .114 * b < 140 ? c : b > r + 40 ? '#2747c9' : '#1a1e26';
+  };
+  async function readyFigs(bs) {
+    const dark = getComputedStyle(document.documentElement).colorScheme === 'dark';
+    for (const b of bs) for (const sv of blocks[b] ? blocks[b].querySelectorAll('svg') : []) {
+      if (sv.closest('.katex') || figImgs.has(sv)) continue;
+      const r = sv.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const c = sv.cloneNode(true), src = [sv, ...sv.querySelectorAll('*')], out = [c, ...c.querySelectorAll('*')];
+      src.forEach((e, i) => { const st = getComputedStyle(e); out[i].style.fill = paperColor(st.fill, dark); out[i].style.stroke = paperColor(st.stroke, dark); });
+      c.setAttribute('width', r.width / scale); c.setAttribute('height', r.height / scale);
+      const im = new Image();
+      im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(c));
+      try { await im.decode(); figImgs.set(sv, im); } catch {}
+    }
   }
   const inRange = (y0, y1) => strokes.filter((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > y0 && s.bbox[1] + t < y1; });
   // 紙の [y0, y1) を絵にする。PDF はページの絵、md は段落の枠と本文の文字。その上に手書きと、段落（ページ）の番号の札
@@ -2674,11 +2758,22 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     drawInk(g, inRange(y0, y1));
     g.font = '700 12px sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'center';
     for (const b of bs) {
+      if ((b + 1 < blocks.length ? tops[b + 1] : Infinity) - Math.max(tops[b], y0) < 24) continue;   // 端が少し入っただけの段落には札を付けない
       const t = String(b), w = g.measureText(t).width + 12, x = isPdf() ? 6 : blocks[b].offsetLeft - 10 - w, y = Math.max(tops[b], y0 + 2);
       g.fillStyle = 'rgba(39,71,201,.9)'; g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, 18, 9); else g.rect(x, y, w, 18); g.fill();
       g.fillStyle = '#fff'; g.fillText(t, x + w / 2, y + 9.5);
     }
     return cv;
+  }
+  // 紙の [y0, y1) の PNG。貼った画像と md の中の SVG の図を読んでから描く
+  async function paperPng(y0, y1) {
+    const bs = [];
+    for (let b = Math.max(1, blockAt(y0)); b < blocks.length && tops[b] < y1; b++) bs.push(b);
+    await readyPics(inRange(y0, y1));
+    if (!isPdf()) await readyFigs(bs);
+    const cv = paperImage(y0, y1), bl = await pngOf(cv);
+    cv.width = cv.height = 0;
+    return bl;
   }
   const p2 = (n) => String(n).padStart(2, '0');
   const clock = (t, day) => { const d = new Date(t); return (day ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` : '') + `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
@@ -2748,9 +2843,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       if (wrote && wrote.t !== lastSent && wrote.k === bk && wrote.c === ch) {
         const w = wrote, m = Math.max(120, (300 - (w.y[1] - w.y[0])) / 2), y0 = Math.max(0, w.y[0] - m), y1 = Math.min(page.offsetHeight, w.y[1] + m, y0 + 1600);
         w.md = isPdf() || !blocks[w.b] ? null : blockMd(blocks[w.b]).slice(0, 3000);
-        await readyPics(inRange(y0, y1));
-        const cv = paperImage(y0, y1), bl = await pngOf(cv);
-        cv.width = cv.height = 0;
+        const bl = await paperPng(y0, y1);
         if (busy()) return;
         await drive.over('last.png', bl);
         w.img = true; lastSent = w.t;
@@ -2760,9 +2853,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       const ink = strokes.some((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > v.y0 && s.bbox[1] + t < v.y1; });
       const hasNow = v.bs.length > 0 && (isPdf() || ink);
       if (hasNow) {
-        await readyPics(inRange(v.y0, v.y1));
-        const cv = paperImage(v.y0, v.y1), bl = await pngOf(cv);
-        cv.width = cv.height = 0;
+        const bl = await paperPng(v.y0, v.y1);
         if (busy()) return;
         await drive.over('now.png', bl);
       }
@@ -3437,6 +3528,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
         kv.set(vk, VIEWV);
       }, 3000));
     }
+    needViews(id);
     showPending();
     lastPull = Date.now(); refreshChapter(); nowSoon();
   }
@@ -4467,7 +4559,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     const meta = await kv.get('book:' + id);
     for (const c of (meta && meta.chapters) || []) {
       for (const f of picNames(((await kv.get('ink:' + id + ':' + c.id)) || {}).blocks)) await kv.del(picKey(f, id));   // 貼った画像
-      for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:']) await kv.del(k + id + ':' + c.id);
+      for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:', 'view:drive:', 'viewv:drive:']) await kv.del(k + id + ':' + c.id);
     }
     for (const f of Object.keys((meta && meta.local && meta.images) || {})) await kv.del('img:' + meta.imageDir + '/' + f);   // ファイルの md の図
     for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:', 'imgup:drive:']) await kv.del(k + id);
