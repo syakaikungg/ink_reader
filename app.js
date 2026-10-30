@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v69';
+  const APP_VERSION = 'ink-reader-v70';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1416,6 +1416,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   // 戻す・進むの札は、ツールバーのすぐ下に置く（ツールバーは画面の幅で折り返して高さが変わる）
   const bar = $('#bar');
   new ResizeObserver(() => { document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px'); placeRail(); }).observe(bar);
+  new ResizeObserver(() => placeRail()).observe($('#hist'));   // 本がない画面（戻す・進むの札が隠れている）から本を開いたとき、色・太さの札を札の下へ置き直す
   // ペンの色と太さ: 選んでいる「ペン」をもう一度押すと小窓が出る。太さは3つから選び、つまみで選んでいる太さを変える（端末に覚える）。
   // 投げ縄で選んだ線は、メニューの「色・太さ」から同じ小窓で変える
   const PALETTE = ['k', 'r', 'b', '#1f8a4c', '#e07b00', '#7b3fc4', '#8a5a2b', '#0f8b8d', '#d6338a', '#6b7280', '#c9a100', '#0b2f6b'];
