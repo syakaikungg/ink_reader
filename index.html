@@ -98,18 +98,19 @@ button:disabled { opacity: .35; }
 /* 縦向きなど幅が足りないときは、ツールを1行にまとめ、知らせはその下の細い1行にする */
 @media (max-width: 1100px) {
   #stat { display: block; width: auto; flex-basis: 100%; height: 1.4em; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
-  #chap { max-width: 12em; }
+  /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
+  #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
+  #chap { max-width: 12em; min-width: 0; flex: 0 1 auto; }
+}
+@media (max-width: 880px) {
+  .grp + .grp { padding-left: 6px; }
+  #bar button { padding: 0 7px; }
 }
 /* 拡大率・指で書く・読むだけ・設定は、幅が広いときはそのまま並べ、Claude と画面を分けたときや iPad mini の縦など狭いときは「…」の中に入れる */
 #more { display: none; font-size: 18px; letter-spacing: 1px; }
 #more-box { display: contents; }
 #g-more { position: relative; }
-@media (max-width: 880px) {
-  /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
-  #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
-  #chap { max-width: none; min-width: 0; flex: 0 1 auto; }
-  .grp + .grp { padding-left: 6px; }
-  #bar button { padding: 0 7px; }
+@media (max-width: 760px) {
   #more { display: inline-flex; align-items: center; justify-content: center; }
   #bar.finger #more, #bar.reading #more { color: var(--accent); }   /* 指で書く・読むだけがオンのときは「…」を青く */
   #more-box { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; flex-direction: column; align-items: stretch; gap: 6px;
@@ -123,7 +124,6 @@ button:disabled { opacity: .35; }
   #bar button { padding: 0 5px; }
   .grp + .grp { padding-left: 4px; }
 }
-@media (max-width: 800px) { #chap { max-width: 8em; } }
 #chap-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 select {
   font: 600 13px/1 var(--f-ui); color: var(--fg); background: var(--paper);
@@ -594,12 +594,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
       <ul>
         <li>Apple Pencil で書き込み、指でスクロール、2本指のピンチで拡大・縮小します（拡大率の数字を押すと一覧からも選べます）。左上の矢印か、紙を2本指で軽くたたくと戻す、3本指でたたくと進むができます。</li>
         <li>線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。</li>
-        <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。「ペン」をもう一度押すと、色と太さを選べます。</li>
-        <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
+        <li>選んでいる「ペン」をもう一度押すと、紙の横に色（よく使う4色。ほかの色を選ぶと、一番長く使っていない色と入れ替わります）と太さの札が出て、書いている間も出たままになります。もう一度押すとしまえます。札の「…」で、ほかの色・太さのつまみ・筆圧を選べます。札は長押しして引っぱると、左右の端や上下の位置に動かせます。</li>
+        <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すかなぞった所だけ消すかと、丸の大きさの札が出ます（「…」から書き込みを全部消せます）。</li>
+        <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。投げ縄をもう一度押すと、自由に囲むか四角で囲む（ななめに引く）かを選べます。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
         <li>「画像」で写真やファイルの画像を紙に貼れます（ほかのアプリからドラッグしても貼れます）。貼った画像は指で軽くたたくか、投げ縄でペンを軽く当てると選べて、動かす・大きさ・向き・複製・削除ができます（選んだ枠の中は指でも動かせます）。画像の上にも書けます。</li>
-        <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。</li>
+        <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄（自由）で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。余白や白紙の右上の「方眼」を押すと方眼になります。</li>
         <li>章の名前を押すと、目次・しおり・本文の検索が開きます。段落を指で長押しすると、しおりが付きます。</li>
-        <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
+        <li>「読むだけ」をオンにすると、Apple Pencil でスクロールでき、書き込みはしません（ツールを押すと書けるように戻ります）。</li>
+        <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、縮小画像の「…」から前や後ろに白紙を入れられます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
         <li>本と書き込みはこの iPad に保存されるので、通信なしでも開けます。Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</li>
       </ul>
       <div class="row"><button type="button" class="open-sample">見本の本を開く</button></div>

@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v66';
+  const APP_VERSION = 'ink-reader-v67';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -3598,7 +3598,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!lp) return;
     const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale, { ui, in: inSel } = lp;
     lpStop();
-    const hit = !ui && picAt(x, y);
+    const hit = !ui && !reading && picAt(x, y);   // 読むだけのときは選ばない
     if (hit) { pickPic(hit); return; }
     if (inSel) return;
     // 投げ縄で選んでいるときは、枠の外を指で軽く触ると選択を外す
