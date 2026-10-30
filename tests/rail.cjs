@@ -103,6 +103,37 @@ const check = (name, v, info) => { console.log(v ? '✓' : '✗', name, info ===
   check('開き直しても右の端・同じ高さ', r2.r === 1180 - 12 && Math.abs(r2.t - r1.t) < 2, r2);
   await p.screenshot({ path: path.join(OUT, 'rail-right.png') });
 
+  // 上の端へ動かすと横向きになり、戻す・進むの札の右に並ぶ
+  const drag = async (x0, y0, x1, y1) => { await p.mouse.move(x0, y0); await p.mouse.down(); await p.waitForTimeout(500); for (let k = 1; k <= 12; k++) await p.mouse.move(x0 + (x1 - x0) * k / 12, y0 + (y1 - y0) * k / 12); await p.mouse.up(); await p.waitForTimeout(150); };
+  const c1 = await rect(p, '#rail .rw'), hb = await rect(p, '#bar');
+  await drag(c1.l + 20, c1.t + 4, 600, hb.b + 20);
+  const t1 = await rect(p, '#rail'), h1 = await rect(p, '#hist');
+  check('上の端へ引っぱると横向きになる', await p.evaluate(() => document.getElementById('rail').classList.contains('t')) && t1.w > t1.h * 4 && await p.getAttribute('#rail', 'aria-orientation') === 'horizontal', t1);
+  check('上の端では戻す・進むの札と同じ高さで、画面の真ん中', Math.abs(t1.t - h1.t) < 2 && Math.abs((t1.l + t1.r) / 2 - 1180 / 2) < 2, [t1, h1]);
+  check('動かしたときは太さを変えない（上）', (await pens(p)).si === 2);
+  const w1 = await rect(p, '#rail .rw button:nth-child(3)');
+  await p.click('#rail .rw button:nth-child(1)');
+  check('横向きでも太さを選べる', (await pens(p)).si === 0 && w1.t > t1.t && w1.b < t1.b);
+  await p.click('#rail-pen .rm'); await p.waitForTimeout(100);
+  const pp1 = await rect(p, '#pop');
+  check('上の端の「…」の小窓は札の下に出る', await p.isVisible('#pop') && pp1.t >= t1.b, [pp1, t1]);
+  await p.click('#rail-pen .rm');
+  await p.reload(); await p.waitForTimeout(800);
+  const t2 = await rect(p, '#rail');
+  check('開き直しても上の端・同じ左右の位置', Math.abs(t2.l - t1.l) < 2 && Math.abs(t2.t - t1.t) < 2 && JSON.parse(await p.evaluate(() => localStorage.getItem('ink:rail'))).side === 't', [t2, t1]);
+  await p.screenshot({ path: path.join(OUT, 'rail-top.png') });
+  await p.click('#t-er');
+  const e1 = await rect(p, '#rail');
+  check('消しゴムの札も横向き', await p.isVisible('#rail-er') && e1.w > e1.h * 3 && Math.abs(e1.t - t1.t) < 2, e1);
+  await p.click('#t-pen');
+  // 左の端へ戻す
+  const c2 = await rect(p, '#rail .rw');
+  await drag(c2.l + 10, c2.t + 10, 40, 500);
+  const t3 = await rect(p, '#rail');
+  check('左の端へ戻すと縦向き', !await p.evaluate(() => document.getElementById('rail').classList.contains('t')) && t3.h > t3.w * 4 && t3.l === 12, t3);
+  await drag(t3.l + 20, t3.t + 30, 1100, 400);
+  check('右の端へも戻せる', (await rect(p, '#rail')).r === 1180 - 12);
+
   // 読むだけ
   await p.click('#readonly');
   const before = await n(p);
@@ -127,6 +158,15 @@ const check = (name, v, info) => { console.log(v ? '✓' : '✗', name, info ===
   const s0 = await rect(q, '#rail'), text = await q.evaluate(() => { const pg = document.getElementById('page').getBoundingClientRect(); return Math.round(pg.left + 48 * pg.width / 680); });
   check('出すと細い札で、本文にかからない', await q.isVisible('#rail') && s0.w === 40 && s0.r <= text, [s0, text]);
   await q.screenshot({ path: path.join(OUT, 'rail-split.png') });
+  {
+    const c = await rect(q, '#rail .rw'), qb = await rect(q, '#bar');
+    await q.mouse.move(c.l + 10, c.t + 4); await q.mouse.down(); await q.waitForTimeout(500);
+    for (let k = 1; k <= 12; k++) await q.mouse.move(c.l + 10 + (560 - c.l - 10) * k / 12, c.t + 4 + (qb.b + 20 - c.t - 4) * k / 12);
+    await q.mouse.up(); await q.waitForTimeout(150);
+    const t = await rect(q, '#rail'), h = await rect(q, '#hist');
+    check('幅 590px でも上の端の真ん中に置け、戻す・進むの札にかからない', t.w > t.h * 4 && t.l >= h.r + 8 && Math.abs((t.l + t.r) / 2 - 590 / 2) < 2 && Math.abs(t.h - h.h) < 2, [t, h]);
+    await q.screenshot({ path: path.join(OUT, 'rail-top-split.png') });
+  }
   check('エラーなし（590px）', !q.errs.length, q.errs);
 
   // ---------- iPad mini の縦（744px） ----------
