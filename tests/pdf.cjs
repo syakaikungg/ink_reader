@@ -135,7 +135,7 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   console.log('reload page151', await p151() - t151);
 
   // 削除すると PDF も消える
-  await p.click('#books'); await p.click('#shelf-list li:first-child .del'); await p.click('#shelf-list li:first-child .del'); await p.waitForTimeout(500);
+  await p.click('#books'); await p.click('#shelf-list .bk:first-child .bk-m'); await p.click('#bk-del'); await p.click('#bk-del'); await p.waitForTimeout(500);
   console.log('deleted', await p.isVisible('#empty'), 'pdf class', await p.evaluate(() => document.body.classList.contains('pdf')), 'pgno hidden', await p.isHidden('#pgno'),
     'kv', await p.evaluate(() => new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => { const q = r.result.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result.filter((k) => /^pdf:/.test(k)).length); }; })));
   console.log('errs', errs); await b.close(); srv.close(); process.exit(errs.length ? 1 : 0);
