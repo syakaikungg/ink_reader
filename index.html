@@ -312,6 +312,13 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #shelf-list .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #shelf-list .cv[aria-current="true"] + .lb .nm { color: var(--accent); font-weight: 600; }
 #shelf-list .bk-m { flex: none; min-width: 0; width: 30px; height: 26px; padding: 0; font-size: 16px; color: var(--muted); }
+/* ドライブにある本（この iPad にない）。押すと書き込みごと戻る */
+#shelf-drive h3 { font: 600 13px/1.3 var(--f-ui); color: var(--muted); margin: 0 0 4px; }
+#shelf-dl { list-style: none; margin: 0 0 14px; padding: 0; }
+#shelf-dl li { display: flex; align-items: center; gap: 8px; min-height: 44px; border-bottom: 1px solid var(--rule); font-size: 14px; }
+#shelf-dl .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shelf-dl .back { flex: none; display: inline-flex; align-items: center; height: 34px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 8px; font: 600 13px/1 var(--f-ui); color: var(--accent); cursor: pointer; }
+#shelf-dl .back.busy { color: var(--muted); }
 #bk-menu { position: fixed; z-index: 5; display: grid; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
 #bk-menu button { text-align: left; font-weight: 400; font-size: 14px; color: var(--ink-r); }
 #bk-menu button.arm { font-weight: 600; }
@@ -523,6 +530,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   <form method="dialog">
     <h2>本</h2>
     <div id="shelf-list"></div>
+    <div id="shelf-drive" hidden><h3>ドライブにある本（この iPad にない）</h3><ul id="shelf-dl"></ul></div>
     <div id="bk-menu" hidden><button type="button" id="bk-del">削除</button></div>
     <p id="shelf-msg" aria-live="polite">md ファイルをいくつか選ぶと、1ファイルが1章の本になります。PDF も開けます。</p>
     <div class="row">

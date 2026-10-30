@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v61';
+  const APP_VERSION = 'ink-reader-v62';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -551,6 +551,32 @@
         texts.set(f.id, { v: f.v, text });
         return text;
       },
+      async blob(path) { const f = await file(path); return f ? (await api(`drive/v3/files/${f.id}?alt=media`)).blob() : null; },
+      // 「Ink Reader」の直下の本のフォルダ: [{ dir: フォルダ名, json: book.json の中身, pdf: book.pdf の大きさ（なければ 0） }]。
+      // フォルダごとに探さず、book.json と book.pdf をまとめて探して、親のフォルダで分ける
+      async books() {
+        const root = await folder(ROOT, false);
+        if (!root) return [];
+        const all = async (q, fields) => {
+          const out = []; let pageToken = '';
+          do {
+            const r = await (await api('drive/v3/files?' + new URLSearchParams({ q, fields: `nextPageToken,files(${fields})`, pageSize: '1000', ...(pageToken ? { pageToken } : {}) }))).json();
+            out.push(...r.files); pageToken = r.nextPageToken;
+          } while (pageToken);
+          return out;
+        };
+        const [subs, jsons, pdfs] = await Promise.all([all(`'${root}' in parents and mimeType='${FOLDER}' and trashed=false`, 'id,name'),
+          all("name='book.json' and trashed=false", 'id,version,parents'), all("name='book.pdf' and trashed=false", 'id,size,parents')]);
+        const out = [], under = (list, d) => list.find((f) => (f.parents || []).includes(d.id));
+        for (const d of subs) {
+          const j = under(jsons, d), p = under(pdfs, d);
+          if (!j) continue;
+          let json = null;
+          try { json = JSON.parse(await this.read({ id: j.id, v: j.version })); } catch {}
+          if (json && Array.isArray(json.chapters)) out.push({ dir: d.name, json, pdf: p ? +p.size || 1 : 0 });
+        }
+        return out;
+      },
     };
   })();
   const driveOn = () => !!(cfg.drive && cfg.dcid);
@@ -635,7 +661,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // GitHub の本は「<題名> (<本のフォルダ名>)」。題名が変わってもフォルダが変わらないよう、最初に決めた名前を覚えておく
   const dirName = (title, tail) => (title || '本').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 60) + ' (' + tail + ')';
   function bookDir() {
-    if (isLocal()) return dirName(book && book.title, src.slice(-4));
+    if (isLocal()) return (book && book.dir) || dirName(book && book.title, src.slice(-4));   // dir: ドライブから戻した本・つないだ本のフォルダ
     const k = PREF + ':ddir:' + bookKey(), tail = cfg.book.split('/').pop();
     let d = store.get(k);
     if (!d && book) store.set(k, d = dirName(book.title, tail));
@@ -801,7 +827,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (v) await put(dir + '/chapters/' + c.id + '.md', v.md);
     }
     const from = local ? { from: 'file' } : { from: 'github', repo: cfg.repo, branch: cfg.branch, path: cfg.book };
-    await put(dir + '/book.json', JSON.stringify({ title: meta.title, ...from, pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}) }, null, 1));
+    await put(dir + '/book.json', JSON.stringify({ title: meta.title, ...from, pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}), ...(meta.fp ? { fp: meta.fp } : {}) }, null, 1));
     await kv.set('up:' + tag(R) + bk, true);
   }
   // GitHub の本をドライブにつないだとき、一度だけ: GitHub にある書き込み（iPad でまだ開いていない章も）と答えをドライブへ写す。
@@ -818,12 +844,13 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       const live = id === CH && cs, key = inkKey(id);
       const st = live || await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
       if (st && atOf(st) === drive.name) return;
-      const remote = await pullInk(id, cfg.book, hub), s = st || { blocks: {}, sha: null, pending: new Set() };
+      // ドライブにもうある章は、ほかの iPad が写したもの（新しい iPad で開いたとき）: ドライブの分を取り込み、GitHub の古い分は使わない
+      const done = await pullInk(id, dir, drive), remote = done.sha ? done : await pullInk(id, cfg.book, hub), s = st || { blocks: {}, sha: null, pending: new Set() };
       if (live && (s !== cs || atOf(s) === drive.name)) return moveInk(id);   // 待っている間に章を開き直した
       if (s === cs) s.blocks = serialize();
-      s.blocks = merge(s, remote.blocks);   // いつもの取り込みと同じ: iPad の未送信の段落はそのまま、ほかは GitHub の分
-      s.sha = null; s.at = drive.name;
-      for (const b in s.blocks) s.pending.add(+b);
+      s.blocks = merge(s, remote.blocks);   // いつもの取り込みと同じ: iPad の未送信の段落はそのまま、ほかは GitHub（ドライブ）の分
+      s.sha = done.sha; s.at = drive.name;
+      if (!done.sha) for (const b in s.blocks) s.pending.add(+b);
       if (s === cs) { showBlocks(s.blocks); undoStack.length = redoStack.length = 0; syncHist(); persist(); }
       else if (Object.keys(s.blocks).length) await kv.set(key, saved(s));
     };
@@ -929,6 +956,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
     pullAnswers(id); upPdf(); moveGhBook(); syncRates();
+    // この iPad でまだ何もない章は、置き場所の分を取り込む（ほかの iPad で書いた分・ドライブから戻した本）
+    if (!st.at && !st.sha && !st.pending.size && !Object.keys(st.blocks).length) st.at = where().name;
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
       const remote = await pullInk(id);
@@ -3247,22 +3276,91 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     await kv.set('books', [{ id, title: meta.title }, ...((await kv.get('books')) || [])]);
     return { id, title: meta.title };
   }
-  async function importMd(files) {
-    const id = 'local:' + newId(), chapters = [];
-    for (const [i, f] of files.entries()) {
-      const md = await f.text(), c = { id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name };
-      await kv.set('md:' + id + ':' + c.id, { sha: f.name + ':' + f.size + ':' + f.lastModified, md });
-      chapters.push(c);
-    }
-    const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : '');
-    return addBook(id, { title, local: true, chapters, images: {} });
+  // 同じファイルを開き直したときは、前に開いた本につなぐ（新しい本を作ると、書き込みとドライブのフォルダが別になる）。
+  // この iPad にあればそれを開き、なければドライブにある本と比べて、あればそのフォルダの書き込みと答えを取り込む。
+  // 比べるのは本の指紋（中身の SHA-256 の頭）。指紋を入れる前の本は、PDF は題名とページの大きさ、md は題名と本文で比べる
+  async function fpOf(parts) {
+    try {
+      const bufs = parts.map((x) => typeof x === 'string' ? new TextEncoder().encode(x) : new Uint8Array(x));
+      let all = bufs[0];
+      if (bufs.length > 1) { all = new Uint8Array(bufs.reduce((a, b) => a + b.length + 1, 0)); let o = 0; for (const b of bufs) { all.set(b, o); o += b.length + 1; } }
+      return [...new Uint8Array(await crypto.subtle.digest('SHA-256', all)).slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch { return ''; }
   }
-  // PDF は1ファイルを1冊にする。PDF そのものは 'pdf:<本>' に置き、ページの大きさだけ先に調べておく（開くたびに全ページを読まないため）
-  async function importPdf(f) {
+  const sameSizes = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => v[0] === b[i][0] && v[1] === b[i][1]);
+  // m: 本の情報（端末の本か book.json）、x: 開いたファイル { pdf, fp, title, sizes, texts }、readMd(章): m の章の本文
+  async function sameBook(m, x, readMd) {
+    if (!m || !m.chapters || !!m.pdf !== !!x.pdf) return false;
+    if (m.fp && x.fp) return m.fp === x.fp;
+    if (m.title !== x.title) return false;
+    if (x.pdf) return sameSizes(m.sizes, x.sizes);
+    if (m.chapters.length !== x.texts.length) return false;
+    for (const [i, c] of m.chapters.entries()) if (await readMd(c) !== x.texts[i]) return false;
+    return true;
+  }
+  async function findOnDevice(x) {
+    for (const r of (await kv.get('books')) || []) {
+      const m = await kv.get('book:' + r.id);
+      if (!await sameBook(m, x, async (c) => ((await kv.get('md:' + r.id + ':' + c.id)) || {}).md)) continue;
+      if (!m.fp && x.fp) await kv.set('book:' + r.id, { ...m, fp: x.fp });
+      return { id: r.id, title: m.title, again: true };
+    }
+    return null;
+  }
+  // この iPad の本のドライブのフォルダ名
+  async function localDirs() {
+    const out = new Set();
+    for (const r of (await kv.get('books')) || []) { const m = await kv.get('book:' + r.id); if (m) out.add(m.dir || dirName(m.title, r.id.slice(-4))); }
+    return out;
+  }
+  const driveReady = () => driveOn() && drive.ok() && online();
+  // ドライブにある、この iPad にない本（ファイルから開いた本だけ。GitHub の本は設定から）
+  async function driveOnly() { const local = await localDirs(); return (await drive.books()).filter((d) => d.json.from === 'file' && !local.has(d.dir)); }
+  async function findOnDrive(x) {
+    if (!driveReady()) return null;
+    try {
+      for (const d of await driveOnly()) if (await sameBook(d.json, x, async (c) => { const f = await drive.get(d.dir + '/' + c.file); return f && f.text; })) return d;
+    } catch (e) { if (e.drive) needLogin(); }
+    return null;
+  }
+  // ドライブの本のフォルダ d を、この iPad の本にする。本文は手元のもの（data: PDF のファイルか、md の章の本文の配列）か、ドライブから取る。
+  // 書き込みと答えは、章を開いたときにドライブから取り込む（refreshChapter）
+  async function restoreBook(d, data, fp) {
+    const j = d.json, id = 'local:' + newId(), chapters = j.chapters.map((c) => ({ id: c.id, label: c.label, file: c.file }));
+    try {
+      if (j.pdf) {
+        const bl = data || await drive.blob(d.dir + '/book.pdf');
+        if (!bl) throw new Error('元の PDF のファイルを選んでください');
+        fp ||= await fpOf([await bl.arrayBuffer()]);
+        if (j.fp && fp && fp !== j.fp) throw new Error(`ドライブの「${j.title}」とは違う PDF です`);
+        try { await kv.set('pdf:' + id, bl); } catch { await kv.set('pdf:' + id, await bl.arrayBuffer()); }
+      } else {
+        const texts = data || await Promise.all(chapters.map(async (c) => { const f = await drive.get(d.dir + '/' + c.file); if (!f) throw new Error('ドライブに本文がありません'); return f.text; }));
+        for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: 'drive:' + (fp || i), md: texts[i] });
+        fp ||= await fpOf(texts);
+      }
+      if (!j.fp && fp) drive.sha(d.dir + '/book.json').then((v) => drive.put(d.dir + '/book.json', JSON.stringify({ ...j, fp }, null, 1), v)).catch(() => {});   // 前の版の book.json に指紋を足しておく
+      return { ...await addBook(id, { title: j.title, local: true, ...(j.pdf ? { pdf: true, sizes: j.sizes } : {}), chapters, images: {}, dir: d.dir, fp }), drive: true };
+    } catch (e) { kv.del('pdf:' + id).catch(() => {}); for (const c of chapters) kv.del('md:' + id + ':' + c.id).catch(() => {}); throw e; }
+  }
+  async function importMd(files) {
+    const texts = [], chapters = [];
+    for (const [i, f] of files.entries()) { const md = await f.text(); texts.push(md); chapters.push({ id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name }); }
+    const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : ''), x = { fp: await fpOf(texts), title, texts };
+    const had = await findOnDevice(x);
+    if (had) return had;
+    const d = await findOnDrive(x);
+    if (d) return restoreBook(d, texts, x.fp);
     const id = 'local:' + newId();
+    for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: files[i].name + ':' + files[i].size + ':' + files[i].lastModified, md: texts[i] });
+    return addBook(id, { title, local: true, chapters, images: {}, fp: x.fp });
+  }
+  // PDF は1ファイルを1冊にする。PDF そのものは 'pdf:<本>' に置き、ページの大きさだけ先に調べておく（開くたびに全ページを読まないため）。
+  // want: ドライブの本のフォルダ（本棚の「ファイルを選ぶ」から。そのフォルダの本と同じ PDF のときだけ戻す）
+  async function importPdf(f, want) {
     stat.textContent = `「${f.name}」を読み込み中…`;
-    try { await kv.set('pdf:' + id, f); } catch { await kv.set('pdf:' + id, await f.arrayBuffer()); }
-    let pd = null;
+    const fp = await fpOf([await f.arrayBuffer()]);
+    let pd = null, id = null;
     try {
       pd = await openPdf(new Uint8Array(await f.arrayBuffer()));
       const sizes = [];
@@ -3271,28 +3369,41 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         sizes.push([Math.round(v.width * 100) / 100, Math.round(v.height * 100) / 100]);
         if (i % 25 === 0) stat.textContent = `PDF を読み込み中 ${i}/${pd.numPages}ページ`;
       }
-      const title = f.name.replace(/\.pdf$/i, '');
-      await makeCover(id, pd);
-      return await addBook(id, { title, local: true, pdf: true, chapters: [{ id: 'pdf', label: title, file: f.name }], sizes, images: {} });
-    } catch (e) { kv.del('pdf:' + id).catch(() => {}); throw e; }
+      const title = f.name.replace(/\.pdf$/i, ''), x = { pdf: true, fp, title, sizes };
+      if (want && !await sameBook(want.json, { ...x, title: want.json.title }, null)) throw new Error(`ドライブの「${want.json.title}」とは違う PDF です`);
+      const had = !want && await findOnDevice(x);
+      if (had) return had;
+      const d = want || await findOnDrive(x);
+      let r;
+      if (d) r = await restoreBook(d, f, fp);
+      else {
+        id = 'local:' + newId();
+        try { await kv.set('pdf:' + id, f); } catch { await kv.set('pdf:' + id, await f.arrayBuffer()); }
+        r = await addBook(id, { title, local: true, pdf: true, chapters: [{ id: 'pdf', label: title, file: f.name }], sizes, images: {}, fp });
+      }
+      await makeCover(r.id, pd);
+      return r;
+    } catch (e) { if (id) kv.del('pdf:' + id).catch(() => {}); throw e; }
     finally { if (pd) pd.destroy(); }
   }
   const isPdfFile = (f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
   async function openFiles(files) {
     files = [...files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
     if (!files.length) return;
-    const opened = [];
-    for (const f of files.filter(isPdfFile)) opened.push(await importPdf(f));
+    const got = [];
+    for (const f of files.filter(isPdfFile)) got.push(await importPdf(f));
     const mds = files.filter((f) => !isPdfFile(f));
-    if (mds.length) opened.push(await importMd(mds));
+    if (mds.length) got.push(await importMd(mds));
     shelf.close();
-    await switchBook(opened[opened.length - 1].id);
-    stat.textContent = `「${opened.map((b) => b.title).join('」「')}」をこのiPadに保存しました`;
+    await switchBook(got[got.length - 1].id);
+    const say = (k) => got.filter(k).map((b) => `「${b.title}」`).join('');
+    stat.textContent = [[(b) => !b.again && !b.drive, 'をこのiPadに保存しました'], [(b) => b.again, 'は前に開いた本です（書き込みもそのまま）'], [(b) => b.drive, 'をドライブの書き込みとつなぎました']]
+      .filter(([k]) => got.some(k)).map(([k, t]) => say(k) + t).join('。');
   }
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
   // 本棚: 表紙を最近開いた順に並べる。PDF は1ページ目の縮小画像（開いたときに一度だけ作って端末に保存）、md は題名の札。
   // 押すとその本を開く。ファイルから開いた本は、表紙の下の「…」から消せる（2回押す）
-  const shelf = $('#shelf'), shelfList = $('#shelf-list'), bkMenu = $('#bk-menu'), bkDel = $('#bk-del');
+  const shelf = $('#shelf'), shelfList = $('#shelf-list'), bkMenu = $('#bk-menu'), bkDel = $('#bk-del'), shelfMsg = $('#shelf-msg'), SHELF_MSG = shelfMsg.textContent;
   const openedAt = () => { try { return JSON.parse(store.get(PREF + ':opened')) || {}; } catch { return {}; } };   // 本 -> 最後に開いた時刻
   function markOpened(id) { const o = openedAt(); o[id] = Date.now(); store.set(PREF + ':opened', JSON.stringify(o)); }
   const COVER_W = 300;
@@ -3340,8 +3451,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const u of coverUrls) URL.revokeObjectURL(u);
     coverUrls = urls;
     shelfList.replaceChildren(...els);
-    bkMenu.hidden = true;
+    bkMenu.hidden = true; shelfMsg.textContent = SHELF_MSG;
     if (!shelf.open) shelf.showModal();
+    showDriveBooks();
     const cur = shelfList.querySelector('[aria-current="true"]'); if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
   shelfList.addEventListener('click', (e) => {
@@ -3361,7 +3473,50 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (id !== src || !CH) switchBook(id);
   });
   shelf.addEventListener('click', (e) => { if (!bkMenu.hidden && !e.target.closest('#bk-menu, .bk-m')) bkMenu.hidden = true; });
-  shelf.addEventListener('close', () => { bkMenu.hidden = true; for (const u of coverUrls) URL.revokeObjectURL(u); coverUrls = []; shelfList.replaceChildren(); });
+  // ドライブにある本（この iPad にない）: ドライブにつないでいるときだけ、表紙の下に並べる。押すと本文と書き込みごと戻る。
+  // PDF は 10MB までならドライブの book.pdf から。それより大きい本は book.pdf を置いていないので、元のファイルを選んでもらう
+  const shelfDrive = $('#shelf-drive'), shelfDl = $('#shelf-dl');
+  let dlSeq = 0;
+  async function showDriveBooks() {
+    const my = ++dlSeq;
+    if (!driveReady()) { shelfDrive.hidden = true; return; }
+    let list;
+    try { list = await driveOnly(); } catch (e) { list = []; if (e.drive) needLogin(); }
+    if (my !== dlSeq || !shelf.open) return;
+    shelfDrive.hidden = !list.length;
+    shelfDl.replaceChildren(...list.map((d) => {
+      const li = document.createElement('li'), t = document.createElement('span'), j = d.json;
+      t.className = 'nm'; t.textContent = j.title + (j.pdf ? `（PDF${d.pdf ? '・' + mb({ size: d.pdf }) : ''}）` : '');
+      li.append(t);
+      if (!j.pdf || d.pdf) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'back'; b.textContent = '戻す';
+        b.onclick = () => restoreFrom(d, b);
+        li.append(b);
+      } else {
+        const l = document.createElement('label'), inp = document.createElement('input');
+        l.className = 'back'; l.textContent = 'ファイルを選ぶ'; l.title = '大きい PDF はドライブに置いていないので、元のファイルを選んでください';
+        inp.type = 'file'; inp.accept = '.pdf,application/pdf'; inp.hidden = true;
+        inp.onchange = () => { const f = inp.files[0]; inp.value = ''; if (f) restoreFrom(d, l, f); };
+        l.append(inp); li.append(l);
+      }
+      return li;
+    }));
+  }
+  async function restoreFrom(d, btn, file) {
+    if (btn.classList.contains('busy')) return;
+    const was = btn.firstChild.textContent;
+    btn.classList.add('busy'); btn.firstChild.textContent = '戻しています…';
+    try {
+      const r = file ? await importPdf(file, d) : await restoreBook(d);
+      shelf.close();
+      await switchBook(r.id);
+      stat.textContent = `「${r.title}」をドライブから戻しました`;
+    } catch (e) {
+      btn.firstChild.textContent = was; shelfMsg.textContent = '戻せませんでした: ' + (e.message || '');
+      if (e.drive) needLogin();
+    } finally { btn.classList.remove('busy'); }
+  }
+  shelf.addEventListener('close', () => { bkMenu.hidden = true; dlSeq++; shelfDrive.hidden = true; shelfDl.replaceChildren(); for (const u of coverUrls) URL.revokeObjectURL(u); coverUrls = []; shelfList.replaceChildren(); });
   // ファイルから開いた本を、この iPad から消す（ドライブに送った分はドライブに残る）
   bkDel.onclick = async () => {
     if (!bkDel.classList.contains('arm')) { bkDel.classList.add('arm'); bkDel.textContent = 'もう一度押すと削除'; return; }
