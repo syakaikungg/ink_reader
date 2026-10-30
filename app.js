@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v67';
+  const APP_VERSION = 'ink-reader-v68';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1308,6 +1308,29 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   addEventListener('resize', () => { if (zoomMode === 'fit') setScale(fitScale(), 'fit'); });
   new ResizeObserver(layout).observe(doc);
 
+  // ---------- 外を触ったら閉じる ----------
+  // 設定・本・目次などの窓（<dialog>）は、まわりの暗い所を触ると閉じる（「閉じる」を押したのと同じ）。新しい窓も index.html に <dialog> で置けば、何もしなくてもそうなる。
+  // 押したときも離したときも外のときだけ閉じる（窓の中で押して外で離したときは閉じない）。字を打っている間（キーボードが出ている）は、
+  // 1回目はキーボードを閉じるだけ（打ちかけの字を消さない）。窓の中の小さなメニューが開いていれば、1回目はそのメニューを閉じるだけ
+  const outOf = (el, e) => { const r = el.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
+  const TYPING = 'textarea, input:not([type]), input[type=text], input[type=search], input[type=url], input[type=password]';
+  let outDown = null, shutBy = null;
+  document.addEventListener('pointerdown', (e) => {
+    const d = e.target, f = document.activeElement;
+    outDown = d.tagName === 'DIALOG' && d.open && outOf(d, e) ? { e, d, typing: d.contains(f) && f.matches(TYPING) ? f : null } : null;
+  }, true);
+  // click は窓ごとに受ける（iPad の Safari は、document でしか受けていない所を触っても click を出さない）。離したときに閉じると、下の紙やボタンにも click が届くので、click で閉じる
+  for (const d of document.querySelectorAll('dialog')) d.addEventListener('click', (e) => {
+    const o = outDown; outDown = null;
+    if (!o || o.d !== d || e.target !== d || !d.open || !outOf(d, e) || shutBy === o.e) return;
+    if (o.typing) { o.typing.blur(); return; }
+    d.close();
+  });
+  // 小さなメニュー（幅が狭いときの「…」、本やページの「…」）: open() のとき、keep（メニューと、それを開くボタン）の外を触ったら close()
+  function onOutside(keep, open, close) {
+    document.addEventListener('pointerdown', (e) => { if (open() && !e.target.closest(keep)) { close(); shutBy = e; } }, true);
+  }
+
   // ---------- toolbar ----------
   function press(group, btn) { for (const b of group) b.setAttribute('aria-pressed', String(b === btn)); }
   const toolBtns = [$('#t-pen'), $('#t-hl'), $('#t-er'), $('#t-ls')];
@@ -1542,7 +1565,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   const moreBtn = $('#more');
   function showMore(on) { bar.classList.toggle('more', on); moreBtn.setAttribute('aria-expanded', String(on)); }
   moreBtn.onclick = () => showMore(!bar.classList.contains('more'));
-  document.addEventListener('pointerdown', (e) => { if (bar.classList.contains('more') && !e.target.closest('#g-more')) showMore(false); }, true);
+  onOutside('#g-more', () => bar.classList.contains('more'), () => showMore(false));
   $('#zoomv').addEventListener('change', () => showMore(false));
   $('#gear').addEventListener('click', () => showMore(false));
   $('#hint-x').onclick = () => { $('#hint').hidden = true; store.set(PREF + ':hint', '0'); };
@@ -3191,12 +3214,6 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // ---------- 目次・しおり ----------
   // しおりは本ごとに端末へ保存する: [{ c: 章, b: 段落の番号, t: 段落の書き出し }]
   const toc = $('#toc');
-  // 目次の外（暗くなった部分）を触ったら閉じる
-  toc.addEventListener('click', (e) => {
-    if (e.target !== toc) return;
-    const r = toc.getBoundingClientRect();
-    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) toc.close();
-  });
   const loadBm = () => { try { return JSON.parse(store.get(memKey('bm')) || '[]'); } catch { return []; } };
   const blockTitle = (el) => blockMd(el).replace(/^#+ /, '').replace(/\$+/g, '').replace(/\s+/g, ' ').slice(0, 60);
   const bmsEl = $('#bms');
@@ -3397,7 +3414,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!i) { goTo(CH, n); return; }
     scrollBy(0, blocks[n].getBoundingClientRect().top + (sheet(n) - pageH(n) + i * gapUnit(n)) * scale - $('#bar').getBoundingClientRect().bottom - 12);
   });
-  toc.addEventListener('click', (e) => { if (!thMenu.hidden && !e.target.closest('#th-menu, .th-m')) thMenu.hidden = true; });
+  onOutside('#th-menu, .th-m', () => !thMenu.hidden, () => { thMenu.hidden = true; });
   const thKeep = () => { const t = toc.scrollTop; buildPages(); toc.scrollTop = t; };
   $('#th-add').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, true); stat.textContent = `${thAt.n}ページの後ろに白紙を入れました`; thKeep(); };
   // 前に入れる: 1つ前の紙（白紙なら同じページの1つ前、ページなら前のページの最後の白紙）の後ろに入れる。大きさはその前のページと同じ
@@ -3905,7 +3922,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     shelf.close();
     if (id !== src || !CH) switchBook(id);
   });
-  shelf.addEventListener('click', (e) => { if (!bkMenu.hidden && !e.target.closest('#bk-menu, .bk-m')) bkMenu.hidden = true; });
+  onOutside('#bk-menu, .bk-m', () => !bkMenu.hidden, () => { bkMenu.hidden = true; });
   // ドライブにある本（この iPad にない）: ドライブにつないでいるときだけ、表紙の下に並べる。押すと本文と書き込みごと戻る。
   // PDF は 10MB までならドライブの book.pdf から。それより大きい本は book.pdf を置いていないので、元のファイルを選んでもらう
   const shelfDrive = $('#shelf-drive'), shelfDl = $('#shelf-dl');

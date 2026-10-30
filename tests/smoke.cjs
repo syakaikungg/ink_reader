@@ -130,6 +130,7 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('jump hit', await p.textContent('#chap-t'), await p.evaluate(() => { const el = document.querySelector('#doc > .hit'); return el && [el.textContent.slice(0, 12), Math.round(el.getBoundingClientRect().top - document.getElementById('bar').getBoundingClientRect().bottom)]; }));
   await p.click('#chap'); await p.fill('#toc-q', 'ないことば'); await p.waitForTimeout(400); console.log('no hit', await p.textContent('#toc-hits'), 'main hidden', await p.isHidden('#toc-main'));
   await p.fill('#toc-q', ''); await p.waitForTimeout(400); console.log('cleared: main hidden', await p.isHidden('#toc-main'));
+  await p.mouse.click(20, 1100); console.log('outside tap while typing only hides the keyboard', await p.evaluate(() => document.getElementById('toc').open && document.activeElement.id !== 'toc-q'));
   await p.mouse.click(20, 1100); console.log('outside tap closes', !(await p.evaluate(() => document.getElementById('toc').open)));
   await p.click('#chap'); await p.click('#toc-main > h2'); console.log('inside tap keeps', await p.evaluate(() => document.getElementById('toc').open));
   await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
