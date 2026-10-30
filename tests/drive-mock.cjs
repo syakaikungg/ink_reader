@@ -39,8 +39,8 @@ function createDrive() {
   return { files, calls, byPath, add, route, twins };
 }
 // Google のログイン（GIS）のモック: 押すとすぐ tok-ok を返す。window.__fail を立てると、ポップアップを閉じたことにする
-const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
+const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__cid = o.client_id; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
   setTimeout(() => window.__fail ? o.error_callback({ type: 'popup_closed' }) : o.callback({ access_token: 'tok-ok', expires_in: 3600 }), 10); } }) } } };`;
 // ドライブにつないだ状態で始める（ページを開く前に localStorage に入れる値）
-const connected = (cfg = {}) => ({ 'ink:cfg': JSON.stringify({ drive: true, dcid: 'cid-test.apps.googleusercontent.com', ...cfg }), 'ink:dtok': JSON.stringify({ tok: 'tok-ok', exp: Date.now() + 3600e3, who: 'me@example.com' }) });
+const connected = (cfg = {}) => ({ 'ink:cfg': JSON.stringify({ drive: true, ...cfg }), 'ink:dtok': JSON.stringify({ tok: 'tok-ok', exp: Date.now() + 3600e3, who: 'me@example.com' }) });
 module.exports = { createDrive, GIS, FOLDER, connected };
