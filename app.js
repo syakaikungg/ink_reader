@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v69';
+  const APP_VERSION = 'ink-reader-v70';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -301,11 +301,11 @@
     if (st.r) grids.add(b); else grids.delete(b);
     relay(b); showSps();
   }
-  // 段落 b の余白を変える（change）。線の座標で e より下の線は dy ずらし、rm の範囲 [上, 下) の線は消す（どれも戻すで戻る）
-  function changeSpace(b, change, e, dy, rm) {
-    const from = spState(b), del = [], old = [], moved = [];
+  // 段落 b の余白を変える（change）。線の座標で e より下の線は dy ずらし、rm の範囲 [上, 下) の線は消す。also の線も一緒に消す（どれも戻す1回で戻る）
+  function changeSpace(b, change, e, dy, rm, also = []) {
+    const from = spState(b), del = also.slice(), old = [], moved = [];
     for (const x of strokes) {
-      if (x.b !== b) continue;
+      if (x.b !== b || also.includes(x)) continue;
       const y = sy(x);
       if (rm && y >= rm[0] && y < rm[1]) del.push(x);
       else if (dy && y >= e) {
@@ -326,9 +326,11 @@
     if (i < 0) changeSpace(b, () => { delete gaps[b]; }, 0, 0, [p.e0, Infinity]);
     else changeSpace(b, () => { sps[b].splice(i, 1); }, p.e1, p.e0 - p.e1, [p.e0, p.e1]);
   }
-  // 投げ縄で横にまっすぐ線を引いたら、そこに余白を入れる（y は紙の上の位置）。md は近い方の段落の切れ目、PDF はページの途中にも入る
+  // 紙の位置 y に余白を入れる（投げ縄の横線・ペンの横線の長押し・指の長押しのメニューから）。md は近い方の段落の切れ目、PDF はページの途中にも入る。
+  // also の線（引いた横線）も一緒に消す。入れたら spAt に { b, i }（i は sps の番号。md は -1）
   const SP_OK = '余白を入れました（下の端のつまみ：押すとたたむ・長押しして上下に動かすと高さが変わる）', SP_IN = 'ここにはもう余白があります（下の端のつまみを長押しすると広げられます）';
-  function lineSpace(y) {
+  let spAt = null;
+  function lineSpace(y, also = [], h = SP_H) {
     let b = Math.max(1, blockAt(y));
     const el = blocks[b];
     if (!el) return;
@@ -337,7 +339,8 @@
       const ch = el.offsetHeight - padV(b);
       if (v >= ch && gaps[b]) return SP_IN;
       if (v < ch / 2 && b > 1) b--;
-      changeSpace(b, () => { gaps[b] = (gaps[b] || 0) + SP_H; folds.delete(b); }, 0, 0);
+      changeSpace(b, () => { gaps[b] = (gaps[b] || 0) + h; folds.delete(b); }, 0, 0, null, also);
+      spAt = { b, i: -1 };
       return SP_OK;
     }
     const sh = sheet(b);
@@ -345,7 +348,8 @@
     if ((spans[b] || []).some((p) => { const d0 = p.e0 - foldOff(b, p.e0); return v >= d0 && v < d0 + (p.c ? FOLD : p.e1 - p.e0); })) return SP_IN;
     const at = Math.round(v >= sh ? pageH(b) : vToC(b, v)), list = sps[b] || [], i = list.filter((p) => p.at <= at).length;
     const e = at + list.slice(0, i).reduce((a, p) => a + p.h, 0);
-    changeSpace(b, () => { (sps[b] ||= []).splice(i, 0, { at, h: SP_H, c: false }); }, e, SP_H);
+    changeSpace(b, () => { (sps[b] ||= []).splice(i, 0, { at, h, c: false }); }, e, h, null, also);
+    spAt = { b, i };
     return SP_OK;
   }
   // 余白のたたむ・開く（戻すには入れない）
@@ -388,8 +392,10 @@
       const k = document.createElement('button'); k.type = 'button'; k.dataset.b = r.b; k.dataset.i = r.i;
       if (r.c) {
         k.className = 'sph fold'; k.style.top = r.y0 + 'px';
-        const t = document.createElement('span'); t.textContent = `余白${r.n ? ` ${r.n}画` : ''} ▾`; k.append(t);
-        k.setAttribute('aria-label', '余白を開く');
+        // 開いた余白の下の端のつまみと同じ形の札に、広げる印（上下に開く矢印）と中の線の数
+        const t = document.createElement('span'); t.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9.5l5-5 5 5M7 14.5l5 5 5-5"/></svg>';
+        if (r.n) t.append(`${r.n}画`);
+        k.append(t); k.setAttribute('aria-label', `たたんだ余白を開く${r.n ? `（中に${r.n}画）` : ''}`);
         els.push(k); continue;
       }
       const box = document.createElement('div'); box.className = 'sp'; box.style.cssText = `top:${r.y0}px;height:${r.h}px`;
@@ -436,6 +442,7 @@
     if (s.i < 0) gaps[s.b] = s.h0; else sps[s.b][s.i].h = s.h0;
     live = null; relay(s.b);
     const h = s.h ?? s.h0;
+    if (s.add) { addEnd(s, h); return; }
     if (h < 24 && !s.min) { removeSpace(s.b, s.i); stat.textContent = '余白を消しました'; return; }
     if (Math.abs(h - s.h0) < 1) { showSps(); return; }
     const nh = Math.round(h);
@@ -444,6 +451,16 @@
   }
   addEventListener('pointerup', spUp);
   addEventListener('pointercancel', spUp);
+  // ペンの横線の長押しで余白を入れたあと、押さえたまま上下に動かしていたら、離したときに高さを変えて入れ直す
+  // （線を消して余白を入れたのと合わせて、戻す1回で元に戻るようにする）。上まで縮めたら、入れるのをやめて線を戻す
+  function addEnd(s, h) {
+    const { y, line, op } = s.add, add = Math.round(SP_H + h - s.h0);
+    if (Math.abs(h - s.h0) < 1 || undoStack[undoStack.length - 1] !== op) { showSps(); return; }
+    undoStack.pop(); apply(op, true); syncHist();
+    if (add < 24) { stat.textContent = '余白を入れるのをやめました'; return; }
+    lineSpace(y, [line], add);
+    stat.textContent = SP_OK;
+  }
 
   // PDF の白紙: i 枚目（0 はページそのもの）の後ろに白紙を1枚入れる・i 枚目の白紙を消す。
   // 白紙はページの下に同じ間隔で並ぶので、後ろの白紙に書いた線はずらす（線は作り直して、戻すで戻る）
@@ -1328,7 +1345,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   });
   // 小さなメニュー（幅が狭いときの「…」、本やページの「…」）: open() のとき、keep（メニューと、それを開くボタン）の外を触ったら close()
   function onOutside(keep, open, close) {
-    document.addEventListener('pointerdown', (e) => { if (open() && !e.target.closest(keep)) { close(); shutBy = e; } }, true);
+    document.addEventListener('pointerdown', (e) => { if (open() && !e.target.closest(keep)) { close(e); shutBy = e; } }, true);
   }
 
   // ---------- toolbar ----------
@@ -1658,12 +1675,36 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 丸で囲んで長押し: ペンで書いた最後の線が輪なら、その線の上でペンを止めて押さえると、線が消えて中が投げ縄で選ばれる。
   // 選び終わったら（外を押す・解除・削除）ペンに戻る
   let loopCand = null, loopT = 0, loopAt = null, loopBack = null;
+  // 横にまっすぐ引いた線か（幅が紙の 1/3 以上、高さ 30px 以下、始めと終わりが離れている）
+  function flatLine(pts) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const [x, y] of pts) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+    return pts.length > 1 && c - a >= W / 3 && d - b <= 30 && Math.abs(pts[pts.length - 1][0] - pts[0][0]) >= (c - a) * .6;
+  }
   function isLoop(s) {
     if (s.tool !== 'pen' || s.g || s.pts.length < 10) return false;
     let len = 0, a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
     s.pts.forEach((q, i) => { if (i) len += Math.hypot(q[0] - s.pts[i - 1][0], q[1] - s.pts[i - 1][1]); a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[0]); d = Math.max(d, q[1]); });
     const A = s.pts[0], B = s.pts[s.pts.length - 1];
     return Math.min(c - a, d - b) > 30 && Math.hypot(B[0] - A[0], B[1] - A[1]) < len * .2;
+  }
+  // 横線を引いて長押し: ペンで書いた最後の線が横にまっすぐな線なら、その線の上でペンを止めて押さえると、線が消えてそこに余白が入る。
+  // 押さえたまま上下に動かすと余白の高さが変わる（上まで縮めるとやめる）。下線の上でペンを休めただけで入らないよう、輪より少し長く押さえる
+  const LINE_HOLD = 600;
+  const isHLine = (s) => s.tool === 'pen' && flatLine(s.pts);
+  function lineToSpace() {
+    loopT = 0;
+    const s = loopCand; loopCand = null;
+    if (!cur || !s || !strokes.includes(s)) return;
+    cur.el.remove(); cur = null; pending = []; predicted = []; clearTimeout(holdT);
+    const y = s.pts.reduce((a, q) => a + q[1], 0) / s.pts.length + top(s), m = lineSpace(y, [s]);
+    stat.textContent = m || '';
+    if (m !== SP_OK) return;
+    // そのまま余白の下の端のつまみを長押ししたのと同じにする（離すまで、上下の動きで高さが変わる）
+    const { b, i } = spAt, p = spans[b].find((x) => x.i === i), h0 = p.e1 - p.e0;
+    spd = { b, i, id: curId, y: loopAt[2], p, h0, min: h0 - SP_H, on: true, add: { y, line: s, op: undoStack[undoStack.length - 1] } };
+    liveSpace(h0);
+    stat.textContent = '余白を入れました（ペンを離さずに上下に動かすと高さが変わります）';
   }
   function onLoop(x, y) {
     const s = loopCand;
@@ -1681,7 +1722,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     toolBtns[3].click(); loopBack = 'pen';
     lasso = poly; finishLasso();
     // そのままペンを動かすと、選んだ線を動かせる
-    if (sel.length) grab('move', -1, ...loopAt);
+    if (sel.length) grab('move', -1, loopAt[0], loopAt[1]);
   }
   let cur = null, curId = null, curType = '', curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
   let t0 = 0, samples = 0, frames = 0;
@@ -1953,14 +1994,11 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   $('#sel-ungap').onclick = () => { const r = spaceIn(sel.length ? selBox() : lassoBox); clearSel(); if (r) removeSpace(r.b, r.i); stat.textContent = '余白を消しました'; };
   // 囲んだ範囲にかかる余白（いちばん下のもの）
   const spaceIn = (box) => spaceRects().filter((r) => box[3] > r.y0 && box[1] < r.y0 + r.h).pop();
-  // 横にまっすぐ引いた線（幅が紙の 1/3 以上、高さ 30px 以下、始めと終わりが離れている）なら、そこに余白を入れる
+  // 投げ縄で横にまっすぐ引いた線なら、そこに余白を入れる
   function lineGesture(poly) {
-    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity, sum = 0;
-    for (const [x, y] of poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); sum += y; }
-    const [x0] = poly[0], [x1] = poly[poly.length - 1];
-    if (c - a < W / 3 || d - b > 30 || Math.abs(x1 - x0) < (c - a) * .6) return false;
+    if (!flatLine(poly)) return false;
     clearSel();
-    stat.textContent = lineSpace(sum / poly.length) ?? '';
+    stat.textContent = lineSpace(poly.reduce((a, q) => a + q[1], 0) / poly.length) ?? '';
     return true;
   }
   // 選んだ線を動かし始める（k: move・size・turn、i: つまみ）
@@ -2807,6 +2845,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
 
   page.addEventListener('pointerdown', (e) => {
     if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans, .sph, .spg')) return;   // 「Q」と答え・余白のつまみ・方眼の切り替えの上には書かない
+    if (e === pmBy) return;   // 長押しのメニューを閉じるためにペンで触ったときは書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
@@ -2828,7 +2867,10 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     hold = null; holdC = null; holdT = 0;
     mount(cur); render(cur, null, false);
     clearTimeout(loopT); loopT = 0;
-    if (tool === 'pen' && loopCand) { loopAt = toPage(e); if (onLoop(...loopAt)) loopT = setTimeout(loopToLasso, 450); }
+    if (tool === 'pen' && loopCand) {
+      loopAt = toPage(e); loopAt[2] = e.clientY;
+      if (onLoop(loopAt[0], loopAt[1])) loopT = isLoop(loopCand) ? setTimeout(loopToLasso, 450) : setTimeout(lineToSpace, LINE_HOLD);
+    }
   });
   let seen = [];   // 最近受け取った点の位置（重なって届いた点を捨てるため）
   page.addEventListener('pointermove', (e) => {
@@ -2929,7 +2971,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const tag = cur.pen ? 'Pencil入力' : '入力';
     if (dt > .25 && !cur.shape) stat.textContent = `${tag} ${Math.round(samples / dt)}Hz・描画 ${Math.round(frames / dt)}fps`;
     const shaped = cur.shape; delete cur.shape; delete cur.live;
-    loopCand = isLoop(cur) ? cur : null;
+    loopCand = isLoop(cur) || isHLine(cur) ? cur : null;
     if (shaped) setEdit(cur);
     cur = null;
   }
@@ -3623,16 +3665,50 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   $('#toc-q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(() => showHits($('#toc-q').value), 200); };
   $('#toc-q').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchT); showHits($('#toc-q').value); $('#toc-q').blur(); } };
 
-  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる。画像を指でたたくと選ぶ。投げ縄の選択は、枠の外を指でたたくと外れる（「指で書く」がオフのとき）
+  // 紙を指で長押しすると、その場所のメニュー（しおり・ここに余白・方眼・白紙）が出る。しおりの印を指でタップしても外れる。画像を指でたたくと選ぶ。
+  // 投げ縄の選択は、枠の外を指でたたくと外れる（「指で書く」がオフのとき）
+  const pm = $('#pmenu');
+  let pmAt = null, pmBy = null;   // メニューを出した所 { b, y（紙の上）, r（余白）, k（PDF の白紙の番号。ページは 0） } / メニューを閉じたタッチ
+  function openPm(cx, cy) {
+    const r0 = page.getBoundingClientRect(), y = (cy - r0.top) / scale, b = blockAt(y), el = blocks[b];
+    if (!el || !CH) return;
+    const r = spaceRects().find((q) => y >= q.y0 && y < q.y0 + q.h), v = y - tops[b];
+    const k = isPdf() && v >= sheet(b) ? Math.min(Math.round((gaps[b] || 0) / gapUnit(b)), Math.floor((v - sheet(b)) / gapUnit(b)) + 1) : 0;
+    pmAt = { b, y, r, k };
+    $('#pm-bm').textContent = el.classList.contains('bm') ? 'しおりを外す' : 'しおりを付ける';
+    $('#pm-gap').hidden = !!(r || k);
+    $('#pm-grid').hidden = !(r || k); $('#pm-grid').textContent = grids.has(b) ? '無地に戻す' : '方眼にする';
+    $('#pm-blank').hidden = !isPdf();
+    $('#pm-del').hidden = !(r || k); $('#pm-del').textContent = k ? 'この白紙を消す' : 'この余白を消す';
+    pm.hidden = false;
+    // 指で隠れないよう押した所の上に出す。ツールバーにかかるなら下に
+    const w = pm.offsetWidth, h = pm.offsetHeight, bar0 = bar.getBoundingClientRect().bottom + 4;
+    pm.style.left = Math.max(8, Math.min(innerWidth - w - 8, cx - w / 2)) + 'px';
+    pm.style.top = (cy - h - 28 >= bar0 ? cy - h - 28 : Math.min(innerHeight - h - 8, cy + 28)) + 'px';
+  }
+  const closePm = () => { pm.hidden = true; pmAt = null; };
+  onOutside('#pmenu', () => !pm.hidden, (e) => { closePm(); pmBy = e; });
+  addEventListener('scroll', () => { if (!pm.hidden) closePm(); }, { passive: true });
+  const pmDo = (f) => () => { const a = pmAt; closePm(); if (a && blocks[a.b]) f(a); };
+  $('#pm-bm').onclick = pmDo((a) => toggleBm(a.b));
+  $('#pm-gap').onclick = pmDo((a) => { stat.textContent = lineSpace(a.y) ?? ''; });
+  $('#pm-grid').onclick = pmDo((a) => toggleGrid(a.b));
+  $('#pm-blank').onclick = pmDo((a) => { blankOp(a.b, a.k, true); stat.textContent = `${a.b}ページの後ろに白紙を入れました`; });
+  $('#pm-del').onclick = pmDo((a) => {
+    if (a.k) { blankOp(a.b, a.k, false); stat.textContent = '白紙を消しました'; }
+    else if (a.r) { removeSpace(a.r.b, a.r.i); stat.textContent = '余白を消しました（戻すで戻せます）'; }
+  });
   let lp = null;
   const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
   page.addEventListener('touchstart', (e) => {
     lpStop();
     const t = e.touches[0];
+    // メニューを閉じるために触ったときは、ほかに何もしない
+    if (!pm.hidden || (pmBy && e.timeStamp - pmBy.timeStamp < 300)) return;
     if (finger || e.touches.length !== 1 || (t.touchType === 'stylus' && !reading) || palms.has(t.identifier) || e.target.closest('.sph')) return;
     const x = t.clientX, y = t.clientY, ui = !!e.target.closest('.qm, .ans, .mk, a, button');
-    if (onSel(x, y)) { lp = { x, y, t: 0, ui, in: true }; return; }   // 選んだ枠の中は、動かすのに使う（長押しでしおりにしない）
-    lp = { x, y, ui, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
+    if (onSel(x, y)) { lp = { x, y, t: 0, ui, in: true }; return; }   // 選んだ枠の中は、動かすのに使う（長押しでメニューを出さない）
+    lp = { x, y, ui, t: ui ? 0 : setTimeout(() => { lp = null; openPm(x, y); }, 550) };   // 「Q」・答え（字を選べる）・リンクの上では出さない
   }, { passive: true });
   page.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (lp && Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 8) lpStop(); }, { passive: true });
   page.addEventListener('touchend', () => {
