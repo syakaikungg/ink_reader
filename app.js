@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v66';
+  const APP_VERSION = 'ink-reader-v67';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -13,7 +13,7 @@
   let CH = null;   // 開いている章の id
 
   // ---------- state ----------
-  let tool = 'pen', color = 'k', size = 3.4, finger = false;
+  let tool = 'pen', color = 'k', size = 3.4, finger = false, reading = false;
   let scale = 1, zoomMode = 'fit';
   // 線は段落（#docの子要素）ごとに結びつけ、座標はその段落の上端からの相対値で持つ
   // {id,b,tool,c,s,pen,pts:[[x,yRel,p]],bbox,el}
@@ -201,7 +201,7 @@
   // 今の章の書き込みを段落ごとの形にする（GitHub の ink/<章>.json と同じ形）
   function serialize() {
     const out = {};
-    for (const s of strokes.concat([...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds])].map((b) => ({ b: +b })))) {
+    for (const s of strokes.concat([...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds, ...grids])].map((b) => ({ b: +b })))) {
       // PDF は b がページ番号。ページの大きさ（pt）も残し、座標（幅 680 の紙の px）を PDF の座標に直せるようにする
       const blk = out[s.b] ||= isPdf() ? { b: s.b, pt: book.sizes[s.b - 1], strokes: {} }
         : { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
@@ -210,6 +210,7 @@
       if (gaps[s.b]) blk.gap = gaps[s.b];
       if (folds.has(s.b)) blk.fold = 1;
       if (sps[s.b]) blk.sp = sps[s.b].map((p) => [p.at, p.h, p.c ? 1 : 0]);
+      if (grids.has(s.b)) blk.gr = 1;
     }
     return out;
   }
@@ -217,14 +218,15 @@
     clearSel();
     for (const s of strokes) s.el.remove();
     strokes = [];
-    const was = [...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds])];
-    gaps = {}; sps = {}; folds = new Set();
+    const was = [...new Set([...Object.keys(gaps), ...Object.keys(sps), ...folds, ...grids])];
+    gaps = {}; sps = {}; folds = new Set(); grids = new Set();
     for (const b of was) relay(+b);
     for (const b in data) {
       const d = data[b];
       if (d.gap) gaps[b] = d.gap;
       if (d.fold && d.gap) folds.add(+b);
       if (d.sp && d.sp.length) sps[b] = d.sp.map(([at, h, c]) => ({ at, h, c: !!c }));
+      if (d.gr) grids.add(+b);
       if (d.gap || d.sp) relay(+b);
       for (const id in d.pics || {}) { const s = dePic(id, +b, d.pics[id]); mount(s); strokes.push(s); }
       for (const id in d.strokes || {}) { const s = de(id, +b, d.strokes[id]); mount(s); strokes.push(s); }
@@ -237,8 +239,10 @@
   // 余白に書いた線はその段落に、段落の上端からの座標で結びつく。足した高さは書き込みの JSON の段落ごとの値（紙の px）に入れ、元の md・PDF は変えない。
   // - gap: 段落の下に足した高さ。md は段落の下の余白（fold: たたんでいる）、PDF は直前のページと同じ大きさの白紙（ページの間と同じ隙間を空けて並べる）
   // - sp: PDF のページの途中に入れた余白 [[at（元のページの上端からの位置）, 高さ, たたんでいるか], …]（上から順）。ページの絵は余白のところで切って並べる
+  // - gr: その段落（ページ）に足した余白・白紙を方眼にする（余白・白紙の右上の「方眼」で切り替える。5mm ほどの目）
   // 線の座標は、余白をすべて開いたときの位置で持つ。たたんだ余白の中の線は隠し、下の線は見た目だけ上にずらす（top）
   let gaps = {}, sps = {}, folds = new Set();
+  let grids = new Set();   // 足した余白・白紙を方眼にした段落（ページ）。書き込み JSON の gr
   let spans = {};   // 段落番号 -> 余白の範囲 [{ i（sps の番号。md は -1）, e0, e1（線の座標での上端・下端）, c（たたんでいる） }]
   let live = null;  // 余白の高さを変えている間: { b, e, d }（e より下の線を見た目だけ d ずらす）
   const GAP_MD = 320, PAGE_GAP = 14, FOLD = 28, SP_H = 200;
@@ -273,13 +277,14 @@
     const el = blocks[b];
     if (!gaps[b]) { delete gaps[b]; folds.delete(b); }
     if (sps[b] && !sps[b].length) delete sps[b];
+    if (!gaps[b] && !sps[b]) grids.delete(b);
     if (el && !isPdf()) el.style.paddingBottom = gaps[b] ? padV(b) + 'px' : '';
     if (el && isPdf()) {
       const ph = pageH(b), sh = sheet(b), px = gaps[b] || 0, n = Math.round(px / (ph + PAGE_GAP));
       el.style.height = sh + px + 'px'; el.style.setProperty('--ph', sh + 'px');
       for (const x of el.querySelectorAll('.blank')) x.remove();
       for (let i = 1; i <= n; i++) {
-        const d = document.createElement('div'); d.className = 'blank';
+        const d = document.createElement('div'); d.className = grids.has(b) ? 'blank grid' : 'blank';
         d.style.cssText = `top:${sh - ph + i * (ph + PAGE_GAP)}px;height:${ph}px`;
         el.append(d);
       }
@@ -288,11 +293,12 @@
     respan(b);
     for (const s of strokes) if (s.b === b) place(s);
   }
-  const spState = (b) => ({ g: gaps[b] || 0, f: folds.has(b), sp: sps[b] ? sps[b].map((p) => ({ ...p })) : null });
+  const spState = (b) => ({ g: gaps[b] || 0, f: folds.has(b), sp: sps[b] ? sps[b].map((p) => ({ ...p })) : null, r: grids.has(b) });
   function setState(b, st) {
     if (st.g) gaps[b] = st.g; else delete gaps[b];
     if (st.f) folds.add(b); else folds.delete(b);
     if (st.sp) sps[b] = st.sp.map((p) => ({ ...p })); else delete sps[b];
+    if (st.r) grids.add(b); else grids.delete(b);
     relay(b); showSps();
   }
   // 段落 b の余白を変える（change）。線の座標で e より下の線は dy ずらし、rm の範囲 [上, 下) の線は消す（どれも戻すで戻る）
@@ -348,6 +354,12 @@
     else sps[b][i].c = !sps[b][i].c;
     relay(b); showSps(); touch([{ b }]);
   }
+  // 方眼にする・無地に戻す（たたむのと同じく、戻すには入れない）
+  function toggleGrid(b) {
+    if (grids.has(b)) grids.delete(b); else grids.add(b);
+    relay(b); showSps(); touch([{ b }]);
+    stat.textContent = grids.has(b) ? '方眼にしました' : '無地に戻しました';
+  }
   // 余白の見た目の範囲（紙の上）: [{ b, i, y0, h, c, n（中の線の数） }]
   function spaceRects() {
     const out = [];
@@ -358,9 +370,20 @@
     return out;
   }
   // 余白の印: 開いた余白は点線で囲み、下の端につまみを出す（押すとたたむ・長押しして上下に動かすと高さが変わる）。たたんだ余白は細い帯（押すと開く）
-  const spLayer = $('#sps');
+  const spLayer = $('#sps'), grLayer = $('#grs');
+  // 方眼の切り替え（余白・白紙の右上）
+  function gridChip(b, y) {
+    const g = document.createElement('button'); g.type = 'button'; g.className = 'spg'; g.dataset.b = b; g.textContent = '方眼';
+    g.style.top = y + 6 + 'px'; g.setAttribute('aria-pressed', String(grids.has(b))); g.setAttribute('aria-label', grids.has(b) ? '無地に戻す' : '方眼にする');
+    return g;
+  }
   function showSps() {
-    const els = [];
+    const els = [], grs = [];
+    // PDF の白紙（方眼はその白紙の背景）
+    if (isPdf()) for (const b in gaps) {
+      const ph = pageH(+b), n = Math.round(gaps[b] / (ph + PAGE_GAP));
+      for (let i = 1; i <= n; i++) els.push(gridChip(+b, tops[+b] + sheet(+b) + PAGE_GAP + (i - 1) * (ph + PAGE_GAP)));
+    }
     for (const r of spaceRects()) {
       const k = document.createElement('button'); k.type = 'button'; k.dataset.b = r.b; k.dataset.i = r.i;
       if (r.c) {
@@ -372,9 +395,12 @@
       const box = document.createElement('div'); box.className = 'sp'; box.style.cssText = `top:${r.y0}px;height:${r.h}px`;
       k.className = 'sph'; k.style.top = r.y0 + r.h + 'px'; k.setAttribute('aria-label', '余白をたたむ（長押しして上下に動かすと高さが変わる）');
       els.push(box, k);
+      if (r.h >= 60) els.push(gridChip(r.b, r.y0));
+      if (grids.has(r.b)) { const g = document.createElement('div'); g.style.cssText = `top:${r.y0}px;height:${r.h}px`; grs.push(g); }
     }
-    spLayer.replaceChildren(...els);
+    spLayer.replaceChildren(...els); grLayer.replaceChildren(...grs);
   }
+  spLayer.addEventListener('click', (e) => { const g = e.target.closest('.spg'); if (g) toggleGrid(+g.dataset.b); });
   let spd = null;   // 余白のつまみを押している: { b, i, id, y, p（範囲）, h0, min, h, on（高さを変えている）, t }
   spLayer.addEventListener('pointerdown', (e) => {
     const k = e.target.closest('.sph');
@@ -1286,17 +1312,21 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function press(group, btn) { for (const b of group) b.setAttribute('aria-pressed', String(b === btn)); }
   const toolBtns = [$('#t-pen'), $('#t-hl'), $('#t-er'), $('#t-ls')];
   toolBtns.forEach((b) => b.onclick = () => {
-    const again = (b.id === 't-pen' && tool === 'pen') || (b.id === 't-er' && tool === 'er');
+    // 選んでいるペン・消しゴム・投げ縄をもう一度押すと、札を出す・しまう（読むだけのときは、押すと書けるように戻るだけ）
+    const again = !reading && ((b.id === 't-pen' && tool === 'pen') || (b.id === 't-er' && tool === 'er') || (b.id === 't-ls' && tool === 'ls'));
     loopBack = null;
+    if (reading) setReading(false);
     tool = { 't-pen': 'pen', 't-hl': 'hl', 't-er': 'er', 't-ls': 'ls' }[b.id]; press(toolBtns, b); setEdit(null);
     page.classList.toggle('erasing', tool === 'er');
     page.classList.toggle('lassoing', tool === 'ls');
     if (tool !== 'ls') clearSel();
-    if (again && popFor !== b) openPop(b, tool === 'pen' ? 'p' : 'e'); else closePop();
+    closePop();
+    if (again) { rail.on = railEl.hidden; saveRail(); }
+    showRail();
   });
   // 戻す・進むの札は、ツールバーのすぐ下に置く（ツールバーは画面の幅で折り返して高さが変わる）
   const bar = $('#bar');
-  new ResizeObserver(() => document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar);
+  new ResizeObserver(() => { document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px'); placeRail(); }).observe(bar);
   // ペンの色と太さ: 選んでいる「ペン」をもう一度押すと小窓が出る。太さは3つから選び、つまみで選んでいる太さを変える（端末に覚える）。
   // 投げ縄で選んだ線は、メニューの「色・太さ」から同じ小窓で変える
   const PALETTE = ['k', 'r', 'b', '#1f8a4c', '#e07b00', '#7b3fc4', '#8a5a2b', '#0f8b8d', '#d6338a', '#6b7280', '#c9a100', '#0b2f6b'];
@@ -1309,7 +1339,15 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   color = (Array.isArray(pens.c) ? pens.c[pens.ci] : pens.c) || 'k';   // 前の版はツールバーに色を3つ持っていた
   size = widths[si];
   let byPr = !!pens.pr;   // 筆圧のペン（小窓の一番上の「一定｜筆圧」）
-  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si, pr: byPr ? 1 : 0 }));
+  // 札に出すよく使う色 4 つ。4 つにない色を選ぶと、一番長く使っていない色の場所に入る（ほかの色の場所は動かさない）
+  const fav = Array.isArray(pens.fav) && pens.fav.length === 4 ? pens.fav : ['k', 'r', 'b', '#1f8a4c'];
+  const favT = Array.isArray(pens.ft) && pens.ft.length === 4 ? pens.ft : [0, 0, 0, 0];
+  function useColor(c) {
+    let i = fav.indexOf(c);
+    if (i < 0) { i = favT.indexOf(Math.min(...favT)); fav[i] = c; }
+    favT[i] = Date.now();
+  }
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si, pr: byPr ? 1 : 0, fav, ft: favT }));
   const kindBtns = [...document.querySelectorAll('#pop-kind button')];
   // 投げ縄で選んだ線の「色・太さ」では出さない（ペンの種類は書くときに決める）
   function showKind() {
@@ -1356,33 +1394,124 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     popRange.value = now.s ?? size;
   }
   function pickColor(c) {
-    if (popFor === selPen) restyle({ c }); else { color = c; showPen(); savePens(); }
+    if (popFor === selPen) restyle({ c }); else { color = c; useColor(c); showPen(); savePens(); showRail(); }
     showColors(); showSizes();
   }
   sizeBtns.forEach((b, i) => b.onclick = () => {
-    if (popFor === selPen) restyle({ s: widths[i] }); else { si = i; size = widths[i]; showPen(); savePens(); }
+    if (popFor === selPen) restyle({ s: widths[i] }); else { si = i; size = widths[i]; showPen(); savePens(); showRail(); }
     showSizes();
   });
-  popRange.oninput = () => { if (popFor !== selPen) { widths[si] = size = +popRange.value; showPen(); showSizes(); } };
+  popRange.oninput = () => { if (popFor !== selPen) { widths[si] = size = +popRange.value; showPen(); showSizes(); showRail(); } };
   popRange.onchange = () => { if (popFor === selPen) { restyle({ s: +popRange.value }); showSizes(); } else savePens(); };
   selPen.onclick = () => { if (popFor === selPen) closePop(); else openPop(selPen, 'p'); };
-  function closePop() { pop.hidden = true; popFor = null; }
+  function closePop() { if (popFor) popFor.removeAttribute('aria-expanded'); pop.hidden = true; popFor = null; }
   function openPop(btn, kind) {
+    if (popFor) popFor.removeAttribute('aria-expanded');
     popFor = btn;
     popPen.hidden = kind !== 'p'; popEr.hidden = kind !== 'e';
     if (kind === 'e') { for (const x of popEr.querySelectorAll('[data-m]')) x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)); erRange.value = eraser.r; ringSize(eraser.r); armClear(false); }
     else { showKind(); showColors(); showSizes(); }
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    if (btn.closest('#rail')) {
+      // 札の「…」: 札の横（左の端なら右、右の端なら左）に、ボタンの高さに合わせて出す
+      btn.setAttribute('aria-expanded', 'true');
+      const rr = railEl.getBoundingClientRect();
+      pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, rail.side === 'r' ? rr.left - 8 - w : rr.right + 8)) + 'px';
+      pop.style.top = Math.max(8, Math.min(innerHeight - h - 8, r.bottom - h)) + 'px';
+      return;
+    }
     pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
     pop.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - 6 - h) : r.bottom + 6) + 'px';
   }
   const ringSize = (r) => { const el = popEr.querySelector('.ring'); el.style.width = el.style.height = r * 2 + 'px'; };
   const saveEraser = () => store.set(PREF + ':eraser', JSON.stringify(eraser));
-  for (const x of popEr.querySelectorAll('[data-m]')) x.onclick = () => { eraser.m = x.dataset.m; saveEraser(); closePop(); };
-  erRange.oninput = () => { eraser.r = +erRange.value; ringSize(eraser.r); };
+  for (const x of popEr.querySelectorAll('[data-m]')) x.onclick = () => { eraser.m = x.dataset.m; saveEraser(); closePop(); showRail(); };
+  erRange.oninput = () => { eraser.r = eraser.rs[eraser.ri] = +erRange.value; ringSize(eraser.r); showRail(); };
   erRange.onchange = saveEraser;
   document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target.closest('button') !== popFor) closePop(); }, true);
+  // ---------- 色・太さの札 ----------
+  // 選んでいるペン（消しゴム・投げ縄）をもう一度押すと、戻す・進むの札の下に縦の札が出る（もう一度押すとしまう）。書いている間も出たまま。
+  // ペン: よく使う色 4 つ・太さ 3 つ・「…」（小窓）。消しゴム: 消し方・大きさ 3 つ・「…」（つまみ・全部消す）。投げ縄: 自由に囲む・四角で囲む。
+  // マーカー・読むだけのときは出さない。
+  // 長押しして引っぱると左右の端に移せ、端に沿った上下の位置も変えられる。出したか・置いた場所は端末に覚える（はじめは、広い画面なら出す）
+  const railEl = $('#rail'), railPen = $('#rail-pen'), railEr = $('#rail-er'), railLs = $('#rail-ls');
+  const rail = (() => { try { return { side: 'l', y: null, ...JSON.parse(store.get(PREF + ':rail')) }; } catch { return { side: 'l', y: null }; } })();
+  if (rail.on === undefined) rail.on = innerWidth > 760;
+  const saveRail = () => store.set(PREF + ':rail', JSON.stringify(rail));
+  const railColors = railPen.querySelector('.rc'), railWs = [...railPen.querySelectorAll('.rw button')];
+  const railModes = [...railEr.querySelectorAll('.re button')], railRs = [...railEr.querySelectorAll('.rs button')], railLk = [...railLs.querySelectorAll('.rl button')];
+  const ringD = (r) => Math.round(Math.min(26, 4 + r * 1.15)) + 'px';
+  function showRail() {
+    const kind = reading || !rail.on ? null : { pen: 'p', er: 'e', ls: 'l' }[tool];
+    if (!kind) { if (popFor && popFor.closest('#rail')) closePop(); railEl.hidden = true; return; }
+    railPen.hidden = kind !== 'p'; railEr.hidden = kind !== 'e'; railLs.hidden = kind !== 'l';
+    railEl.setAttribute('aria-label', { p: 'ペンの色・太さ', e: '消しゴムの消し方・大きさ', l: '投げ縄の囲み方' }[kind]);
+    if (kind === 'p') {
+      if (railColors.children.length !== 4) railColors.replaceChildren(...fav.map((_, i) => {
+        const x = document.createElement('button'); x.type = 'button'; x.append(document.createElement('span'));
+        x.onclick = () => { color = fav[i]; useColor(color); showPen(); savePens(); showRail(); if (popFor && !pop.hidden && popFor !== selPen) { showColors(); showSizes(); } };
+        return x;
+      }));
+      [...railColors.children].forEach((x, i) => { swatch(x.firstElementChild, fav[i]); x.setAttribute('aria-pressed', String(fav[i] === color)); x.setAttribute('aria-label', '色 ' + (i + 1)); });
+      railWs.forEach((x, i) => { x.setAttribute('aria-pressed', String(i === si)); const ln = x.firstElementChild; ln.style.height = Math.max(2, Math.min(12, widths[i] * 1.4)) + 'px'; });
+    } else if (kind === 'l') {
+      railLk.forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.k === (rail.ls || 'free'))));
+    } else {
+      railModes.forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)));
+      railRs.forEach((x, i) => { x.setAttribute('aria-pressed', String(i === eraser.ri)); x.firstElementChild.style.width = x.firstElementChild.style.height = ringD(eraser.rs[i]); });
+    }
+    railEl.hidden = false;
+    placeRail();
+  }
+  railWs.forEach((x, i) => x.onclick = () => { si = i; size = widths[i]; showPen(); savePens(); showRail(); if (popFor && !pop.hidden && popFor !== selPen) showSizes(); });
+  railModes.forEach((x) => x.onclick = () => { eraser.m = x.dataset.m; saveEraser(); showRail(); });
+  railLk.forEach((x) => x.onclick = () => { rail.ls = x.dataset.k; saveRail(); showRail(); stat.textContent = x.dataset.k === 'rect' ? '四角で囲みます（ななめに引く）' : '自由に囲みます'; });
+  railRs.forEach((x, i) => x.onclick = () => { eraser.ri = i; eraser.r = eraser.rs[i]; saveEraser(); showRail(); if (popFor && !pop.hidden) { erRange.value = eraser.r; ringSize(eraser.r); } });
+  for (const x of railEl.querySelectorAll('.rm')) x.onclick = () => { if (popFor === x) closePop(); else openPop(x, tool === 'er' ? 'e' : 'p'); };
+  // 札の高さ: 左の端は戻す・進むの札の下から、右の端はツールバーの下から。下は右下のページ番号・左下の戻る札にかからない所まで
+  function placeRail() {
+    if (railEl.hidden) return;
+    railEl.classList.toggle('r', rail.side === 'r');
+    const hist = $('#hist').getBoundingClientRect();
+    const min = rail.side === 'r' || !hist.height ? bar.getBoundingClientRect().bottom + 10 : hist.bottom + 8;
+    const max = Math.max(min, innerHeight - railEl.offsetHeight - 60);
+    railEl.style.top = Math.round(Math.max(min, Math.min(max, rail.y ?? min))) + 'px';
+  }
+  addEventListener('resize', placeRail);
+  let rd = null, railMoved = false;
+  railEl.addEventListener('pointerdown', (e) => {
+    if (rd) return;
+    railMoved = false;
+    const r = railEl.getBoundingClientRect();
+    rd = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, on: false };
+    rd.t = setTimeout(() => {
+      if (!rd) return;
+      rd.on = true; railEl.classList.add('moving'); closePop();
+      try { railEl.setPointerCapture(rd.id); } catch {}
+      stat.textContent = '左右の端へ動かせます';
+    }, 400);
+  });
+  addEventListener('pointermove', (e) => {
+    if (!rd || e.pointerId !== rd.id) return;
+    if (!rd.on) { if (Math.hypot(e.clientX - rd.x, e.clientY - rd.y) > 10) { clearTimeout(rd.t); rd = null; } return; }
+    railEl.style.left = e.clientX - rd.dx + 'px'; railEl.style.right = 'auto'; railEl.style.top = e.clientY - rd.dy + 'px';
+  });
+  function railUp(e) {
+    if (!rd || e.pointerId !== rd.id) return;
+    const d = rd; rd = null; clearTimeout(d.t);
+    if (!d.on) return;
+    railMoved = true;
+    rail.side = e.clientX < innerWidth / 2 ? 'l' : 'r'; rail.y = e.clientY - d.dy; saveRail();
+    railEl.classList.remove('moving'); railEl.style.left = railEl.style.right = '';
+    placeRail();
+    stat.textContent = rail.side === 'r' ? '札を右の端に置きました' : '札を左の端に置きました';
+  }
+  addEventListener('pointerup', railUp);
+  addEventListener('pointercancel', railUp);
+  // 動かし終えたときのタップは、札のボタンに渡さない
+  railEl.addEventListener('click', (e) => { if (railMoved) { railMoved = false; e.stopPropagation(); e.preventDefault(); } }, true);
+
   // 全部消す（消しゴムの小窓の中。押し間違えないよう、もう一度押したときだけ消す。戻すで戻せる）
   const clearBtn = $('#clear');
   let armT = 0;
@@ -1399,7 +1528,16 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const list = strokes.slice(); removeAll(list); push({ type: 'erase', list });
     stat.textContent = `${cnt(list)}を消しました（「戻す」で戻せます）`;
   };
-  $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); bar.classList.toggle('finger', finger); showMore(false); };
+  function setFinger(on) { finger = on; $('#finger').setAttribute('aria-pressed', String(on)); page.classList.toggle('finger', on); bar.classList.toggle('finger', on); }
+  $('#finger').onclick = () => { if (reading) setReading(false); setFinger(!finger); showMore(false); };
+  // 読むだけ: 書き込みをしないで、Apple Pencil でもスクロールできるようにする（ペン・消しゴムなどのツールを押すと書けるように戻る）
+  function setReading(on) {
+    reading = on; $('#readonly').setAttribute('aria-pressed', String(on));
+    page.classList.toggle('reading', on); bar.classList.toggle('reading', on);
+    if (on) { if (finger) setFinger(false); clearSel(); setEdit(null); closePop(); stat.textContent = '読むだけ：Apple Pencil でスクロールできます（ツールを押すと書けるように戻ります）'; }
+    showRail();
+  }
+  $('#readonly').onclick = () => { setReading(!reading); showMore(false); };
   // 幅が狭いとき（Claude と画面を分けたときなど）は、拡大率・指で書く・設定を「…」の中に入れる。選ぶか外を触ると閉じる
   const moreBtn = $('#more');
   function showMore(on) { bar.classList.toggle('more', on); moreBtn.setAttribute('aria-expanded', String(on)); }
@@ -1413,6 +1551,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // ---------- input ----------
   let penDown = false;
   const stylusGuard = (e) => {
+    if (reading) return;   // 読むだけのときは、ペンでもスクロールさせる
     if (penDown) { e.preventDefault(); return; }
     // 投げ縄で選んだ枠の中を指で押したときは、紙を動かさずに選んだものを動かす
     if (e.type === 'touchstart' && e.touches.length === 1 && e.touches[0].touchType !== 'stylus' && !palms.has(e.touches[0].identifier) && onSel(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
@@ -1425,6 +1564,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // ペンより先に小指が触れたとき: 触れてから 1 秒以内に（指をつけたままペンを置くことはあまりないので長めでよい）ペンが来たら、その指も手のひらとみなし、指で動いた分の紙を元に戻す
   const touchAt = new Map();   // 指 → 触れた時刻と、そのときのスクロール位置
   const palmWatch = (e) => {
+    if (reading) return;
     const now = performance.now(), se = document.scrollingElement;
     for (const t of e.changedTouches) {
       if (t.touchType === 'stylus') penAt = now;
@@ -1453,14 +1593,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   wrap.addEventListener('scroll', keepPin, { passive: true });
   for (const ty of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) document.addEventListener(ty, palmWatch, { capture: true, passive: true });
   for (const ty of ['pointerdown', 'pointermove', 'pointerup']) document.addEventListener(ty, (e) => {
-    if (e.pointerType !== 'pen') return;
+    if (e.pointerType !== 'pen' || reading) return;
     penAt = performance.now();
     if (e.type === 'pointerdown') penLands();
   }, { capture: true, passive: true });
   document.addEventListener('touchstart', stylusGuard, { passive: false });
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
-  const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.pointerType === 'touch' && (finger || onSel(e.clientX, e.clientY)));
+  const accepts = (e) => !reading && (e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.pointerType === 'touch' && (finger || onSel(e.clientX, e.clientY))));
   // 画面の位置が、投げ縄で選んだ枠の中かつまみの上か（そこを指で押すと、ペンと同じように動かす・大きさ・向きを変えられる）
   function onSel(cx, cy) {
     if (!sel.length || tool !== 'ls' || finger || curId !== null) return false;
@@ -1508,6 +1648,11 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 消しゴム: 「線ごと」は触れた線を丸ごと消す。「なぞった所だけ」は触れた部分だけ消し、残りを別々の線にする。
   // 丸の大きさ（画面の px の半径）と種類は、消しゴムをもう一度押すと変えられる（端末に覚える）
   const eraser = (() => { try { return { m: 'stroke', r: 9, ...JSON.parse(store.get(PREF + ':eraser')) }; } catch { return { m: 'stroke', r: 9 }; } })();
+  // 大きさは 3 つから選び（札）、小窓のつまみで選んでいる大きさを変える。前の版の大きさは、近い方に入れる
+  if (!Array.isArray(eraser.rs) || eraser.rs.length !== 3 || !(eraser.ri >= 0 && eraser.ri < 3)) {
+    eraser.rs = [5, 9, 16]; eraser.ri = eraser.rs.reduce((a, v, i) => Math.abs(v - eraser.r) < Math.abs(eraser.rs[a] - eraser.r) ? i : a, 0); eraser.rs[eraser.ri] = eraser.r;
+  }
+  showRail();
   const erRing = document.createElementNS(NS, 'circle'); erRing.setAttribute('class', 'er-ring');
   let pieces = null;   // なぞった所だけ消すときに、この操作で作った線
   function eraseAt([x, y]) {
@@ -1825,7 +1970,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       return;
     }
     if (!lasso) return;
-    for (const ev of list) { const [x, y] = toPage(ev); lasso.push([x, y]); }
+    // 四角で囲む: 押した所と今の所を対角にした四角（右回り。横線で余白を入れる操作にはならない）
+    if (rail.ls === 'rect') { const [x0, y0] = lasso[0], [x1, y1] = last; lasso = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]; }
+    else for (const ev of list) { const [x, y] = toPage(ev); lasso.push([x, y]); }
     if (!raf) raf = requestAnimationFrame(() => {
       raf = 0; if (!lasso) return;
       lassoEl.setAttribute('d', 'M' + lasso.map(([x, y]) => `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`).join('L') + 'Z');
@@ -2612,7 +2759,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   const cloneG = (g) => ({ ...g, v: g.v.map((q) => q.slice()) });
 
   page.addEventListener('pointerdown', (e) => {
-    if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans, .sph')) return;   // 「Q」と答え・余白のつまみの上には書かない
+    if (!accepts(e) || curId !== null || pinch || e.target.closest('.qm, .ans, .sph, .spg')) return;   // 「Q」と答え・余白のつまみ・方眼の切り替えの上には書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     page.setPointerCapture(e.pointerId);
@@ -3165,7 +3312,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
 
   // ---------- ページの一覧（PDF） ----------
   // ページと白紙の縮小画像を並べる。画像は一覧で見えているものだけ作り、離れたら捨てる。
-  // 押すとそのページへ。「…」から後ろに白紙を入れる・白紙を消す
+  // 押すとそのページへ。「…」から前・後ろに白紙を入れる・白紙を消す
   const grid = $('#pg-grid'), thMenu = $('#th-menu');
   let thIO = null, thQ = [], thBusy = false, thAt = null;
   function stopThumbs() {
@@ -3214,7 +3361,10 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       cv.width = Math.round(W * k); cv.height = Math.round(ph * k);
       if (!i) { const pg = await pdfDoc.getPage(n); await pg.render({ canvas: cv, viewport: pg.getViewport({ scale: k * W / pg.getViewport({ scale: 1 }).width }) }).promise; }
       const g = cv.getContext('2d'), y0 = i ? spSum(n) + i * gapUnit(n) : 0;
-      if (i) { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
+      if (i) {
+        g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+        if (grids.has(n)) { g.fillStyle = 'rgba(80,110,170,.18)'; for (let x = 0; x < W; x += 16) g.fillRect(x * k, 0, Math.max(1, k * .6), cv.height); for (let y = 0; y < ph; y += 16) g.fillRect(0, y * k, cv.width, Math.max(1, k * .6)); }
+      }
       // 線は元のページ（白紙）の上の位置に直して描く。ページの途中の余白に書いた線は入れない
       const sp = spans[n] || [], up = (s) => i ? 0 : sp.reduce((a, p) => a + (p.e1 <= sy(s) ? p.e1 - p.e0 : 0), 0);
       const list = strokes.filter((s) => s.b === n && (i || !sp.some((p) => sy(s) >= p.e0 && sy(s) < p.e1)) && s.bbox[3] - up(s) > y0 && s.bbox[1] - up(s) < y0 + ph);
@@ -3235,6 +3385,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (e.target.closest('.th-m')) {
       thAt = { n, i };
       $('#th-del').hidden = !i;
+      $('#th-pre').hidden = n === 1 && !i;   // 1ページ目の前には入れられない
       const r = e.target.getBoundingClientRect();
       thMenu.hidden = false;
       thMenu.style.left = Math.max(8, Math.min(innerWidth - thMenu.offsetWidth - 8, r.right - thMenu.offsetWidth)) + 'px';
@@ -3249,6 +3400,13 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   toc.addEventListener('click', (e) => { if (!thMenu.hidden && !e.target.closest('#th-menu, .th-m')) thMenu.hidden = true; });
   const thKeep = () => { const t = toc.scrollTop; buildPages(); toc.scrollTop = t; };
   $('#th-add').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, true); stat.textContent = `${thAt.n}ページの後ろに白紙を入れました`; thKeep(); };
+  // 前に入れる: 1つ前の紙（白紙なら同じページの1つ前、ページなら前のページの最後の白紙）の後ろに入れる。大きさはその前のページと同じ
+  $('#th-pre').onclick = () => {
+    thMenu.hidden = true;
+    const { n, i } = thAt;
+    if (i) blankOp(n, i - 1, true); else blankOp(n - 1, Math.round((gaps[n - 1] || 0) / gapUnit(n - 1)), true);
+    stat.textContent = i ? '白紙の前に白紙を入れました' : `${n}ページの前に白紙を入れました`; thKeep();
+  };
   $('#th-del').onclick = () => { thMenu.hidden = true; blankOp(thAt.n, thAt.i, false); stat.textContent = '白紙を消しました'; thKeep(); };
 
   // ---------- 書き出し（PDF） ----------
@@ -3337,7 +3495,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const b in sps) spl[b] = sps[b].map((p) => ({ ...p }));
     const { bytes, name } = await make({
       L, pdf: await pdfBytes(await kv.get('pdf:' + src)), unlock: () => pdfDoc,
-      sizes: book.sizes, title: book.title, ink, gaps: { ...gaps }, sps: spl, keys, say,
+      sizes: book.sizes, title: book.title, ink, gaps: { ...gaps }, sps: spl, grs: new Set(grids), keys, say,
       pics, pic: async (f) => { const bl = await picBlob(f, bk, dir); return bl && new Uint8Array(await bl.arrayBuffer()); },
       viewT: async (n) => (await pdfDoc.getPage(n)).getViewport({ scale: 1 }).transform,   // 画面で見ていたページの向き・範囲
     });
@@ -3430,7 +3588,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   page.addEventListener('touchstart', (e) => {
     lpStop();
     const t = e.touches[0];
-    if (finger || e.touches.length !== 1 || t.touchType === 'stylus' || palms.has(t.identifier) || e.target.closest('.sph')) return;
+    if (finger || e.touches.length !== 1 || (t.touchType === 'stylus' && !reading) || palms.has(t.identifier) || e.target.closest('.sph')) return;
     const x = t.clientX, y = t.clientY, ui = !!e.target.closest('.qm, .ans, .mk, a, button');
     if (onSel(x, y)) { lp = { x, y, t: 0, ui, in: true }; return; }   // 選んだ枠の中は、動かすのに使う（長押しでしおりにしない）
     lp = { x, y, ui, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
@@ -3440,7 +3598,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!lp) return;
     const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale, { ui, in: inSel } = lp;
     lpStop();
-    const hit = !ui && picAt(x, y);
+    const hit = !ui && !reading && picAt(x, y);   // 読むだけのときは選ばない
     if (hit) { pickPic(hit); return; }
     if (inSel) return;
     // 投げ縄で選んでいるときは、枠の外を指で軽く触ると選択を外す

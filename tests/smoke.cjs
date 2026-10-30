@@ -134,10 +134,12 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#chap'); await p.click('#toc-main > h2'); console.log('inside tap keeps', await p.evaluate(() => document.getElementById('toc').open));
   await p.click('#toc-list li:first-child button'); await p.waitForTimeout(500);   // 後の確認のため第1章に戻す
 
-  // ペン: 選んでいる「ペン」をもう一度押すと色と太さの小窓 → 選んだ色で描ける（書き始めると閉じる）。太さは3つから選び、つまみで変える。
+  // ペン: 札の「…」で色と太さの小窓 → 選んだ色で描ける（書き始めると閉じる）。太さは3つから選び、つまみで変える。
   // ペンを止めて押さえると図形に直る
   const pens = () => p.evaluate(() => JSON.parse(localStorage.getItem('ink:pens')));
-  const penPop = async () => { if (await p.getAttribute('#t-pen', 'aria-pressed') !== 'true') await p.click('#t-pen'); if (await p.isHidden('#pop')) await p.click('#t-pen'); };
+  // 小窓は札の「…」から（札をしまっていたら、選んでいるツールをもう一度押して出す）
+  const toolPop = async (t, k) => { if (await p.getAttribute(t, 'aria-pressed') !== 'true') await p.click(t); if (await p.isHidden('#rail')) await p.click(t); if (await p.isHidden('#pop')) await p.click(`#rail-${k} .rm`); };
+  const penPop = () => toolPop('#t-pen', 'pen'), erPop = () => toolPop('#t-er', 'er');
   await penPop();
   console.log('pen pop open', await p.isVisible('#pop-colors'), await p.isVisible('#pop-size')); await p.screenshot({ path: path.join(OUT, 'palette.png'), clip: { x: 0, y: 0, width: 820, height: 360 } });
   await p.click('#pop-colors button:nth-child(4)');
@@ -222,8 +224,8 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   console.log('back to pen', await p.getAttribute('#t-pen', 'aria-pressed'), 'menu hidden', await p.isHidden('#selmenu'));
   // 押さえずに輪の上で書くと、ふつうに書ける
   await line(300, ry + 125); console.log('tap on loop draws', await p.getAttribute('#t-pen', 'aria-pressed'));
-  // 消しゴム: もう一度押すと種類と大きさ。なぞった所だけ消すと、線が2つに分かれ、戻すで元に戻る
-  await p.click('#t-er'); await p.click('#t-er'); console.log('eraser pop', await p.isVisible('#pop-er')); await p.screenshot({ path: path.join(OUT, 'eraser.png'), clip: { x: 0, y: 0, width: 820, height: 260 } });
+  // 消しゴム: 札の「…」で種類と大きさ。なぞった所だけ消すと、線が2つに分かれ、戻すで元に戻る
+  await erPop(); console.log('eraser pop', await p.isVisible('#pop-er')); await p.screenshot({ path: path.join(OUT, 'eraser.png'), clip: { x: 0, y: 0, width: 820, height: 260 } });
   await p.click('#pop-er [data-m=part]'); console.log('eraser mode closed', await p.isHidden('#pop'));
   await p.click('#t-pen');
   const ly2 = ry + 250; await p.mouse.move(150, ly2); await p.mouse.down(); for (let i = 1; i <= 30; i++) await p.mouse.move(150 + i * 15, ly2); await p.mouse.up(); await p.waitForTimeout(100);
@@ -231,11 +233,11 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await p.click('#t-er'); await p.mouse.move(375, ly2 - 40); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(375, ly2 - 40 + i * 10); await p.mouse.up(); await p.waitForTimeout(150);
   console.log('partial erase', nl1, '->', await npath());
   await p.click('#undo'); await p.waitForTimeout(100); console.log('undo partial', await npath());
-  await p.click('#t-er'); await p.click('#pop-er [data-m=stroke]');
+  await erPop(); await p.click('#pop-er [data-m=stroke]');
   await p.mouse.move(375, ly2 - 40); await p.mouse.down(); for (let i = 1; i <= 8; i++) await p.mouse.move(375, ly2 - 40 + i * 10); await p.mouse.up(); await p.waitForTimeout(150);
   console.log('stroke erase', await npath(), 'saved', await p.evaluate(() => Object.keys(localStorage).filter((k) => /eraser/.test(k)).map((k) => localStorage[k])));
   // 全部消す: 消しゴムの小窓の中。1回目は確かめるだけ、もう一度押すと消え、戻すで戻る
-  await p.click('#t-er'); const n3 = await npath(); await p.click('#clear');
+  await erPop(); const n3 = await npath(); await p.click('#clear');
   console.log('clear armed', await p.textContent('#clear'), await npath());
   await p.click('#clear'); console.log('cleared', n3, '->', await npath(), 'pop closed', await p.isHidden('#pop'));
   await p.click('#undo'); await p.waitForTimeout(100); console.log('undo clear', await npath());
