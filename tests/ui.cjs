@@ -2,6 +2,7 @@
 // 使い方: node tests/ui.cjs
 // 確認すること: 幅 590px（iPad を半分ずつ）でもツールバーが1行で、拡大率・指で書く・設定は「…」の中 → 2本指で軽くたたくと戻す・3本指で進む
 // （動かした・ゆっくりだったときは何もしない、拡大率も変えない）→ 目次・検索で飛ぶと左下に「‹ 〜に戻る」が出て、押すと元の所へ
+// → 設定・本・目次の窓は、まわりの暗い所を触ると閉じる（字を打っている間・窓の中の小窓が開いている間は、1回目はそれだけ閉じる）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..');
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
@@ -92,6 +93,29 @@ const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = 
   await p.click('#chap'); await p.waitForTimeout(200);
   await p.click('#toc-list button.cur'); await p.waitForTimeout(200);
   check('ほとんど動かないときは出さない', await p.isHidden('#back'));
+  // 窓（設定・本・目次）は、まわりの暗い所を触ると閉じる。中を触っても、中で押して外で離しても閉じない。字を打っている間は、1回目はキーボードを閉じるだけ
+  const isOpen = (s) => p.evaluate((s) => document.querySelector(s).open, s);
+  await p.click('#more'); await p.click('#gear'); await p.waitForTimeout(200);
+  const cr = await p.evaluate(() => { const r = document.getElementById('cfg').getBoundingClientRect(); return { l: r.left, t: r.top }; });
+  check('設定の外（左の端）が空いている', cr.l > 20);
+  await p.mouse.click(cr.l + 10, cr.t + 10);
+  check('設定の中を触っても閉じない', await isOpen('#cfg'));
+  await p.mouse.move(cr.l + 10, cr.t + 10); await p.mouse.down(); await p.mouse.move(5, 500, { steps: 5 }); await p.mouse.up();
+  check('中で押して外で離しても閉じない', await isOpen('#cfg'));
+  await p.focus('#cfg-repo'); await p.mouse.click(5, 500);
+  check('字を打っている間は、外を触ってもキーボードを閉じるだけ', await isOpen('#cfg') && await p.evaluate(() => document.activeElement.id !== 'cfg-repo'));
+  await p.mouse.click(5, 500);
+  check('設定は外を触ると閉じる', !(await isOpen('#cfg')));
+  await p.click('#books'); await p.waitForTimeout(300);
+  await p.click('#shelf-list .bk:first-child .bk-m');
+  check('本の「…」で小窓', await p.isVisible('#bk-menu'));
+  await p.mouse.click(5, 500);
+  check('小窓が開いていれば、外を触っても小窓だけ閉じる', await p.isHidden('#bk-menu') && await isOpen('#shelf'));
+  await p.mouse.click(5, 500);
+  check('本の窓は外を触ると閉じる', !(await isOpen('#shelf')));
+  await p.click('#chap'); await p.waitForTimeout(200);
+  await p.mouse.click(5, 500);
+  check('目次は外を触ると閉じる', !(await isOpen('#toc')));
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);
   await b.close(); srv.close();
   console.log(ok ? 'OK' : 'NG'); process.exit(ok ? 0 : 1);

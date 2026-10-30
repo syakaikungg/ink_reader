@@ -29,6 +29,7 @@ iPad と Apple Pencil で、md（数式つき）の本に手書きで書き込�
 ## 変更するとき
 
 - ビルドはない。`vendor/` のライブラリはそのまま読み込む（KaTeX 0.16.11、marked 12.0.2、perfect-freehand 1.2.2、PDF.js 5.7.284、pdf-lib 1.17.1）。
+- 窓（設定・本・目次・Claudeに聞くのような画面）を足すときは index.html に `<dialog>` で置き、`showModal()` で開く。まわりの暗い所を触ると閉じる（`app.js` の「外を触ったら閉じる」。窓ごとの処理は要らない。字を打っている間は1回目はキーボードを閉じるだけ、窓の中の小さなメニューが開いていれば1回目はそれだけを閉じる）。小さなメニューは `onOutside(開くボタンとメニュー, 開いているか, 閉じる)` で外を触ると閉じるようにする。ペン・消しゴムの小窓は書いている間の扱いが違うので、これを使わない。確認は `node tests/ui.cjs`。
 - アプリのファイルを変えたら `sw.js` の `VERSION` を上げ、`app.js` の `APP_VERSION` も同じ値にする（上げないと、iPad に古い版が残る。`APP_VERSION` は設定の見出しに出るので、利用者が開き直したあと新しい版か確かめられる。smoke.cjs が2つの一致を確かめる）。
 - 確認：`node tests/smoke.cjs <sakai_study のパス>`（Playwright で GitHub API をモック）。画面を分けたときの使い勝手（ツールバー・2本指/3本指・戻る札）は `node tests/ui.cjs`、いま.md は `node tests/now.cjs`、わかった・まだ／答えの検索／読んだ跡は `node tests/study.cjs`（どれも sakai_study は要らない）。ぐちゃぐちゃ消しの判定を変えたら `node tests/scribble.cjs` でも確かめる。投げ縄の複製・大きさ・向きは `node tests/lasso.cjs`。筆圧のペンは `node tests/pen.cjs`。PDF は `node tests/pdf.cjs`（300ページの PDF を作って確かめる。sakai_study は要らない）、書き出しは `node tests/export.cjs`。`MD_DIR=<md のフォルダ>` を付けると「ファイルから開く」も確かめる。書き味やカクつきは、実機でしか分からない。利用者に試してもらい、入力の Hz と描画の fps（画面上部に表示される）を聞く。
 - ブランチを切って PR を作り、利用者がマージする。main にマージすると Pages に反映される。
