@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v68';
+  const APP_VERSION = 'ink-reader-v69';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1437,9 +1437,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
     if (btn.closest('#rail')) {
-      // 札の「…」: 札の横（左の端なら右、右の端なら左）に、ボタンの高さに合わせて出す
+      // 札の「…」: 札の横（左の端なら右、右の端なら左）に、ボタンの高さに合わせて出す。上の端なら札の下に出す
       btn.setAttribute('aria-expanded', 'true');
       const rr = railEl.getBoundingClientRect();
+      if (rail.side === 't') {
+        pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+        pop.style.top = Math.min(innerHeight - h - 8, rr.bottom + 8) + 'px';
+        return;
+      }
       pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, rail.side === 'r' ? rr.left - 8 - w : rr.right + 8)) + 'px';
       pop.style.top = Math.max(8, Math.min(innerHeight - h - 8, r.bottom - h)) + 'px';
       return;
@@ -1457,7 +1462,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 選んでいるペン（消しゴム・投げ縄）をもう一度押すと、戻す・進むの札の下に縦の札が出る（もう一度押すとしまう）。書いている間も出たまま。
   // ペン: よく使う色 4 つ・太さ 3 つ・「…」（小窓）。消しゴム: 消し方・大きさ 3 つ・「…」（つまみ・全部消す）。投げ縄: 自由に囲む・四角で囲む。
   // マーカー・読むだけのときは出さない。
-  // 長押しして引っぱると左右の端に移せ、端に沿った上下の位置も変えられる。出したか・置いた場所は端末に覚える（はじめは、広い画面なら出す）
+  // 長押しして引っぱると左右の端に移せ、端に沿った上下の位置も変えられる。上の端へ持っていくと横向きになり、画面の真ん中に並ぶ。
+  // 出したか・置いた場所は端末に覚える（はじめは、広い画面なら出す）
   const railEl = $('#rail'), railPen = $('#rail-pen'), railEr = $('#rail-er'), railLs = $('#rail-ls');
   const rail = (() => { try { return { side: 'l', y: null, ...JSON.parse(store.get(PREF + ':rail')) }; } catch { return { side: 'l', y: null }; } })();
   if (rail.on === undefined) rail.on = innerWidth > 760;
@@ -1492,11 +1498,21 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   railLk.forEach((x) => x.onclick = () => { rail.ls = x.dataset.k; saveRail(); showRail(); stat.textContent = x.dataset.k === 'rect' ? '四角で囲みます（ななめに引く）' : '自由に囲みます'; });
   railRs.forEach((x, i) => x.onclick = () => { eraser.ri = i; eraser.r = eraser.rs[i]; saveEraser(); showRail(); if (popFor && !pop.hidden) { erRange.value = eraser.r; ringSize(eraser.r); } });
   for (const x of railEl.querySelectorAll('.rm')) x.onclick = () => { if (popFor === x) closePop(); else openPop(x, tool === 'er' ? 'e' : 'p'); };
-  // 札の高さ: 左の端は戻す・進むの札の下から、右の端はツールバーの下から。下は右下のページ番号・左下の戻る札にかからない所まで
+  // 札の高さ: 左の端は戻す・進むの札の下から、右の端はツールバーの下から。下は右下のページ番号・左下の戻る札にかからない所まで。
+  // 上の端は、戻す・進むの札と同じ高さで画面の真ん中（狭くて戻す・進むの札にかかるときは、その右）
   function placeRail() {
     if (railEl.hidden) return;
-    railEl.classList.toggle('r', rail.side === 'r');
+    const t = rail.side === 't';
+    railEl.classList.toggle('r', rail.side === 'r'); railEl.classList.toggle('t', t);
+    railEl.setAttribute('aria-orientation', t ? 'horizontal' : 'vertical');
     const hist = $('#hist').getBoundingClientRect();
+    if (t) {
+      const w = railEl.offsetWidth, lo = hist.width ? hist.right + 8 : 12;
+      railEl.style.top = Math.round(hist.height ? hist.top : bar.getBoundingClientRect().bottom + 10) + 'px';
+      railEl.style.left = Math.round(Math.max(lo, Math.min(innerWidth - w - 12, (innerWidth - w) / 2))) + 'px';
+      return;
+    }
+    railEl.style.left = '';
     const min = rail.side === 'r' || !hist.height ? bar.getBoundingClientRect().bottom + 10 : hist.bottom + 8;
     const max = Math.max(min, innerHeight - railEl.offsetHeight - 60);
     railEl.style.top = Math.round(Math.max(min, Math.min(max, rail.y ?? min))) + 'px';
@@ -1512,12 +1528,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (!rd) return;
       rd.on = true; railEl.classList.add('moving'); closePop();
       try { railEl.setPointerCapture(rd.id); } catch {}
-      stat.textContent = '左右の端へ動かせます';
+      stat.textContent = '左右の端か上の端へ動かせます';
     }, 400);
   });
   addEventListener('pointermove', (e) => {
     if (!rd || e.pointerId !== rd.id) return;
     if (!rd.on) { if (Math.hypot(e.clientX - rd.x, e.clientY - rd.y) > 10) { clearTimeout(rd.t); rd = null; } return; }
+    // 指がツールバーのすぐ下まで来たら横向きにして見せる（つかんだ所が札からはみ出さないよう直す）
+    const t = e.clientY < bar.getBoundingClientRect().bottom + 56;
+    if (t !== railEl.classList.contains('t')) {
+      railEl.classList.toggle('t', t);
+      rd.dx = Math.min(rd.dx, railEl.offsetWidth - 16); rd.dy = Math.min(rd.dy, railEl.offsetHeight - 16);
+    }
     railEl.style.left = e.clientX - rd.dx + 'px'; railEl.style.right = 'auto'; railEl.style.top = e.clientY - rd.dy + 'px';
   });
   function railUp(e) {
@@ -1525,10 +1547,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const d = rd; rd = null; clearTimeout(d.t);
     if (!d.on) return;
     railMoved = true;
-    rail.side = e.clientX < innerWidth / 2 ? 'l' : 'r'; rail.y = e.clientY - d.dy; saveRail();
+    if (railEl.classList.contains('t')) rail.side = 't';
+    else { rail.side = e.clientX < innerWidth / 2 ? 'l' : 'r'; rail.y = e.clientY - d.dy; }
+    saveRail();
     railEl.classList.remove('moving'); railEl.style.left = railEl.style.right = '';
     placeRail();
-    stat.textContent = rail.side === 'r' ? '札を右の端に置きました' : '札を左の端に置きました';
+    stat.textContent = { t: '札を上の端に置きました', r: '札を右の端に置きました', l: '札を左の端に置きました' }[rail.side];
   }
   addEventListener('pointerup', railUp);
   addEventListener('pointercancel', railUp);
