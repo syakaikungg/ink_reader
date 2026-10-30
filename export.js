@@ -154,10 +154,11 @@ export async function exportPdf({ L, pdf, unlock, sizes, title, ink, gaps = {}, 
 }
 
 // ---------- 書き込み JSON から線の輪郭を作る（node で動かすとき。アプリは画面に描いた輪郭をそのまま渡す） ----------
-// app.js の opts / pathD / trimTail / smooth / render / de と同じ（変えたら両方そろえる。tests/export.cjs が同じ輪郭になるか確かめる）
+// app.js の PRESS / opts / pathD / trimTail / smooth / render / de と同じ（変えたら両方そろえる。tests/export.cjs が同じ輪郭になるか確かめる）
+const PRESS = 2;   // 筆圧のペン（pr）の点の筆圧を、perfect-freehand の 0.5 を真ん中とした値に直す倍率
 function opts(s, last) {
   if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last, start: { cap: false }, end: { cap: false } };
-  return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
+  return { size: s.s, thinning: s.pr && !s.g ? .65 : 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
 }
 function pathD(outline) {
   const n = outline.length;
@@ -206,10 +207,10 @@ export function readInk(blocks, getStroke) {
         pts.push([d.p[i] / 10, d.p[i + 1] / 10, d.p[i + 2] / 100]);
       }
       if (!pts.length) continue;
-      const s = { tool: d.t, s: d.s }, o = opts(s, true);
+      const s = { tool: d.t, s: d.s, pr: d.pr, g: d.g }, o = opts(s, true);
       let q = d.g ? pts : smooth(pts, Math.min(o.size * .75, 3));
       q = trimTail(q, Math.min(o.size, 3));
-      const outl = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, pr]), { ...o, size: o.size * 10 });
+      const outl = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, Math.min(1, pr * PRESS)]), { ...o, size: o.size * 10 });
       const ys = pts.map((p) => p[1]);
       ink.push({ b: +b, d: pathD(outl.map(([x, y]) => [x / 10, y / 10])), hl: d.t === 'hl', c: d.c, y0: Math.min(...ys) - 10, y1: Math.max(...ys) + 10 });
     }
