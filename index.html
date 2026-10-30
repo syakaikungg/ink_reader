@@ -278,12 +278,41 @@ html, body, body * { touch-action: manipulation; }
 #doc h4 { font-size: 17px; font-weight: 600; font-style: italic; margin: 24px 0 8px; }
 #doc p { margin: 0 0 14px; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
 #doc p.cap { font: 13px/1.5 var(--f-ui); color: var(--muted); text-align: left; }
-#doc img { display: block; margin: 18px auto 6px; height: auto; border-radius: 3px; }
+#doc img { display: block; margin: 18px auto 6px; max-width: 100%; height: auto; border-radius: 3px; }
 #doc figure { margin: 18px 0 6px; }
 #doc figure svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
 #doc .katex-display { margin: 14px 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 #doc .katex { font-size: 1.06em; }
 #doc ul, #doc ol { padding-left: 1.4em; }
+#doc h5, #doc h6 { font-size: 16px; font-weight: 600; line-height: 1.4; margin: 20px 0 6px; }
+/* md のいろいろな書き方。表・コード・引用・区切り線は render.js が div.blk で包む（段落の下の余白を枠の外に足すため） */
+#doc a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+#doc .blk { display: flow-root; margin: 0 0 16px; }
+#doc .blk > * { margin: 0; }
+#doc .blk > hr { margin: 14px 0; }
+#doc hr { height: 0; border: 0; border-top: 1px solid var(--rule); }
+#doc table { border-collapse: collapse; max-width: 100%; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+#doc th, #doc td { border: 1px solid var(--rule); padding: 5px 10px; text-align: left; vertical-align: top; }
+#doc th { background: var(--bg); font-weight: 600; }
+#doc :is(th, td)[align="center"] { text-align: center; } #doc :is(th, td)[align="right"] { text-align: right; }
+#doc code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86em; background: var(--bg); border-radius: 4px; padding: .1em .3em; }
+#doc pre { background: var(--bg); border-radius: 6px; padding: 10px 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+#doc pre code { background: none; padding: 0; font-size: inherit; border-radius: 0; }
+#doc blockquote { margin: 0 0 14px; padding: 2px 0 2px 16px; border-left: 3px solid var(--rule); color: var(--muted); }
+#doc blockquote > :last-child { margin-bottom: 0; }
+#doc .callout { --c: var(--accent); color: var(--fg); background: var(--bg); border-left-color: var(--c); border-radius: 0 6px 6px 0; padding: 8px 14px; }
+#doc .callout:is(.c-warning, .c-caution, .c-attention, .c-danger, .c-error, .c-failure, .c-fail, .c-missing, .c-bug) { --c: var(--ink-r); }
+#doc .callout .ct { font: 600 13px/1.6 var(--f-ui); color: var(--c); margin-bottom: 2px; }
+#doc mark { background: var(--hl); color: #1a1e26; border-radius: 2px; padding: 0 .1em; }
+#doc li > input[type="checkbox"] { margin: 0 .45em 0 -1.3em; vertical-align: -1px; }
+#doc li:has(> input[type="checkbox"]) { list-style: none; }
+#doc dt { font-weight: 600; } #doc dd { margin: 0 0 8px 1.4em; }
+#doc details { margin: 0 0 14px; }
+#doc details > summary { list-style: none; font-weight: 600; cursor: default; }
+#doc details > summary::-webkit-details-marker { display: none; }
+#doc sup.fnref { line-height: 0; } #doc sup.fnref a { text-decoration: none; padding: 0 2px; }
+#doc .footnotes { font-size: 14px; line-height: 1.7; color: var(--muted); border-top: 1px solid var(--rule); margin-top: 32px; padding-top: 10px; }
+#doc .footnotes ol { margin: 0; }
 /* Claude の答え: 段落の右余白の「Q」（答え待ちは点線）と、押すと段落の下に開く答え */
 #qs { position: absolute; left: 0; top: 0; width: 100%; height: 0; }
 #qs .qm { position: absolute; left: 641px; margin-top: 3px; min-width: 0; width: 32px; height: 26px; padding: 0; font: 700 12px/1 var(--f-ui);
@@ -641,6 +670,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
         <li>章の名前を押すと、目次・しおり・本文の検索が開きます。設定・本・目次などの窓は、まわりの暗い所を触ると閉じます。</li>
         <li>「読むだけ」をオンにすると、Apple Pencil でスクロールでき、書き込みはしません（ツールを押すと書けるように戻ります）。</li>
         <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、縮小画像の「…」から前や後ろに白紙を入れられます。そこの「エクスポート」で、ページを選んで書き込みごと PDF にできます（md の本は、目次の「エクスポート」で章を選びます）。</li>
+        <li>md の本では、本文のリンクを指で押すと、その見出し・脚注・ほかの章へ移ります（外のサイトはブラウザで開きます。ペンで押しても動きません）。数式は $…$・$$…$$ のほか、\( \)・\[ \] でも書けます。md の中の HTML は、動く部分（スクリプトなど）を除いて表示します。</li>
         <li>本と書き込みはこの端末に保存されるので、通信なしでも開けます。Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</li>
         <li>ドライブにつなぐと、ほかの端末（スマホなど）でも同じ本と書き込みを使えます。ほかの端末では「本」の「ファイルから開く」から「ドライブの本」を選んでインポートします（同じファイルを「この端末のファイル」から開いてもつながります）。2台で同じ所に書いても両方残り、ほかの端末で書いた分は、章を開いたときとアプリに戻ったときに取り込みます。</li>
         <li>ドライブにつないでいても、本ごとに、本棚の表紙の下の「…」から「この端末だけ」にできます。その本はドライブに何も送りません（ドライブにもう置いた分は消しません）。ドライブと同期している本には、表紙の右下に雲の印が付きます。</li>

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 syakaikungg. All rights reserved.
 // アプリ本体をキャッシュして、通信なしでも起動できるようにする。
 // 本文と書き込みは IndexedDB 側（app.js）。アプリを更新したら VERSION を上げる（app.js の APP_VERSION も同じ値にする）
-const VERSION = 'ink-reader-v71';
+const VERSION = 'ink-reader-v72';
 const FILES = [
   './',
   'index.html',

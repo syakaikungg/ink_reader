@@ -59,6 +59,7 @@ async function layChapter(sheet, c, { getStroke, img, pic, src }) {
   for (const b in gaps) if (blocks[b]) blocks[b].style.paddingBottom = gaps[b] + 'px';   // 余白は開いて出す
   void doc.offsetHeight;
   if (document.fonts) await document.fonts.ready;
+  if (window.renderMarkdown && renderMarkdown.fit) renderMarkdown.fit(doc);   // 長い式は画面と同じく紙の幅に縮める
   const o = page.getBoundingClientRect(), at = (q) => ({ x: q.left - o.left, y: q.top - o.top, w: q.width, h: q.height });
   const tops = blocks.map((el) => at(el.getBoundingClientRect()).y);
   const items = [], cuts = new Set();

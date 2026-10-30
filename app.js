@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v71';
+  const APP_VERSION = 'ink-reader-v72';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -2154,7 +2154,9 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     for (const k of c.querySelectorAll('.katex-display')) { const t = k.querySelector('[data-tex]'); k.replaceWith(`\n$$${t ? t.dataset.tex : ''}$$\n`); }
     for (const k of c.querySelectorAll('.katex[data-tex]')) k.replaceWith(`$${k.dataset.tex}$`);
     for (const i of c.querySelectorAll('img')) i.replaceWith(`[${i.alt || '図'}]`);
+    for (const r of c.querySelectorAll('tr')) r.replaceWith('| ' + [...r.children].map((x) => x.textContent.trim()).join(' | ') + ' |\n');
     const t = c.textContent.trim();
+    if (c.firstElementChild && c.firstElementChild.tagName === 'PRE') return '```\n' + t + '\n```';
     return /^H[1-6]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' + t : t;
   }
   const pagesText = () => picked[0] + (picked.length > 1 ? '〜' + picked[picked.length - 1] : '') + 'ページ';
@@ -2422,6 +2424,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       d.append(mk); box.append(d);
     }
     blocks[k].after(box);
+    renderMarkdown.fit(box);
   }
   function toggleAns(k) {
     if (openQ.has(k)) openQ.delete(k); else openQ.add(k);
@@ -3319,13 +3322,14 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
+    if (!isPdf()) renderMarkdown.fit(doc);
     initBlocks(); markBm(); layout(); startPdf(); needCover();
     showBlocks(cs.blocks);
     openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
     scrollTo(0, restore ? +(store.get(memKey('pos:' + id)) || 0) : 0);
     fillImages();
-    if (document.fonts) document.fonts.ready.then(layout);
+    if (document.fonts) document.fonts.ready.then(() => { if (!isPdf()) renderMarkdown.fit(doc); layout(); });
     // 今の置き場所にまだ送っていない書き込み（つなぐ前に書いたもの・置き場所を変えたもの）を送る。GitHub の本は moveGhBook で写してから
     if (hasRemote() && ghMoved() && Object.keys(cs.blocks).length) { const n = cs.pending.size; moveTo(cs, where()); if (cs.pending.size !== n) { persist(); schedulePush(1500); } }
     // ページの画像の作り方を変えたときは、書き込みのあるページの画像を作り直す
@@ -3406,6 +3410,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     toc.close();
     if (c !== CH) await openChapter(c, false);
     if (c !== CH) return;
+    if (typeof b === 'function') b = b();   // 章を開いてから決める（ほかの章の見出しへのリンク）
     if (!b || !blocks[b]) { scrollTo(0, 0); return; }
     const barB = $('#bar').getBoundingClientRect().bottom;
     if (box) {
@@ -3421,6 +3426,42 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     }
     scrollBy(0, blocks[b].getBoundingClientRect().top - barB - 12);
     if (flash) { const el = blocks[b]; el.classList.remove('hit'); void el.offsetWidth; el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 1900); }
+  }
+  // 本文のリンク: 指で押すと、同じ章の見出し・脚注、ほかの章（ファイル名か [[章の名前]]）、外のサイト（ブラウザで開く）へ。
+  // ペンで書いているとき（書く道具でペン・マウスで押したとき）は動かない。details はたたむと書き込みが浮くので、いつも開いておく
+  let linkDown = null;
+  doc.addEventListener('pointerdown', (e) => { linkDown = accepts(e) ? null : e.target.closest('a[href]'); }, true);
+  doc.addEventListener('click', (e) => {
+    if (e.target.closest('summary')) { e.preventDefault(); return; }
+    const a = e.target.closest('a[href]');
+    if (!a || isPdf()) return;
+    e.preventDefault();
+    if (e.detail !== 0 && a !== linkDown) return;
+    followLink(a.getAttribute('href'));
+  });
+  const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+  function anchorBlock(frag) {
+    const f = frag.replace(/^md-/, ''), q = [frag, 'md-' + f].map((x) => `[id="${CSS.escape(x)}"], a[name="${CSS.escape(x)}"]`).join(', ');
+    const el = doc.querySelector(q);
+    if (el) { const b = blocks.findIndex((x) => x === el || x.contains(el)); if (b > 0) return b; }
+    return blocks.findIndex((x, b) => b > 0 && /^H[1-6]$/.test(x.tagName) && (slug(x.textContent) === slug(f) || x.textContent.trim() === f));
+  }
+  function followLink(href) {
+    const h = href.trim();
+    if (/^(https?|mailto|tel):/i.test(h)) { window.open(h, '_blank', 'noopener'); return; }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(h)) return;
+    const i = h.indexOf('#');
+    let file = i < 0 ? h : h.slice(0, i), frag = i < 0 ? '' : h.slice(i + 1);
+    try { file = decodeURIComponent(file); frag = decodeURIComponent(frag); } catch {}
+    let c = CH;
+    if (file) {
+      const stem = (v) => (v || '').split('/').pop().split('?')[0].trim().toLowerCase().replace(/\.(md|markdown|txt)$/, ''), want = stem(file);
+      const ch = book.chapters.find((x) => [x.file, x.id, x.label].some((v) => v && stem(v) === want));
+      if (!ch) { stat.textContent = `「${file}」はこの本にありません`; return; }
+      c = ch.id;
+    }
+    if (c === CH && !frag) return;
+    goTo(c, frag ? () => anchorBlock(frag) : 0, !!frag);
   }
   function tocItem(text, cls, go, at) {
     const li = document.createElement('li'), btn = document.createElement('button');
@@ -3894,7 +3935,17 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     await openChapter(store.get(memKey('chapter')) || ids[0], true);
     if (!isLocal()) { pushAll(); if (canSync()) syncBook(false).catch(() => {}); }
   }
-  const mdTitle = (md, name) => ((md.match(/^#{1,3}\s+(.+)$/m) || [])[1] || name.replace(/\.[^.]+$/, '')).replace(/[*_`$]/g, '').trim();
+  // 題名: 前書き（YAML）の title、なければ最初の見出し、なければファイル名
+  const mdTitle = (md, name) => {
+    const fm = md.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/), body = fm ? md.slice(fm[0].length) : md;
+    const t = fm && (fm[1].match(/^title:[ \t]*["']?(.+?)["']?[ \t]*$/m) || [])[1];
+    return (t || (body.match(/^#{1,3}\s+(.+)$/m) || [])[1] || name.replace(/\.[^.]+$/, '')).replace(/[*_`$]/g, '').trim();
+  };
+  // md の文字コード: UTF-8 でなければ Shift_JIS（Windows で作った古い md）として読む
+  async function mdText(f) {
+    const buf = await f.arrayBuffer();
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('shift_jis').decode(buf); }
+  }
   async function addBook(id, meta) {
     await kv.set('book:' + id, meta);
     await kv.set('books', [{ id, title: meta.title }, ...((await kv.get('books')) || [])]);
@@ -3971,7 +4022,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   }
   async function importMd(files) {
     const texts = [], chapters = [];
-    for (const [i, f] of files.entries()) { const md = await f.text(); texts.push(md); chapters.push({ id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name }); }
+    for (const [i, f] of files.entries()) { const md = await mdText(f); texts.push(md); chapters.push({ id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name }); }
     const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : ''), x = { fp: await fpOf(texts), title, texts };
     const had = await findOnDevice(x);
     if (had) return had;
