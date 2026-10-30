@@ -296,14 +296,25 @@ dialog#cfg::backdrop, dialog#ask::backdrop, dialog#shelf::backdrop, dialog#toc::
 #sel-ask { color: var(--accent); }
 #empty { max-width: 560px; margin: 40px auto; font-size: 15px; line-height: 1.8; color: var(--muted); }
 #empty:not([hidden]) ~ #wrap, #empty:not([hidden]) ~ #foot { display: none; }
-#shelf { width: min(480px, calc(100vw - 32px)); }
-#shelf h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 12px; }
-#shelf ul { list-style: none; margin: 0 0 12px; padding: 0; }
-#shelf li { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--rule); }
-#shelf li .open { flex: 1; min-width: 0; text-align: left; font-weight: 400; font-size: 15px; height: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#shelf li .open[aria-current="true"] { color: var(--accent); font-weight: 600; }
-#shelf li .del { color: var(--muted); font-weight: 400; }
-#shelf li .del.arm { color: var(--ink-r); }
+/* 本棚: 表紙の格子（最近開いた順）。PDF は1ページ目の縮小画像、md は題名の札。今開いている本は青い枠 */
+#shelf { width: min(640px, calc(100vw - 32px)); max-width: min(640px, calc(100vw - 32px)); max-height: 84vh; overflow: auto; }
+#shelf h2 { font: 600 17px/1.3 var(--f-ui); margin: 0 0 14px; }
+#shelf-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 20px 16px; align-items: end; margin: 0 0 16px; }
+#shelf-list .bk { min-width: 0; }
+#shelf-list .cv { display: block; position: relative; width: 100%; height: auto; min-width: 0; padding: 0; border-radius: 3px; overflow: hidden; background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 3px 10px rgba(20,30,60,.08); }
+#shelf-list .cv img { display: block; width: 100%; height: 100%; object-fit: cover; }
+#shelf-list .cv.card { display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 14px 10px; background: var(--paper); border: 1px solid var(--rule); border-top: 4px solid var(--accent); text-align: center; }
+#shelf-list .cv.card span { font: 600 15px/1.35 var(--f-body); color: var(--accent); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow-wrap: anywhere; }
+#shelf-list .cv.card small { font: 11px/1 var(--f-ui); color: var(--muted); }
+#shelf-list .cv[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: 2px; }
+#shelf-list .lb { display: flex; align-items: center; gap: 2px; margin-top: 6px; font-size: 13px; color: var(--fg); }
+#shelf-list .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shelf-list .cv[aria-current="true"] + .lb .nm { color: var(--accent); font-weight: 600; }
+#shelf-list .bk-m { flex: none; min-width: 0; width: 30px; height: 26px; padding: 0; font-size: 16px; color: var(--muted); }
+#bk-menu { position: fixed; z-index: 5; display: grid; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
+#bk-menu button { text-align: left; font-weight: 400; font-size: 14px; color: var(--ink-r); }
+#bk-menu button.arm { font-weight: 600; }
 #shelf p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
 #shelf .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 #shelf .row button { border-color: var(--rule); }
@@ -511,7 +522,8 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 <dialog id="shelf">
   <form method="dialog">
     <h2>本</h2>
-    <ul id="shelf-list"></ul>
+    <div id="shelf-list"></div>
+    <div id="bk-menu" hidden><button type="button" id="bk-del">削除</button></div>
     <p id="shelf-msg" aria-live="polite">md ファイルをいくつか選ぶと、1ファイルが1章の本になります。PDF も開けます。</p>
     <div class="row">
       <button value="cancel">閉じる</button>
