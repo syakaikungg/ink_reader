@@ -10,7 +10,7 @@ const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8771);
 let ok = true;
 const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = false; };
-const { createDrive, GIS, FOLDER } = require('./drive-mock.cjs');
+const { createDrive, GIS, FOLDER, connected } = require('./drive-mock.cjs');
 const drv = createDrive(), { files, byPath } = drv;
 
 // GitHub の本: books/testbook（2章）。ch1 の 3 段落目と、まだ iPad で開いていない ch2 に、前に送った書き込みがある。ch2 には答えが 2 つ
@@ -35,7 +35,7 @@ const sha = (s) => 'h' + require('crypto').createHash('sha1').update(s).digest('
   await ctx.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
   await ctx.route('https://claude.ai/**', (r) => r.fulfill({ status: 200, body: 'claude' }));
   const log = [];
-  await ctx.route('https://api.github.com/**', async (route) => {
+  const ghRoute = async (route) => {
     const req = route.request(), u = new URL(req.url()), p = decodeURIComponent(u.pathname.replace('/repos/syakaikungg/sakai_study/contents/', ''));
     const raw = /raw/.test(req.headers().accept || '');
     log.push(req.method() + ' ' + p);
@@ -44,11 +44,12 @@ const sha = (s) => 'h' + require('crypto').createHash('sha1').update(s).digest('
     const kids = Object.keys(gh).filter((k) => k.startsWith(p + '/') && !k.slice(p.length + 1).includes('/'));
     if (kids.length) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(kids.map((k) => ({ name: k.split('/').pop(), sha: sha(gh[k]) }))) });
     return route.fulfill({ status: 404, body: '{}' });
-  });
+  };
+  await ctx.route('https://api.github.com/**', ghRoute);
   const sent = () => log.filter((x) => !/^GET /.test(x));
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404|401|403/.test(m.text()) && errs.push(m.text()));
   await p.goto('http://localhost:8771/');
-  await p.evaluate((B) => { localStorage.setItem('ink:cfg', JSON.stringify({ token: 'test', book: B })); localStorage.setItem('ink-drive-test', JSON.stringify({ cid: 'cid-test.apps.googleusercontent.com' })); }, B);
+  await p.evaluate((B) => { localStorage.setItem('ink:cfg', JSON.stringify({ token: 'test', book: B })); }, B);
   await p.reload();
   await p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 30000 });
   await p.waitForTimeout(1500);
@@ -133,6 +134,25 @@ const sha = (s) => 'h' + require('crypto').createHash('sha1').update(s).digest('
   await p.reload(); await p.waitForTimeout(4000);
   check('開き直しても写し直さない', Object.keys(files).length === n && !drv.twins());
   check('最後まで GitHub には何も書かない', sent().length === 0);
+
+  // 新しい iPad: トークンとドライブだけ入れて開くと、ドライブの書き込みが出る（GitHub に残っている古い書き込みで上書きしない）
+  // 写したあとに前の iPad で同じ段落（3）に書き足した分がドライブにある。GitHub の ink/ch1.json は写す前のまま
+  { const f = byPath(dir + '/ink/ch1.json'), j = JSON.parse(f.content); j.blocks[3].strokes.newer = stroke(100, 40); f.content = Buffer.from(JSON.stringify(j)); f.version++; }
+  const c1 = JSON.stringify(ink('ch1')), c2 = JSON.stringify(ink('ch2'));
+  const ctx2 = await b.newContext({ viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, hasTouch: true });
+  await ctx2.route('https://www.googleapis.com/**', drv.route);
+  await ctx2.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
+  await ctx2.route('https://api.github.com/**', ghRoute);
+  const q2p = await ctx2.newPage(); q2p.on('pageerror', (e) => errs.push(e.message));
+  await q2p.goto('http://localhost:8771/');
+  await q2p.evaluate((kv) => { for (const k in kv) localStorage.setItem(k, kv[k]); }, connected({ token: 'test', book: B }));
+  await q2p.reload();
+  await q2p.waitForFunction(() => document.querySelectorAll('#doc > *').length > 20, null, { timeout: 30000 });
+  await q2p.waitForTimeout(6000);
+  check('新しい iPad: ドライブの書き込みが出る', await q2p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length) === 4);
+  check('新しい iPad: GitHub の古い書き込みでドライブを上書きしない', JSON.stringify(ink('ch1')) === c1 && JSON.stringify(ink('ch2')) === c2);
+  await q2p.click('#chap'); await q2p.click('#toc-list li:last-child button'); await q2p.waitForTimeout(3000);
+  check('新しい iPad: 開いていない章もドライブの分', await q2p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length) === 2 && !drv.twins());
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);
   await b.close(); srv.close();
   console.log(ok ? 'OK' : 'NG'); process.exit(ok ? 0 : 1);

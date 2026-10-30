@@ -14,9 +14,10 @@ function createDrive() {
     if (req.headers().authorization !== 'Bearer tok-ok') return r.fulfill({ status: 401, body: '{}' });
     let mm;
     if (m === 'GET' && u.pathname === '/drive/v3/files') {
-      const q = u.searchParams.get('q'), name = (q.match(/name='((?:[^'\\]|\\.)*)'/) || [])[1], pid = q.match(/'([^']+)' in parents/)[1], folder = /mimeType=/.test(q);
-      const list = Object.entries(files).filter(([, f]) => !f.trashed && (f.parents || []).includes(pid) && (name == null || f.name === name.replace(/\\(.)/g, '$1')) && (!folder || f.mimeType === FOLDER));
-      return json({ files: list.map(([id, f]) => ({ id, name: f.name, version: String(f.version) })) });
+      // 親のフォルダを指定しない検索（name='book.json' など）は、ドライブ全体から
+      const q = u.searchParams.get('q'), name = (q.match(/name='((?:[^'\\]|\\.)*)'/) || [])[1], pid = (q.match(/'([^']+)' in parents/) || [])[1], folder = /mimeType=/.test(q);
+      const list = Object.entries(files).filter(([, f]) => !f.trashed && (pid == null || (f.parents || []).includes(pid)) && (name == null || f.name === name.replace(/\\(.)/g, '$1')) && (!folder || f.mimeType === FOLDER));
+      return json({ files: list.map(([id, f]) => ({ id, name: f.name, version: String(f.version), parents: f.parents, size: f.content ? String(f.content.length) : undefined })) });
     }
     if (m === 'POST' && u.pathname === '/drive/v3/files') { const b = JSON.parse(req.postData()), id = 'f' + idN++; files[id] = { ...b, version: 1 }; return json({ id }); }
     if (m === 'POST' && u.pathname === '/upload/drive/v3/files') {
@@ -25,9 +26,9 @@ function createDrive() {
       const body = (p) => p.slice(p.indexOf('\r\n\r\n') + 4, p.length - 2);
       const meta = JSON.parse(body(parts[0]).toString()), id = 'f' + idN++;
       files[id] = { ...meta, version: 1, content: body(parts[1]) };
-      return json({ version: '1' });
+      return json({ id, version: '1' });
     }
-    if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; f.content = req.postDataBuffer(); f.version++; return json({ version: String(f.version) }); }
+    if (m === 'PATCH' && (mm = u.pathname.match(/^\/upload\/drive\/v3\/files\/(\w+)$/))) { const f = files[mm[1]]; if (!f) return r.fulfill({ status: 404, body: '{}' }); f.content = req.postDataBuffer(); f.version++; return json({ id: mm[1], version: String(f.version) }); }
     if (m === 'PATCH' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) { Object.assign(files[mm[1]], JSON.parse(req.postData())); return json({}); }
     if (m === 'GET' && u.pathname === '/drive/v3/about') return json({ user: { emailAddress: 'me@example.com' } });
     if (m === 'GET' && (mm = u.pathname.match(/^\/drive\/v3\/files\/(\w+)$/))) return r.fulfill({ status: 200, body: files[mm[1]].content });
@@ -38,8 +39,8 @@ function createDrive() {
   return { files, calls, byPath, add, route, twins };
 }
 // Google のログイン（GIS）のモック: 押すとすぐ tok-ok を返す。window.__fail を立てると、ポップアップを閉じたことにする
-const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
+const GIS = `window.google = { accounts: { oauth2: { initTokenClient: (o) => ({ requestAccessToken: (a) => { window.__logins = (window.__logins || 0) + 1; window.__cid = o.client_id; window.__last = { hint: o.login_hint, prompt: a && a.prompt };
   setTimeout(() => window.__fail ? o.error_callback({ type: 'popup_closed' }) : o.callback({ access_token: 'tok-ok', expires_in: 3600 }), 10); } }) } } };`;
 // ドライブにつないだ状態で始める（ページを開く前に localStorage に入れる値）
-const connected = (cfg = {}) => ({ 'ink:cfg': JSON.stringify({ drive: true, dcid: 'cid-test.apps.googleusercontent.com', ...cfg }), 'ink:dtok': JSON.stringify({ tok: 'tok-ok', exp: Date.now() + 3600e3, who: 'me@example.com' }) });
+const connected = (cfg = {}) => ({ 'ink:cfg': JSON.stringify({ drive: true, ...cfg }), 'ink:dtok': JSON.stringify({ tok: 'tok-ok', exp: Date.now() + 3600e3, who: 'me@example.com' }) });
 module.exports = { createDrive, GIS, FOLDER, connected };
