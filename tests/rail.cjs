@@ -1,7 +1,7 @@
 // 色・太さの札と「読むだけ」の確認（Playwright。GitHub とドライブは使わない）
 // 使い方: node tests/rail.cjs [スクリーンショットの出力先]
 // 確認すること: 広い画面でははじめから札が出ている → 色・太さを押すとペンが変わり、札は書いても閉じない → 選んでいるペンをもう一度押すとしまう・出す（覚える）
-// → 4 つにない色を小窓で選ぶと、一番長く使っていない色の場所に入る → 消しゴムの札（消し方・大きさ 3 つ）→ マーカー・投げ縄では出さない
+// → 4 つにない色を小窓で選ぶと、一番長く使っていない色の場所に入る → 消しゴムの札（消し方・大きさ 3 つ）→ マーカーでは出さない → 投げ縄の札（自由・四角）で四角に囲む
 // → 長押しして右へ動かすと右の端に置き、開き直しても右 → 札の「…」で小窓が札の横に出る → 幅 590px では細く、はじめはしまっている、本文にかからない
 // → 読むだけ: 書けない・札は隠れる・ツールを押すと戻る・指で書くと同時にはオンにならない → 幅 744px では「…」の中
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
@@ -73,7 +73,20 @@ const check = (name, v, info) => { console.log(v ? '✓' : '✗', name, info ===
   await p.click('#t-hl');
   check('マーカーでは出さない', await p.isHidden('#rail'));
   await p.click('#t-ls');
-  check('投げ縄では出さない', await p.isHidden('#rail'));
+  check('投げ縄では囲み方の札（はじめは自由）', await p.isVisible('#rail-ls') && await p.isHidden('#rail-pen') && await p.getAttribute('#rail-ls [data-k=free]', 'aria-pressed') === 'true');
+  // 四角で囲む: ななめに引くと四角になり、中の線を選ぶ（横に平らに引いても余白は入らない）
+  await p.click('#rail-ls [data-k=rect]');
+  await p.mouse.move(280, 380); await p.mouse.down();
+  for (let k = 1; k <= 8; k++) await p.mouse.move(280 + k * 25, 380 + k * 6);
+  const lp = await p.evaluate(() => (document.querySelector('#ink .lasso')?.getAttribute('d') || '').split('L').length);
+  await p.mouse.up(); await p.waitForTimeout(150);
+  check('四角で囲むと 4 つの角の囲みになり、中の線を選ぶ', lp === 4 && /1画を選択/.test(await p.textContent('#stat')) && await p.isVisible('#selmenu'), [lp, await p.textContent('#stat')]);
+  await p.click('#sel-x');
+  const g0 = await p.evaluate(() => document.querySelectorAll('#sps .sp').length);
+  await p.mouse.move(150, 600); await p.mouse.down(); for (let k = 1; k <= 10; k++) await p.mouse.move(150 + k * 60, 602); await p.mouse.up(); await p.waitForTimeout(150);
+  check('四角のときは横に引いても余白を入れない', await p.evaluate(() => document.querySelectorAll('#sps .sp').length) === g0);
+  check('囲み方を覚える', JSON.parse(await p.evaluate(() => localStorage.getItem('ink:rail'))).ls === 'rect');
+  await p.click('#rail-ls [data-k=free]');
   await p.click('#t-pen');
   check('ペンに戻すと出る', await p.isVisible('#rail'));
 

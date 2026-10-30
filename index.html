@@ -96,7 +96,7 @@ button:disabled { opacity: .35; }
 #stat { font: 12px/1.3 var(--f-ui); color: var(--muted); font-variant-numeric: tabular-nums; width: 13em; height: 2.6em; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; }
 #chap { border-color: var(--rule); background: var(--paper); max-width: 15em; display: inline-flex; align-items: center; gap: 4px; }
 /* 縦向きなど幅が足りないときは、ツールを1行にまとめ、知らせはその下の細い1行にする */
-@media (max-width: 940px) {
+@media (max-width: 1100px) {
   #stat { display: block; width: auto; flex-basis: 100%; height: 1.4em; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
   #chap { max-width: 12em; }
 }
@@ -104,7 +104,7 @@ button:disabled { opacity: .35; }
 #more { display: none; font-size: 18px; letter-spacing: 1px; }
 #more-box { display: contents; }
 #g-more { position: relative; }
-@media (max-width: 760px) {
+@media (max-width: 880px) {
   /* 本・章の名前の組は、残った幅だけを使う（幅の計算では 0 とみなすので、ほかのボタンが次の行に落ちない）。章の名前は入らない分を「…」に */
   #bar > .grp:first-child { flex: 1 1 0; min-width: 0; max-width: max-content; }
   #chap { max-width: none; min-width: 0; flex: 0 1 auto; }
@@ -162,6 +162,7 @@ select {
 #rail .rw span { width: 22px; border-radius: 6px; background: var(--fg); display: block; }   /* 太さの見本（高さは app.js が入れる） */
 #rail .rw button[aria-pressed="true"] span { background: var(--accent); }
 #rail .re button { height: 46px; font-size: 11px; line-height: 1.15; font-weight: 600; }
+#rail .rl button { font-size: 12px; font-weight: 600; }
 #rail .rs span { border: 1.5px solid var(--fg); border-radius: 50%; display: block; box-sizing: border-box; }
 #rail .rs button[aria-pressed="true"] span { border-color: var(--accent); }
 #rail .rm { font-size: 16px; color: var(--muted); letter-spacing: 1px; }
@@ -400,6 +401,15 @@ body.pdf #sps { --sp-line: rgba(0,0,0,.16); --sp-text: rgba(0,0,0,.42); --sp-bg:
 #sps .sph.fold { left: 0; width: 100%; height: 28px; margin-top: 0; border: 0; border-radius: 0; background: none; color: var(--sp-text); font: 11px/1 var(--f-ui); }
 #sps .sph.fold::before { position: absolute; left: 8px; right: 8px; top: 50%; width: auto; height: 0; margin: 0; border-top: 1px dashed var(--sp-line); border-bottom: 0; }
 #sps .sph.fold span { position: relative; padding: 2px 8px; background: var(--sp-bg); }
+/* 方眼: 余白・白紙の右上の切り替えと、方眼の目（5mm ほど。線の下に敷く） */
+#sps .spg { position: absolute; right: 14px; height: 22px; min-width: 0; padding: 0 8px; border: 1px solid var(--sp-line); border-radius: 11px;
+  background: var(--sp-knob); color: var(--sp-text); font: 600 11px/1 var(--f-ui); }
+#sps .spg[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+body.pdf #sps .spg { right: 6px; }
+#grs { position: absolute; z-index: 1; left: 0; top: 0; width: 100%; height: 0; pointer-events: none; }
+#grs div, #doc > .pg .blank.grid { background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px); background-size: 16px 16px; }
+#grs div { position: absolute; left: 8px; right: 8px; border: 1px solid transparent; border-radius: 6px; }
+#page { --grid-line: rgba(80,110,170,.18); }
 #bms { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
 #bms i { position: absolute; left: 18px; margin-top: 4px; width: 12px; height: 20px; background: var(--ink-r); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
 .pick { display: inline-flex; align-items: center; font: 600 13px/1 var(--f-ui); height: 38px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--paper); cursor: pointer; }
@@ -526,6 +536,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <article id="doc">
       <p class="src"></p>
     </article>
+    <div id="grs" aria-hidden="true"></div>
     <svg id="ink" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="qs"></div>
     <div id="bms" aria-hidden="true"></div>
@@ -547,7 +558,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   <button id="undo" disabled aria-label="元に戻す" title="元に戻す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5 4 9.5 8.5 14M4.5 9.5H15a4.75 4.75 0 0 1 0 9.5h-3"/></svg></button>
   <button id="redo" disabled aria-label="やり直す" title="やり直す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5 20 9.5 15.5 14M19.5 9.5H9a4.75 4.75 0 0 0 0 9.5h3"/></svg></button>
 </div>
-<!-- 色・太さの札: 選んでいるペン（消しゴム）をもう一度押すと出る・しまう。書いている間も出たまま。長押しして左右の端へ動かせる -->
+<!-- 札: 選んでいるペン・消しゴム・投げ縄をもう一度押すと出る・しまう。書いている間も出たまま。長押しして左右の端へ動かせる -->
 <div id="rail" hidden role="toolbar" aria-orientation="vertical">
   <div id="rail-pen">
     <div class="rc" role="group" aria-label="よく使う色"></div>
@@ -562,6 +573,9 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <div class="rs" role="group" aria-label="消しゴムの大きさ"><button type="button" aria-label="小"><span></span></button><button type="button" aria-label="中"><span></span></button><button type="button" aria-label="大"><span></span></button></div>
     <hr>
     <button type="button" class="rm" aria-label="大きさ・全部消す" title="大きさ・全部消す">…</button>
+  </div>
+  <div id="rail-ls">
+    <div class="rl" role="group" aria-label="囲み方"><button type="button" data-k="free" aria-label="自由に囲む">自由</button><button type="button" data-k="rect" aria-label="四角で囲む">四角</button></div>
   </div>
 </div>
 <div id="back" hidden><button id="back-go">‹ <span id="back-t"></span>に戻る</button><button id="back-x" aria-label="戻る札を消す">×</button></div>
@@ -664,9 +678,9 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     </div>
     <div id="toc-pages" hidden>
       <div id="pg-grid"></div>
-      <p>縮小画像を押すとそのページへ飛びます。「…」から、後ろに白紙のページを入れたり、白紙を消したりできます。「書き出す」では、ページを選んで書き込みごと PDF にできます。</p>
+      <p>縮小画像を押すとそのページへ飛びます。「…」から、前や後ろに白紙のページを入れたり、白紙を消したりできます。「書き出す」では、ページを選んで書き込みごと PDF にできます。</p>
     </div>
-    <div id="th-menu" hidden><button type="button" id="th-add">後ろに白紙を入れる</button><button type="button" id="th-del">この白紙を消す</button></div>
+    <div id="th-menu" hidden><button type="button" id="th-pre">前に白紙を入れる</button><button type="button" id="th-add">後ろに白紙を入れる</button><button type="button" id="th-del">この白紙を消す</button></div>
     <div class="row"><button value="cancel">閉じる</button></div>
   </form>
 </dialog>
