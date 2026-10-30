@@ -52,10 +52,12 @@ const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.spl
   await p.click('#toc-list li:nth-child(4) button'); await p.waitForTimeout(1000); console.log('toc jump', await pg());
   await jumpTo(150);
 
-  // しおり: ページを指で長押し
+  // しおり: ページを指で長押し → メニューの「しおりを付ける」
   const cdp = await ctx.newCDPSession(p);
   const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
   await touch('touchStart', [[400, 600]]); await p.waitForTimeout(700); await touch('touchEnd', []);
+  console.log('menu', await p.$$eval('#pmenu button:not([hidden])', (o) => o.map((x) => x.textContent)));
+  await p.click('#pm-bm');
   console.log('bookmark', await p.textContent('#stat'), await p.evaluate(() => JSON.parse(localStorage.getItem(Object.keys(localStorage).find((k) => /:bm:/.test(k))) || '[]')));
 
   // 投げ縄 → Claudeに聞く（PDF は囲んだ範囲の画像）
