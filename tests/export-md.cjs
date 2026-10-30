@@ -85,7 +85,7 @@ const py = (code, ...args) => execFileSync('python3', ['-c', code, ...args], { e
 
   // 目次に「書き出す」。押すと章を選ぶ一覧
   await p.click('#chap'); await p.waitForTimeout(400);
-  ok('md の本の目次に「書き出す」（タブは出さない）', await p.isVisible('#ex-on') && await p.isHidden('#toc-tabs'));
+  ok('md の本の目次に「エクスポート」（タブは出さない）', await p.isVisible('#ex-on') && await p.isHidden('#toc-tabs'));
   await p.click('#ex-on');
   const rows = await p.$$eval('#toc-list .ck', (els) => els.map((e) => e.textContent));
   ok('章だけの一覧になる（検索は隠れる）', rows.length === 2 && /第1章/.test(rows[0]) && await p.isHidden('#toc-q'), rows);

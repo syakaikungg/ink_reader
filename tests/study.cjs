@@ -1,7 +1,7 @@
 // AI と勉強する机（段2）の確認（Playwright）。ドライブ API はモックする（sakai_study は要らない）
 // 使い方: node tests/study.cjs
 // 確認すること: 答えに「わかった」「まだ」を付ける → Q の見た目が変わり、ドライブの <本>/marks.json に入る（ほかの端末の分とまとめる）
-// → 検索で Claude の答えも見つかり、押すとその段落へ飛んで答えが開く → 読んだ跡が <本>/log/<日付>.md に入る（1 分に 1 回まで）
+// → 検索で Claude の答えも見つかり、押すとその段落へ飛んで答えが開く → 読んだ跡が <本>/log/<日付>_<端末>.md に入る（1 分に 1 回まで）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..');
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
@@ -72,7 +72,8 @@ const wait = async (p, f, ms = 6000) => { for (let i = 0; i < ms / 200 && !(awai
 
   // 読んだ跡
   const today = await p.evaluate(() => { const d = new Date(), z = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; });
-  const logf = () => byPath(`${dir}/log/${today}.md`), logt = () => (logf() ? logf().content.toString() : '');
+  const dev = await p.evaluate(() => localStorage.getItem('ink:dev'));
+  const logf = () => byPath(`${dir}/log/${today}_${dev}.md`), logt = () => (logf() ? logf().content.toString() : '');
   await p.mouse.move(150, 500); await p.mouse.down(); for (let i = 0; i < 20; i++) await p.mouse.move(150 + i * 5, 500 + (i % 2) * 3); await p.mouse.up();
   await wait(p, () => /書き込み/.test(logt()), 8000);
   console.log(logt());
@@ -80,6 +81,7 @@ const wait = async (p, f, ms = 6000) => { for (let i = 0; i < ms / 200 && !(awai
   const v0 = logf().version;
   await p.evaluate(() => scrollBy(0, 1500)); await p.waitForTimeout(4000);
   check('読んだ跡は 1 分に 1 回まで', logf().version === v0);
+  check('読んだ跡のファイルは端末ごと（名前に端末）', /^(iPad|iPhone|Android|PC)-[0-9a-z]{4}$/.test(dev) && logt().includes(`Ink Reader（${dev}）`), dev);
   check('同じファイルを二つ作らない', !drv.twins());
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);
   await b.close(); srv.close();

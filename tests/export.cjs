@@ -230,7 +230,7 @@ print(json.dumps({'pages': pages, 'outline': ol, 'enc': r.is_encrypted}))`, f));
   await p.click('#ex-x');
   ok('やめると番号の欄に戻る', await p.isVisible('#pg-go') && await p.isHidden('#ex-bar'));
   await p.click('#toc-tabs button[data-t="main"]');
-  ok('目次のタブでは「書き出す」を出さない', await p.isHidden('#ex-on'));
+  ok('目次のタブでは「エクスポート」を出さない', await p.isHidden('#ex-on'));
   await p.click('#toc button[value=cancel]');
 
   // ---- 鍵のかかった PDF ----
