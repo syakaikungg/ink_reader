@@ -133,6 +133,8 @@ print(json.dumps({'pages': pages, 'outline': ol, 'enc': r.is_encrypted}))`, f));
     5: { b: 5, strokes: { a: hline(400, 'k', 'hl') } },
     // 6ページ目の下の端から 7ページ目へまたぐ縦線
     6: { b: 6, strokes: { a: vline(300, ph(595, 842) - 30, ph(595, 842) + 60) } },
+    // 7ページ目: 筆圧のペン（pr）の線と、筆圧のペンで書いて図形に直した線（太さ一定）
+    7: { b: 7, strokes: { a: { ...curve(400, 'k'), pr: 1 }, b: { ...curve(560, 'r', 'pen', 6), pr: 1 }, c: { ...shape(700), pr: 1 } } },
     8: { b: 8, strokes: { a: curve(500, 'k'), b: curve(600, 'r', 'pen', 6), c: curve(700, 'b', 'hl'), d: shape(820), e: curve(900, '#228844', 'pen', 1.2) } },
   };
   await openBook('book.pdf', blocks, true);
@@ -178,6 +180,10 @@ print(json.dumps({'pages': pages, 'outline': ol, 'enc': r.is_encrypted}))`, f));
   const getStroke = new Function('window', fs.readFileSync(path.join(APP, 'vendor/perfect-freehand.js'), 'utf8') + '\nreturn window.getStroke;')({});
   const appD = (await p.$$eval('#ink path:not(.lasso)', (es) => es.map((e) => e.getAttribute('d')))).sort(), cliD = ex.readInk(blocks, getStroke).ink.map((x) => x.d).sort();
   ok('線の輪郭がアプリと同じ', appD.length === cliD.length && appD.every((d, i) => d === cliD[i]), `${appD.length} / ${cliD.length} 本、違う ${appD.filter((d, i) => d !== cliD[i]).length}`);
+  { // 筆圧のペンは点の筆圧で太さが変わる（同じ点の太さ一定の線と輪郭が違う）。図形に直した線は太さ一定のまま
+    const d = (st) => ex.readInk({ 1: { b: 1, strokes: { a: st } } }, getStroke).ink[0].d;
+    ok('筆圧のペンは太さが変わり、図形は変わらない', d(curve(400, 'k')) !== d({ ...curve(400, 'k'), pr: 1 }) && d(shape(700)) === d({ ...shape(700), pr: 1 }));
+  }
   // ページの向き・範囲（PDF.js の getViewport）を pdf-lib だけで出したものが同じ
   const L = await import(pathToFileURL(path.join(APP, 'vendor/pdf-lib/pdf-lib.esm.min.js')).href);
   const doc = await L.PDFDocument.load(fs.readFileSync(path.join(DIR, 'book.pdf')));

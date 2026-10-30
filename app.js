@@ -57,11 +57,14 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   // ---------- geometry ----------
+  // 筆圧のペン（線の pr）: 点の筆圧で太さを変える。Safari の Apple Pencil の筆圧はふつうに書いて 0.1〜0.3 ほど（いちばん強く押すと 1）なので、
+  // PRESS 倍して perfect-freehand の真ん中（0.5 のときにペンの太さ）に合わせる。筆圧の取れないペンは、書く速さから作った筆圧を点に入れる（pressIn）
+  const PRESS = 2;
   function opts(s, last) {
     if (s.tool === 'hl') return { size: 16, thinning: 0, smoothing: .5, streamline: .45, simulatePressure: false, last,
       start: { cap: false }, end: { cap: false } };
-    // ペンは太さ一定（筆圧で太さを変えない）。点の筆圧は保存したままなので、筆圧で変わるペンを足すときに使える
-    return { size: s.s, thinning: 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
+    // ふつうのペンは太さ一定。図形に直した線も、筆圧のペンで書いたものでも太さ一定
+    return { size: s.s, thinning: s.pr && !s.g ? .65 : 0, smoothing: .55, streamline: .28, simulatePressure: false, last };
   }
   function pathD(outline) {
     const n = outline.length;
@@ -117,7 +120,7 @@
     if (last) q = trimTail(q, Math.min(o.size, 3));   // 書いている途中に削ると、ペン先の手前が直線になる
     // perfect-freehand は線の終わりの長さ 3（座標の単位）を直線でつなぐ。紙の px のまま渡すと、拡大して書いたときに
     // ペン先の後ろについてくる短い棒に見えるので、10 倍して渡して戻す
-    const out = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, pr]), { ...o, size: o.size * 10 });
+    const out = getStroke(q.map(([x, y, pr]) => [x * 10, y * 10, Math.min(1, pr * PRESS)]), { ...o, size: o.size * 10 });
     s.el.setAttribute('d', pathD(out.map(([x, y]) => [x / 10, y / 10])));
   }
   function bbox(s) {
@@ -146,7 +149,7 @@
   }
 
   // ---------- serialize ----------
-  const ser = (s) => ({ t: s.tool, c: s.c, s: s.s, pen: !!s.pen,
+  const ser = (s) => ({ t: s.tool, c: s.c, s: s.s, pen: !!s.pen, ...(s.pr ? { pr: 1 } : {}),
     p: s.pts.flatMap(([x, y, p]) => [Math.round(x * 10), Math.round(y * 10), Math.round(p * 100)]),
     // 図形に直した線は、あとで形を変えられるよう図形の形も残す（k: line・poly・ellipse・circle、v: 頂点か [中心, 半径]、a: 傾き）
     ...(s.g ? { g: { k: s.g.k, v: s.g.v.flatMap(([x, y]) => [Math.round(x * 10), Math.round(y * 10)]), a: Math.round((s.g.a || 0) * 1000), p: Math.round(s.g.p * 100) } } : {}) });
@@ -159,7 +162,7 @@
       seen.push(k); if (seen.length > 16) seen.shift();
       pts.push([d.p[i] / 10, d.p[i + 1] / 10, d.p[i + 2] / 100]);
     }
-    const s = { id, b, tool: d.t, c: d.c, s: d.s, pen: d.pen, pts };
+    const s = { id, b, tool: d.t, c: d.c, s: d.s, pen: d.pen, ...(d.pr ? { pr: 1 } : {}), pts };
     if (d.g) { const v = []; for (let i = 0; i + 1 < d.g.v.length; i += 2) v.push([d.g.v[i] / 10, d.g.v[i + 1] / 10]); s.g = { k: d.g.k, v, a: d.g.a / 1000, p: d.g.p / 100 }; }
     bbox(s); return s;
   }
@@ -266,7 +269,7 @@
       const y = sy(x);
       if (rm && y >= rm[0] && y < rm[1]) del.push(x);
       else if (dy && y >= e) {
-        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
+        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, ...(x.pr ? { pr: 1 } : {}), pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
         if (x.g) m.g = moveG(x.g, 0, dy);
         bbox(m); old.push(x); moved.push(m);
       }
@@ -488,6 +491,17 @@
     const split = (path) => { const full = ROOT + '/' + path, i = full.lastIndexOf('/'); return [full.slice(0, i), full.slice(i + 1)]; };
     async function file(path) { const [d, name] = split(path), pid = await folder(d, false); return pid ? find(name, pid) : null; }
     const texts = new Map();   // ファイルの id -> { v, text }（変わっていなければ取り直さない）
+    const ids = new Map();     // over で書いたファイルのパス -> id
+    // f（{ id }）があれば中身を差し替え、なければフォルダ pid に新しく作る。{ id, version } を返す
+    async function upload(f, pid, name, body) {
+      const type = typeof body === 'string' ? (/\.json$/.test(name) ? 'application/json' : /\.m?js$/.test(name) ? 'text/javascript' : 'text/markdown') : body.type;
+      const blob = typeof body === 'string' ? new Blob([body], { type }) : body;
+      if (f) return (await api(`upload/drive/v3/files/${f.id}?uploadType=media&fields=id,version`, { method: 'PATCH', headers: { 'Content-Type': type }, body: blob })).json();
+      const fd = new FormData();
+      fd.append('metadata', new Blob([JSON.stringify({ name, parents: [pid], mimeType: type })], { type: 'application/json' }));
+      fd.append('file', blob);
+      return (await api('upload/drive/v3/files?uploadType=multipart&fields=id,version', { method: 'POST', body: fd })).json();
+    }
     return {
       name: 'ドライブ', prep, login, ok: () => !!tok && Date.now() < exp, soon: () => !tok || Date.now() > exp - 10 * 60000, mkdir: (path) => folder(ROOT + '/' + path, true),
       async get(path) {
@@ -503,13 +517,14 @@
       async put(path, body, sha) {
         const [d, name] = split(path), pid = await folder(d, true), f = await find(name, pid);
         if ((f ? f.version : null) !== (sha || null)) { const e = new Error('ドライブ 409'); e.status = 409; throw e; }
-        const type = typeof body === 'string' ? (/\.json$/.test(name) ? 'application/json' : /\.m?js$/.test(name) ? 'text/javascript' : 'text/markdown') : body.type;
-        const blob = typeof body === 'string' ? new Blob([body], { type }) : body;
-        if (f) return (await (await api(`upload/drive/v3/files/${f.id}?uploadType=media&fields=version`, { method: 'PATCH', headers: { 'Content-Type': type }, body: blob })).json()).version;
-        const fd = new FormData();
-        fd.append('metadata', new Blob([JSON.stringify({ name, parents: [pid], mimeType: type })], { type: 'application/json' }));
-        fd.append('file', blob);
-        return (await (await api('upload/drive/v3/files?uploadType=multipart&fields=version', { method: 'POST', body: fd })).json()).version;
+        return (await upload(f, pid, name, body)).version;
+      },
+      // 版を確かめずに上書きする（アプリだけが書く いま.md など）。ファイルの id を覚えておき、2 回目からは探さない
+      async over(path, body) {
+        const id = ids.get(path), name = path.slice(path.lastIndexOf('/') + 1);
+        if (id) try { return void await upload({ id }, null, name, body); } catch (e) { if (e.status !== 404) throw e; ids.delete(path); }
+        const [d] = split(path), pid = await folder(d, true), f = await find(name, pid);
+        ids.set(path, (await upload(f, pid, name, body)).id || (f && f.id));
       },
       async del(path) {
         const f = await file(path);
@@ -554,7 +569,7 @@
     logging = true;
     drive.login(true).then(() => {
       if (relogin) stat.textContent = 'ドライブにつなぎ直しました';
-      relogin = false; pushAll(); refreshChapter();
+      relogin = false; pushAll(); refreshChapter(); nowSoon();
     }).catch((e) => { nextTry = Date.now() + 120000; if (by) stat.textContent = e.message; else if (!drive.ok()) needLogin(); })
       .finally(() => { logging = false; });
   }
@@ -578,6 +593,17 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 - \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
 - \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。
 - \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「書き出す」と同じもの。使い方は下）。
+- \`いま.md\`・\`now.png\`・\`last.png\`: いま iPad で見ている所と、最後に書いた所（下の「いま見ている所」）。
+- \`<本>/marks.json\`: 答えごとに利用者が付けた「わかった」「まだ」。\`{ "<章>-<質問ID>": { "m": "ok"（わかった）| "no"（まだ）| null（外した）, "t": 押した時刻, "c": 章, "b": [段落] } }\`。理解度をつかむのに使ってください。
+- \`<本>/log/<日付>.md\`: その日の読んだ跡（何時から何時に、どの章のどの段落を見て、どこに書いたか）。
+
+## いま見ている所（いま.md）
+
+iPad で Ink Reader と Claude を画面に並べて使うときのために、アプリは \`Ink Reader/いま.md\` に、画面に見えている所（本・章・段落の本文かページ）と、最後に書いた所を書き直し続けます（書くかスクロールして約2秒後）。
+絵は \`Ink Reader/now.png\`（見えている所）と \`Ink Reader/last.png\`（最後に書いた線のまわり）。どちらも手書き入りで、左の青い札が段落（ページ）番号です。
+
+チャットで「ここ」「この式」などと聞かれたら、まず いま.md と絵を見てください。たいてい最後に書いた所（ペンで丸や線を書いた所）のことです。
+答えを段落に残してと頼まれたら、下の「質問に答えるとき」と同じように answers にファイルを作ってください（質問ID は自分で決めた英数字6文字ほど、番号は いま.md のもの）。
 
 ## 質問に答えるとき
 
@@ -689,7 +715,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function touch(list) {
     if (!cs) return;
     for (const s of list) cs.pending.add(s.b);   // つないでいない間に書いた分も、つないだら送る
-    persist(); schedulePush(); showPending();
+    persist(); schedulePush(); showPending(); noteWrite(list);
   }
   function showPending() {
     if (!cs || !cs.pending.size || !hasRemote()) return;
@@ -902,7 +928,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   async function refreshChapter() {   // 置き場所の書き込みと答えを取り込む（他の端末・Claude の変更）
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
-    pullAnswers(id); upPdf(); moveGhBook();
+    pullAnswers(id); upPdf(); moveGhBook(); syncRates();
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
       const remote = await pullInk(id);
@@ -921,6 +947,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     // 答えを待っているときは、戻るたびに確かめる
     else if (Date.now() - lastPull > (asks.length ? 5000 : 60000)) { lastPull = Date.now(); refreshChapter(); }
   });
+  // Claude と画面を分けているときは、アプリに戻っても上の visibilitychange が来ない。Claude の側から戻ったとき（focus）に答えを見に行く
+  addEventListener('focus', () => { if (Date.now() - lastPull > 5000) { lastPull = Date.now(); refreshChapter(); } });
 
   // ---------- history ----------
   // op: {type:'add'|'erase', list} か {type:'replace', from, to}（投げ縄の移動・色変更）
@@ -970,6 +998,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     wrap.scrollLeft += r1.left + px * scale - at.x;
     scrollBy(0, r1.top + py * scale - at.y);
     store.set(PREF + ':zoom', mode === 'fit' ? 'fit' : String(scale));
+    nowSoon();
   }
   // 拡大率の一覧。先頭の隠れた項目に今の拡大率を出し、選んだあとはそこに戻す
   const zoomSel = $('#zoomv'), zoomNow = zoomSel.options[0];
@@ -998,6 +1027,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const at = { x: m.x, y: m.y, px: (pinch.m0.x - r0.left) / scale, py: (pinch.m0.y - r0.top) / scale };
     pinch = null;
     sizer.classList.remove('pinching'); sizer.style.transform = ''; sizer.style.transformOrigin = '';
+    if (tapping()) { zoomNow.textContent = Math.round(scale * 100) + '%'; return; }   // 2本指・3本指でたたいただけ（戻す・進む）
     // 画面幅の近くで離したら、画面幅にぴったり合わせる
     if (Math.abs(next - fit) / fit < .04) setScale(fit, 'fit', at); else setScale(next, 'manual', at);
   }
@@ -1021,6 +1051,38 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   const pinchUp = (e) => { if (pinch && fingers(e).length < 2) pinchEnd(); };
   document.addEventListener('touchend', pinchUp);
   document.addEventListener('touchcancel', pinchUp);
+  // 2本指で紙を軽くたたくと戻す、3本指で進む（ほかの手書きアプリと同じ）。指をほとんど動かさず、触れてから TAP_MS の間に全部離したときだけ。
+  // ペンを使っている間・手のひら（ペンの近くで触れた指）は数えない。たたいている間のピンチは、拡大率を変えない（pinchEnd）
+  const TAP_MS = 300;
+  let tap = null;   // { t: 最初の指が触れた時刻, n: 一度に触れていた指の数, at: 指 -> 触れた位置, bad: たたいたとはみなさない }
+  const tapping = () => tap && !tap.bad && performance.now() - tap.t < TAP_MS;
+  document.addEventListener('touchstart', (e) => {
+    const t = fingers(e), mine = [...e.changedTouches].filter((x) => x.touchType !== 'stylus' && !palms.has(x.identifier));
+    if (!tap) {
+      if (!t.length || t.length !== mine.length || !e.target.closest('#wrap')) return;   // ほかの指を置いたままのときは数えない
+      tap = { t: performance.now(), n: 0, at: new Map(), bad: false };
+    }
+    for (const x of mine) tap.at.set(x.identifier, [x.clientX, x.clientY]);
+    tap.n = Math.max(tap.n, t.length);
+    if ((penDown && curType !== 'touch') || mine.length < e.changedTouches.length || performance.now() - tap.t > TAP_MS) tap.bad = true;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!tap || tap.bad) return;
+    for (const x of e.changedTouches) { const a = tap.at.get(x.identifier); if (a && Math.hypot(x.clientX - a[0], x.clientY - a[1]) > 10) tap.bad = true; }
+  }, { passive: true });
+  const tapEnd = (e) => {
+    if (!tap) return;
+    if (e.type === 'touchcancel') tap.bad = true;
+    if ([...e.touches].some((x) => tap.at.has(x.identifier))) return;   // まだ指が残っている
+    const ok = tapping(), n = tap.n; tap = null;
+    if (!ok || (n !== 2 && n !== 3)) return;
+    const st = n === 2 ? undoStack : redoStack;
+    if (!st.length) { stat.textContent = n === 2 ? '戻すものはありません' : '進めるものはありません'; return; }
+    (n === 2 ? $('#undo') : $('#redo')).onclick();
+    stat.textContent = n === 2 ? '戻しました（2本指でたたく）' : '進めました（3本指でたたく）';
+  };
+  document.addEventListener('touchend', tapEnd);
+  document.addEventListener('touchcancel', tapEnd);
   // Safari が画面全体を拡大しないようにする（ツールバーまで大きくなるため）
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   addEventListener('resize', () => { if (zoomMode === 'fit') setScale(fitScale(), 'fit'); });
@@ -1052,7 +1114,15 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   let si = widths[pens.si] ? pens.si : 1;
   color = (Array.isArray(pens.c) ? pens.c[pens.ci] : pens.c) || 'k';   // 前の版はツールバーに色を3つ持っていた
   size = widths[si];
-  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si }));
+  let byPr = !!pens.pr;   // 筆圧のペン（小窓の一番上の「一定｜筆圧」）
+  const savePens = () => store.set(PREF + ':pens', JSON.stringify({ c: color, s: widths, si, pr: byPr ? 1 : 0 }));
+  const kindBtns = [...document.querySelectorAll('#pop-kind button')];
+  // 投げ縄で選んだ線の「色・太さ」では出さない（ペンの種類は書くときに決める）
+  function showKind() {
+    $('#pop-kind').hidden = popFor === selPen;
+    kindBtns.forEach((x) => x.setAttribute('aria-pressed', String((x.dataset.k === 'pr') === byPr)));
+  }
+  kindBtns.forEach((x) => x.onclick = () => { byPr = x.dataset.k === 'pr'; savePens(); showKind(); });
   const ink = (c) => /^#/.test(c) ? c : `var(--ink-${c})`;
   const swatch = (el, c) => { el.className = 'sw'; el.style.background = ink(c); };
   const dotSize = (el, s) => { const w = Math.max(3, Math.min(16, s * 2)) + 'px'; el.style.width = el.style.height = w; };
@@ -1107,7 +1177,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     popFor = btn;
     popPen.hidden = kind !== 'p'; popEr.hidden = kind !== 'e';
     if (kind === 'e') { for (const x of popEr.querySelectorAll('[data-m]')) x.setAttribute('aria-pressed', String(x.dataset.m === eraser.m)); erRange.value = eraser.r; ringSize(eraser.r); armClear(false); }
-    else { showColors(); showSizes(); }
+    else { showKind(); showColors(); showSizes(); }
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
     pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
@@ -1135,7 +1205,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const list = strokes.slice(); removeAll(list); push({ type: 'erase', list });
     stat.textContent = `${list.length}画を消しました（「戻す」で戻せます）`;
   };
-  $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); };
+  $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); bar.classList.toggle('finger', finger); showMore(false); };
+  // 幅が狭いとき（Claude と画面を分けたときなど）は、拡大率・指で書く・設定を「…」の中に入れる。選ぶか外を触ると閉じる
+  const moreBtn = $('#more');
+  function showMore(on) { bar.classList.toggle('more', on); moreBtn.setAttribute('aria-expanded', String(on)); }
+  moreBtn.onclick = () => showMore(!bar.classList.contains('more'));
+  document.addEventListener('pointerdown', (e) => { if (bar.classList.contains('more') && !e.target.closest('#g-more')) showMore(false); }, true);
+  $('#zoomv').addEventListener('change', () => showMore(false));
+  $('#gear').addEventListener('click', () => showMore(false));
   $('#hint-x').onclick = () => { $('#hint').hidden = true; store.set(PREF + ':hint', '0'); };
   if (store.get(PREF + ':hint') === '0') $('#hint').hidden = true;
 
@@ -1215,7 +1292,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     toolBtns[3].click(); loopBack = 'pen';
     lasso = poly; finishLasso();
     // そのままペンを動かすと、選んだ線を動かせる
-    if (sel.length) drag = { x: loopAt[0], y: loopAt[1], dx: 0, dy: 0 };
+    if (sel.length) grab('move', -1, ...loopAt);
   }
   let cur = null, curId = null, curType = '', curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
   let t0 = 0, samples = 0, frames = 0;
@@ -1259,7 +1336,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (pieces.has(s)) pieces.delete(s); else erased.push(s);
     for (const pts of runs) {
       if (pts.length < 2) continue;
-      const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts };
+      const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, ...(s.pr ? { pr: 1 } : {}), pts };
       bbox(n); addAll([n]); pieces.add(n);
     }
   }
@@ -1324,12 +1401,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     return hit.length ? hit : null;
   }
   // ---------- 投げ縄 ----------
-  // 囲んだ線を選び、ドラッグで移動・色や太さの変更・削除ができる。
+  // 囲んだ線を選び、ドラッグで移動・色や太さの変更・複製・削除ができる。選んだ枠の角のつまみで大きさ、上の丸のつまみで向きを変える。
   // 移動や変更は「元の線を消して新しい線を足す」操作として記録し、移動先の段落に付け直す
   let sel = [], picked = [], lassoBox = null, lasso = null, drag = null;   // picked: 囲んだ段落の番号
+  // drag: 選んだ線を動かしている間 { k（move: 移動・size: 大きさ・turn: 回転）, i（つまみ）, x, y（押した位置）, box（押したときの枠）, M（動かし方） }
   const lassoEl = document.createElementNS(NS, 'path'); lassoEl.setAttribute('class', 'lasso');
   const selEl = document.createElementNS(NS, 'rect'); selEl.setAttribute('class', 'sel'); selEl.setAttribute('rx', 6);
+  const gripG = document.createElementNS(NS, 'g'); gripG.setAttribute('class', 'grip');
   const selMenu = $('#selmenu');
+  // 紙の座標の動かし方 M = [a, b, c, d, e, f]: (x, y) -> (a x + c y + e, b x + d y + f)（SVG の matrix と同じ並び）
+  const M0 = [1, 0, 0, 1, 0, 0];
+  const mapPt = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
+  const TURN = 28;   // 回転のつまみを枠の上にどれだけ離すか（画面の px）
   function inPoly(x, y, poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -1343,22 +1426,49 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const s of sel) { const ty = top(s), pad = s.tool === 'hl' ? 8 : s.s; a = Math.min(a, s.bbox[0] - pad); b = Math.min(b, s.bbox[1] + ty - pad); c = Math.max(c, s.bbox[2] + pad); d = Math.max(d, s.bbox[3] + ty + pad); }
     return [a - 6, b - 6, c + 6, d + 6];
   }
-  function showSel(dx = 0, dy = 0) {
-    if (!sel.length && !picked.length) { selEl.remove(); selMenu.hidden = true; return; }
-    const [a, b, c, d] = sel.length ? selBox() : lassoBox;
-    selEl.setAttribute('x', a + dx); selEl.setAttribute('y', b + dy);
+  // 選んだ枠のつまみの位置: 0〜3 は角（左上から時計回り）、4 は上の回転のつまみ
+  function gripPts() {
+    const [a, b, c, d] = selBox();
+    return [[a, b], [c, b], [c, d], [a, d], [(a + c) / 2, b - TURN / scale]];
+  }
+  // (x, y) に近いつまみ { i, d（距離） }。どれにも触れていなければ null
+  function gripAt(x, y) {
+    if (!sel.length) return null;
+    let at = null;
+    gripPts().forEach(([gx, gy], i) => { const d = Math.hypot(gx - x, gy - y); if (d < 18 / scale && (!at || d < at.d)) at = { i, d }; });
+    return at;
+  }
+  function showGrips(M) {
+    if (!sel.length) { gripG.remove(); return; }
+    const g = gripPts().map(([x, y]) => M ? mapPt(M, x, y) : [x, y]), r = 6 / scale;
+    const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+    gripG.replaceChildren(mk('line', { x1: (g[0][0] + g[1][0]) / 2, y1: (g[0][1] + g[1][1]) / 2, x2: g[4][0], y2: g[4][1] }),
+      ...g.slice(0, 4).map(([x, y]) => mk('rect', { x: x - r, y: y - r, width: 2 * r, height: 2 * r, rx: 2 / scale })),
+      mk('circle', { cx: g[4][0], cy: g[4][1], r: 7 / scale }));
+    svg.appendChild(gripG);
+  }
+  function showSel() {
+    if (!sel.length && !picked.length) { selEl.remove(); gripG.remove(); selMenu.hidden = true; return; }
+    const [a, b, c, d] = sel.length ? selBox() : lassoBox, M = drag && drag.M;
+    selEl.setAttribute('x', a); selEl.setAttribute('y', b);
     selEl.setAttribute('width', c - a); selEl.setAttribute('height', d - b);
+    if (M) selEl.setAttribute('transform', `matrix(${M.join(' ')})`); else selEl.removeAttribute('transform');
     svg.appendChild(selEl);
-    selMenu.hidden = false;
-    selMenu.style.left = Math.max(0, (a + dx) * scale) + 'px';
-    selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
+    showGrips(M);
+    selMenu.hidden = !!drag;   // 動かしている間はメニューを隠す
+    if (drag) return;
     $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
-    $('#sel-del').hidden = !sel.length;
+    $('#sel-del').hidden = $('#sel-dup').hidden = !sel.length;
     selPen.hidden = !sel.some((s) => s.tool !== 'hl');
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
     $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
     $('#sel-ungap').hidden = !box || !spaceIn(box);
+    // メニューは枠の上（線を選んでいれば回転のつまみの分も空ける）。ツールバーに隠れるなら枠の下、そこも画面に入らなければツールバーのすぐ下
+    const h = selMenu.offsetHeight, sz = sizer.getBoundingClientRect(), y0 = Math.max(0, bar.getBoundingClientRect().bottom + 4 - sz.top);
+    const up = b * scale - h - 8 - (sel.length ? TURN + 8 : 0), down = d * scale + 14;
+    selMenu.style.left = Math.max(0, a * scale) + 'px';
+    selMenu.style.top = (up >= y0 ? up : sz.top + down + h <= innerHeight ? down : y0) + 'px';
   }
   function clearSel() {
     sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null);
@@ -1383,19 +1493,24 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
     picked = [...set].sort((x, y) => x - y);
     showSel(); setEdit(sel.length === 1 ? sel[0] : null);
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・「色・太さ」で変更）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・角で大きさ・上の丸で向き）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
   }
-  // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
-  function rebuild(dx, dy, patch) {
-    const from = sel, to = from.map((s) => {
+  // 選んだ線を M で動かした新しい線（色・太さの変更 patch も入れる）。大きさを変えたときは、線の太さも同じ割合で変える
+  function moved(M, patch) {
+    const f = Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2])), rot = Math.atan2(M[1], M[0]);
+    return sel.map((s) => {
       const ty = top(s);
-      const abs = s.pts.map(([x, y, p]) => [x + dx, y + ty + dy, p]);
+      const abs = s.pts.map(([x, y, p]) => [...mapPt(M, x, y + ty), p]);
       let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
       const b = blockAt(minY), t = tops[b] - (toSto(b, minY - tops[b]) - (minY - tops[b]));   // たたんだ余白の下なら、開いたときの位置にする
-      const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
-      if (s.g) n.g = moveG(s.g, dx, ty + dy - t);
+      const n = { id: newId(), b, tool: s.tool, c: s.c, s: f === 1 || s.tool === 'hl' ? s.s : Math.max(.3, Math.round(s.s * f * 100) / 100), pen: s.pen, ...(s.pr ? { pr: 1 } : {}), pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
+      if (s.g) n.g = mapG(s.g, (x, y) => { const q = mapPt(M, x, y + ty); q[1] -= t; return q; }, f, rot);
       bbox(n); return n;
     });
+  }
+  // 選んだ線を作り直す（M: 移動・大きさ・回転、patch: 色・太さの変更）
+  function rebuild(M, patch) {
+    const from = sel, to = moved(M, patch);
     removeAll(from); addAll(to);
     push({ type: 'replace', from, to });
     sel = to; showSel(); setEdit(sel.length === 1 ? sel[0] : null);
@@ -1405,9 +1520,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!sel.some((s) => s.tool !== 'hl')) return;
     const keep = sel.filter((s) => s.tool === 'hl');
     const all = sel; sel = all.filter((s) => s.tool !== 'hl');
-    rebuild(0, 0, sub);
+    rebuild(M0, sub);
     sel = sel.concat(keep); showSel();
   }
+  // 複製: 少し右下にずらして写し、写した方を選んだままにする（そのままドラッグで動かせる）
+  $('#sel-dup').onclick = () => {
+    if (!sel.length) return;
+    const o = 24 / scale, to = moved([1, 0, 0, 1, o, o], {});
+    addAll(to); push({ type: 'add', list: to });
+    sel = to; picked = [...new Set([...picked, ...to.map((s) => s.b)])].sort((x, y) => x - y);
+    showSel(); setEdit(sel.length === 1 ? sel[0] : null);
+    stat.textContent = `${to.length}画を複製しました（ドラッグで動かせます）`;
+  };
   $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
   $('#sel-x').onclick = clearSel;
   $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = '余白を入れました'; };
@@ -1424,26 +1548,57 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     stat.textContent = lineSpace(sum / poly.length) ?? '';
     return true;
   }
+  // 選んだ線を動かし始める（k: move・size・turn、i: つまみ）
+  function grab(k, i, x, y) { drag = { k, i, x, y, box: selBox(), M: M0 }; hdG.remove(); }
   function lassoDown(e) {
     const [x, y] = toPage(e);
     if (sel.length) {
-      const [a, b, c, d] = selBox();
-      if (x >= a && x <= c && y >= b && y <= d) { drag = { x, y, dx: 0, dy: 0 }; selMenu.hidden = true; return; }
+      const g = gripAt(x, y), [a, b, c, d] = selBox();
+      if (g) { grab(g.i < 4 ? 'size' : 'turn', g.i, x, y); showSel(); return; }
+      if (x >= a && x <= c && y >= b && y <= d) { grab('move', -1, x, y); selMenu.hidden = true; return; }
     }
     if (sel.length || picked.length) clearSel();
     if (tool !== 'ls') return;
     lasso = [[x, y]];
     lassoEl.setAttribute('d', ''); svg.appendChild(lassoEl);
   }
+  // 押した位置から (x, y) までペンを動かしたときの、選んだ線の動かし方
+  function dragM(x, y) {
+    const { k, i, box: [a, b, c, d] } = drag;
+    if (k === 'move') return [1, 0, 0, 1, x - drag.x, y - drag.y];
+    if (k === 'size') {
+      // 角のつまみ: 向かいの角を止めたまま、縦横の比を変えずに大きさを変える（押した位置からの、枠の対角線の向きの動きで決める）
+      const C = [[a, b], [c, b], [c, d], [a, d]], [ox, oy] = C[(i + 2) % 4], [cx, cy] = C[i], l = Math.hypot(cx - ox, cy - oy);
+      const along = (px, py) => ((px - ox) * (cx - ox) + (py - oy) * (cy - oy)) / l;
+      const f = Math.max(.1, 16 / l, Math.min(10, along(x, y) / Math.max(1, along(drag.x, drag.y))));
+      stat.textContent = `大きさ ${Math.round(f * 100)}%`;
+      return [f, 0, 0, f, ox * (1 - f), oy * (1 - f)];
+    }
+    // 回転のつまみ: 枠のまん中のまわりに回す。0・90・180・270 度の近くではそろえる
+    const mx = (a + c) / 2, my = (b + d) / 2;
+    const r = snapRot(Math.atan2(y - my, x - mx) - Math.atan2(drag.y - my, drag.x - mx), 5 * DEG), co = Math.cos(r), si = Math.sin(r);
+    stat.textContent = `向き ${(Math.round(r / DEG) % 360 + 540) % 360 - 180}°`;
+    return [co, si, -si, co, mx - co * mx + si * my, my - si * mx - co * my];
+  }
+  // 動かしている間は線を作り直さず、SVG の変形で見せる（離したときに作り直す）。マーカーは太さが変わらないので、大きさを変えるときだけ描き直す
+  function previewSel() {
+    const M = drag.M;
+    for (const s of sel) {
+      const ty = top(s);
+      if (s.tool === 'hl' && drag.k === 'size') {
+        render(s, s.pts.map(([x, y, p]) => { const q = mapPt(M, x, y + ty); return [q[0], q[1] - ty, p]; }), true);
+        s.el.setAttribute('transform', `translate(0 ${ty})`);
+      }
+      else s.el.setAttribute('transform', `matrix(${M[0]} ${M[1]} ${M[2]} ${M[3]} ${M[2] * ty + M[4]} ${M[3] * ty + M[5]})`);
+    }
+    showSel();
+  }
+  function unpreview(k) { for (const s of sel) { if (k === 'size' && s.tool === 'hl') render(s, null, true); place(s); } }
   function lassoMove(list) {
     const last = toPage(list[list.length - 1]);
     if (drag) {
-      drag.dx = last[0] - drag.x; drag.dy = last[1] - drag.y;
-      if (!raf) raf = requestAnimationFrame(() => {
-        raf = 0; if (!drag) return;
-        for (const s of sel) s.el.setAttribute('transform', `translate(${drag.dx} ${top(s) + drag.dy})`);
-        showSel(drag.dx, drag.dy); selMenu.hidden = true;
-      });
+      drag.M = dragM(last[0], last[1]);
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (drag) previewSel(); });
       return;
     }
     if (!lasso) return;
@@ -1455,11 +1610,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   function lassoUp() {
     if (drag) {
-      const { dx, dy } = drag; drag = null;
-      if (Math.hypot(dx, dy) < 2) { for (const s of sel) place(s); showSel(); return; }
-      rebuild(dx, dy, {});
+      const { k, M } = drag; drag = null;
+      unpreview(k);
+      // ほとんど動かしていなければ何もしない
+      if (k === 'move' ? Math.hypot(M[4], M[5]) < 2 : Math.abs(M[0] - 1) < .01 && Math.abs(M[1]) < .005) { showSel(); showHandles(); if (k !== 'move') stat.textContent = ''; return; }
+      rebuild(M, {});
       picked = [...new Set([...picked, ...sel.map((s) => s.b)])].sort((x, y) => x - y);
-      stat.textContent = `${sel.length}画を移動しました`;
+      const n = sel.length;
+      stat.textContent = { move: `${n}画を移動しました`, size: `${n}画の大きさを変えました`, turn: `${n}画の向きを変えました` }[k];
       return;
     }
     if (lasso) finishLasso();
@@ -1699,7 +1857,11 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     qs.replaceChildren(...[...g].map(([k, n]) => {
       const m = document.createElement('button');
       m.type = 'button'; m.className = 'qm'; m.dataset.b = k; m.textContent = n > 1 ? 'Q' + n : 'Q';
-      m.classList.toggle('wait', !answers.some((a) => anchor(a) === k));
+      const here = answers.filter((a) => anchor(a) === k), r = here.map(rateOf);
+      m.classList.toggle('wait', !here.length);
+      m.classList.toggle('ok', here.length > 0 && r.every((x) => x === 'ok'));   // 全部わかった: 薄く「Q✓」
+      m.classList.toggle('no', r.includes('no'));                               // まだ: 赤い縁
+      if (m.classList.contains('ok')) m.textContent = n > 1 ? 'Q✓' + n : 'Q✓';
       m.setAttribute('aria-expanded', String(openQ.has(k)));
       m.setAttribute('aria-label', 'Claudeの答え');
       return m;
@@ -1721,7 +1883,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const a of answers.filter((x) => anchor(x) === k)) {
       const d = document.createElement('div'); d.className = 'a';
       d.innerHTML = renderMarkdown(a.md, book && book.images);
-      box.append(d);
+      const mk = document.createElement('div'); mk.className = 'mk'; mk.dataset.id = a.id;
+      for (const [m, t] of [['ok', 'わかった'], ['no', 'まだ']]) {
+        const x = document.createElement('button'); x.type = 'button'; x.dataset.m = m; x.textContent = t;
+        x.setAttribute('aria-pressed', String(rateOf(a) === m)); mk.append(x);
+      }
+      d.append(mk); box.append(d);
     }
     blocks[k].after(box);
   }
@@ -1753,6 +1920,273 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     } catch {}
   }
 
+  // ---------- わかった・まだ ----------
+  // 答えごとに「わかった」「まだ」を付ける（もう一度押すと外す）。AI が理解度をつかめるように、ドライブの <本>/marks.json に置く:
+  // { "<章>-<質問ID>": { m: "ok" | "no" | null（外した）, t: 押した時刻, c: 章, b: [段落] } }。端末は kv 'marks:<本>' = { m: 同じもの, dirty: 未送信 }。
+  // ほかの端末とは、押した時刻の新しい方を残してまとめる
+  let rates = {}, ratesDirty = false, ratesN = 0, ratesT = 0;
+  const ratesKey = () => 'marks:' + bookKey();
+  const rateOf = (a) => (rates[CH + '-' + a.id] || {}).m || null;
+  const saveRates = () => kv.set(ratesKey(), { m: rates, dirty: ratesDirty }).catch(() => {});
+  function useRates(v) { rates = (v && v.m) || {}; ratesDirty = !!(v && v.dirty); }
+  function setRate(a, m) {
+    rates[CH + '-' + a.id] = { m: rateOf(a) === m ? null : m, t: new Date().toISOString(), c: CH, b: a.b };
+    ratesDirty = true; ratesN++; saveRates(); showMarks();
+    stat.textContent = rateOf(a) === 'ok' ? '「わかった」にしました' : rateOf(a) === 'no' ? '「まだ」にしました（Q の縁が赤くなります）' : '印を外しました';
+    clearTimeout(ratesT); ratesT = setTimeout(syncRates, 2000);
+  }
+  const mergeRates = (a, b) => { const out = { ...a }; for (const k in b) if (!out[k] || (b[k].t || '') > (out[k].t || '')) out[k] = b[k]; return out; };
+  // ドライブの marks.json を取り込み、未送信の印があれば書き足す（他の端末が先に書いていたら、取り直してもう一度）
+  async function syncRates() {
+    if (!canPush() || !ghMoved() || !book) return;
+    const bk = bookKey(), R = where(), path = bookDir() + '/marks.json';
+    try {
+      for (let i = 0; i < 2; i++) {
+        const f = await R.get(path), n = ratesN, out = mergeRates(f ? JSON.parse(f.text || '{}') : {}, rates);
+        if (bk !== bookKey()) return;
+        if (ratesDirty) try { await R.put(path, JSON.stringify(out, null, 1), f ? f.sha : null); } catch (e) { if (e.status === 409) continue; throw e; }
+        if (bk !== bookKey()) return;
+        rates = mergeRates(out, rates);
+        if (n === ratesN) ratesDirty = false;
+        saveRates(); showMarks();
+        if (ratesDirty) { clearTimeout(ratesT); ratesT = setTimeout(syncRates, 2000); }
+        return;
+      }
+    } catch (e) { if (e.drive) needLogin(); }
+  }
+  // Pencil で押したときは click が来ないので pointerup で（「Q」と同じ）
+  let rateDown = null;
+  doc.addEventListener('pointerdown', (e) => { rateDown = e.target.closest('.mk button'); });
+  doc.addEventListener('pointerup', (e) => { const x = e.target.closest('.mk button'); if (x && x === rateDown) pickRate(x); rateDown = null; });
+  doc.addEventListener('click', (e) => { const x = e.target.closest('.mk button'); if (x && e.detail === 0) pickRate(x); });
+  function pickRate(x) { const a = answers.find((y) => y.id === x.parentElement.dataset.id); if (a) setRate(a, x.dataset.m); }
+
+  // ---------- Claude と並べて勉強する（いま.md） ----------
+  // iPad の画面を Claude アプリと分けて使うとき、チャットの質問が「どこのことか」Claude に分かるように、ドライブの「Ink Reader/いま.md」に
+  // 画面に見えている所（段落の本文・ページ）と最後に書いた所を書き、絵（now.png: 見えている所、last.png: 最後に書いた線のまわり）も置く。
+  // 書いている間・眺めているだけの間は送らない。ペンを離して・スクロールが止まって約 2 秒たち、前に送ったときと変わっていれば上書きする
+  const NOW_MS = 2000;
+  let nowT = 0, nowRun = null, nowSent = '', lastSent = 0, nowWait = 0, ansAt = 0;
+  // 最後に書いた所 { k: 本, title, c: 章, label, b: 段落, t: 時刻, y: [上, 下]（紙の px）, md: 段落の本文（絵を作ったときに入れる） }。開き直しても残す
+  let wrote = (() => { try { return JSON.parse(store.get(PREF + ':wrote')) || null; } catch { return null; } })();
+  function nowSoon(ms = NOW_MS) {
+    if (!driveOn()) return;
+    clearTimeout(nowT); nowT = setTimeout(upNow, ms);
+  }
+  // 書いた・消した・動かした線の場所を覚える（touch から）
+  function noteWrite(list) {
+    if (!CH || !book || !driveOn()) return;
+    let b = null, y0 = Infinity, y1 = -Infinity;
+    for (const s of list) if (s.bbox) { const t = top(s); y0 = Math.min(y0, s.bbox[1] + t); y1 = Math.max(y1, s.bbox[3] + t); b = s.b; }
+    if (b == null) { b = list.length ? list[list.length - 1].b : null; if (!blocks[b]) return; y0 = tops[b]; y1 = y0 + 40; }   // 余白だけ変えたとき
+    const ch = book.chapters.find((c) => c.id === CH) || {};
+    wrote = { k: bookKey(), title: book.title || '', pdf: isPdf(), c: CH, label: ch.label || '', b, t: Date.now(), y: [y0, y1], md: null };
+    nowSoon();
+  }
+  // 画面に見えている紙の範囲（ツールバーの下から画面の下まで。紙の px）と、そこに見えている段落（ページ）
+  function inView() {
+    const r = page.getBoundingClientRect(), end = page.offsetHeight;
+    const y0 = Math.max(0, (bar.getBoundingClientRect().bottom - r.top) / scale), y1 = Math.min(end, (innerHeight - r.top) / scale), bs = [];
+    for (let b = Math.max(1, blockAt(y0)); b < blocks.length && tops[b] < y1; b++) {
+      const z = b + 1 < blocks.length ? tops[b + 1] : end;
+      if (Math.min(y1, z) - Math.max(y0, tops[b]) > 12) bs.push(b);
+    }
+    return { y0, y1, bs };
+  }
+  // md の段落の文字を、画面と同じ位置に 1 文字ずつ描く（Claude が手書きと文字の位置を合わせられるように）。数式も記号ごと、分数の線も。図は枠だけ
+  function drawText(g, el) {
+    const r0 = page.getBoundingClientRect(), rg = document.createRange(), tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const at = (r) => [(r.left - r0.left) / scale, (r.top - r0.top) / scale, r.width / scale, r.height / scale];
+    g.textBaseline = 'middle'; g.textAlign = 'left'; g.fillStyle = '#1a1e26';
+    let n = 0;
+    for (let node; (node = tw.nextNode()) && n < 20000;) {
+      const t = node.data, pe = node.parentElement;
+      if (!t.trim() || pe.closest('.katex-mathml')) continue;   // 読み上げ用の隠れた数式は描かない
+      const cs = getComputedStyle(pe);
+      g.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      for (let i = 0; i < t.length;) {
+        const k = t.codePointAt(i) > 0xffff ? 2 : 1;
+        if (t[i].trim()) {
+          rg.setStart(node, i); rg.setEnd(node, i + k);
+          const [x, y, , h] = at(rg.getBoundingClientRect());
+          if (h) { g.fillText(t.slice(i, i + k), x, y + h / 2); n++; }
+        }
+        i += k;
+      }
+    }
+    for (const f of el.querySelectorAll('.frac-line')) { const [x, y, w, h] = at(f.getBoundingClientRect()); g.fillRect(x, y, w, Math.max(.6, h)); }
+    // 根号・伸びる括弧などは KaTeX の SVG（はみ出す分は親で隠している）
+    for (const sv of el.querySelectorAll('.katex svg')) {
+      const vb = sv.viewBox && sv.viewBox.baseVal, [x, y, w, h] = at(sv.getBoundingClientRect()), [cx, cy, cw, ch] = at(sv.parentElement.getBoundingClientRect());
+      if (!vb || !vb.width || !vb.height) continue;
+      const k = Math.max(w / vb.width, h / vb.height);
+      g.save(); g.beginPath(); g.rect(cx, cy, cw, ch); g.clip();
+      g.translate(x, y); g.scale(k, k); g.translate(-vb.x, -vb.y);
+      for (const d of sv.querySelectorAll('path')) g.fill(new Path2D(d.getAttribute('d')));
+      g.restore();
+    }
+    for (const im of el.querySelectorAll('img')) { const [x, y, w, h] = at(im.getBoundingClientRect()); g.strokeRect(x, y, w, h); g.fillText('図', x + 6, y + 12); }
+  }
+  // 紙の [y0, y1) を絵にする。PDF はページの絵、md は段落の枠と本文の文字。その上に手書きと、段落（ページ）の番号の札
+  function paperImage(y0, y1) {
+    const h = Math.max(1, y1 - y0), k = Math.min(1.5, Math.sqrt(4e6 / (W * h))), cv = document.createElement('canvas');
+    cv.width = Math.ceil(W * k); cv.height = Math.ceil(h * k);
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.scale(k, k); g.translate(0, -y0);
+    const bs = [];
+    for (let b = Math.max(1, blockAt(y0)); b < blocks.length && tops[b] < y1; b++) bs.push(b);
+    g.strokeStyle = '#c3c9d4'; g.lineWidth = 1;
+    for (const b of bs) {
+      const el = blocks[b], t = tops[b];
+      if (isPdf()) {
+        const p = drawn.get(b), ky = p && p.cv.height / pageH(b);
+        if (p && p.cv.width) for (const s of segs(b)) g.drawImage(p.cv, 0, s.c0 * ky, p.cv.width, (s.c1 - s.c0) * ky, 0, t + s.v, W, s.c1 - s.c0);
+        g.strokeRect(.5, t + .5, W - 1, el.offsetHeight - 1);
+      } else { g.strokeRect(el.offsetLeft - 6, t - 3, el.offsetWidth + 12, el.offsetHeight + 6); drawText(g, el); }
+    }
+    drawInk(g, strokes.filter((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > y0 && s.bbox[1] + t < y1; }));
+    g.font = '700 12px sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'center';
+    for (const b of bs) {
+      const t = String(b), w = g.measureText(t).width + 12, x = isPdf() ? 6 : blocks[b].offsetLeft - 10 - w, y = Math.max(tops[b], y0 + 2);
+      g.fillStyle = 'rgba(39,71,201,.9)'; g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, 18, 9); else g.rect(x, y, w, 18); g.fill();
+      g.fillStyle = '#fff'; g.fillText(t, x + w / 2, y + 9.5);
+    }
+    return cv;
+  }
+  const p2 = (n) => String(n).padStart(2, '0');
+  const clock = (t, day) => { const d = new Date(t); return (day ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` : '') + `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+  const range = (bs) => bs.length ? bs[0] + (bs.length > 1 ? '〜' + bs[bs.length - 1] : '') : '';
+  // 段落の本文（md の本）。長いときは途中まで
+  function blockTexts(bs, max = 6000) {
+    const out = []; let n = 0;
+    for (const b of bs) {
+      const t = blockMd(blocks[b]);
+      if (n + t.length > max && out.length) { out.push('…（ここまで。続きは本文のファイルで読めます）'); break; }
+      out.push(`**段落 ${b}**\n${t}`); n += t.length;
+    }
+    return out.join('\n\n');
+  }
+  function nowText(v, hasNow) {
+    const d = 'Ink Reader/' + bookDir(), ch = book.chapters.find((c) => c.id === CH) || {}, pdf = isPdf(), unit = pdf ? 'ページ' : '段落';
+    const src = pdf ? `元の PDF は ${d}/book.pdf（10MB より大きい本は置いていません）`
+      : isLocal() ? `本文: ${d}/chapters/${CH}.md` : `本文: GitHub の ${cfg.repo} の ${cfg.book}/${ch.file || ''}`;
+    const out = [
+      '<!-- Ink Reader（iPad）が書き直し続けるファイルです。書き換えないでください -->',
+      '# いま Ink Reader で見ている所', '',
+      `更新: ${clock(Date.now(), true)}（iPad で書くかスクロールして、約2秒たつと書き直します。話と合わないほど古いときは、iPad のアプリがドライブにつながっていないかもしれません）`, '',
+      `- 本: 「${book.title || ''}」（ドライブのフォルダ: ${d}）`,
+      pdf ? '- PDF の本です。番号はページ番号（アプリの書き込み・答えの番号と同じ）' : `- 章: ${CH}「${ch.label || ''}」`,
+      `- ${src}`,
+      pdf ? null : '- 段落番号は、空行で区切った段落・見出し・数式のかたまりを章の上から 1, 2, … と数えたもの（アプリの書き込み・答えの番号と同じ）',
+      `- 書き込みの座標（アプリ用）: ${d}/ink/${CH}.json`,
+      '', '## 画面に見えている所', '',
+    ];
+    if (!v.bs.length) out.push('（本文は見えていません）');
+    else {
+      out.push((pdf ? range(v.bs) + 'ページ。' : `段落 ${range(v.bs)}。`) + (hasNow
+        ? `絵: Ink Reader/now.png（見えている所だけ。${pdf ? 'ページの絵に手書きを重ねたもの' : '本文の文字に手書きを重ねたもの。段落を枠で囲んである'}。左の青い札が${unit}番号）`
+        : '見えている所に手書きはありません（now.png は古いので見ないでください）'));
+      if (!pdf) out.push('', blockTexts(v.bs));
+    }
+    out.push('', '## 最後に書いた所', '');
+    if (!wrote) out.push('（まだ書いていません）');
+    else {
+      const here = wrote.k === bookKey(), seen = here && wrote.c === CH && v.bs.includes(wrote.b);
+      const at = !here ? `別の本「${wrote.title}」の` : wrote.c !== CH ? `章 ${wrote.c}「${wrote.label}」の` : '';
+      out.push(`${clock(wrote.t, true)} に、${at}${wrote.pdf ? wrote.b + 'ページ' : '段落 ' + wrote.b}に書きました${seen ? '（いま画面に見えています）' : ''}。`
+        + (wrote.img ? '絵: Ink Reader/last.png（書いた線のまわりを切り抜いたもの）' : ''));
+      out.push('「ここ」「この式」などは、たいていこの所（ペンで丸や線を書いた所）のことです。');
+      if (wrote.md) out.push('', `**段落 ${wrote.b}**\n${wrote.md}`);
+    }
+    return out.filter((x) => x != null).join('\n') + '\n';
+  }
+  async function upNow() {
+    if (nowRun) { nowRun.again = true; return; }
+    if (!driveOn() || !CH || !book || doc.classList.contains('loading') || document.visibilityState === 'hidden') return;
+    if (penDown || pinch || curId !== null) return nowSoon();
+    const v = inView();
+    // PDF のページの絵がまだ描けていなければ、少し待つ（3 回まで）
+    if (isPdf() && v.bs.some((b) => !drawn.has(b)) && nowWait++ < 3) return nowSoon(1000);
+    nowWait = 0;
+    noteRead(v);   // 読んだ跡は、ドライブとのつながりが切れている間も端末に貯める
+    if (!drive.ok() || !online()) return;
+    const key = [bookKey(), CH, Math.round(v.y0 / 40), Math.round(v.y1 / 40), wrote && wrote.t].join('|');
+    if (key === nowSent) return;
+    const run = nowRun = {}, bk = bookKey(), ch = CH, busy = () => penDown || pinch || bk !== bookKey() || ch !== CH;
+    try {
+      // 本のフォルダと answers を先に作っておく（まだ書いていない本でも、Claude が「段落に残して」で答えを置けるように）
+      if (ghMoved()) await upBook(bookDir(), bk, book, drive);
+      // 最後に書いた所: 書いたあと最初の 1 回だけ、線のまわりを切り抜いて置く
+      if (wrote && wrote.t !== lastSent && wrote.k === bk && wrote.c === ch) {
+        const w = wrote, m = Math.max(120, (300 - (w.y[1] - w.y[0])) / 2), y0 = Math.max(0, w.y[0] - m), y1 = Math.min(page.offsetHeight, w.y[1] + m, y0 + 1600);
+        w.md = isPdf() || !blocks[w.b] ? null : blockMd(blocks[w.b]).slice(0, 3000);
+        const cv = paperImage(y0, y1), bl = await pngOf(cv);
+        cv.width = cv.height = 0;
+        if (busy()) return;
+        await drive.over('last.png', bl);
+        w.img = true; lastSent = w.t;
+        store.set(PREF + ':wrote', JSON.stringify(w));
+      }
+      // 見えている所: PDF はいつも、md は手書きが見えているときだけ
+      const ink = strokes.some((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > v.y0 && s.bbox[1] + t < v.y1; });
+      const hasNow = v.bs.length > 0 && (isPdf() || ink);
+      if (hasNow) {
+        const cv = paperImage(v.y0, v.y1), bl = await pngOf(cv);
+        cv.width = cv.height = 0;
+        if (busy()) return;
+        await drive.over('now.png', bl);
+      }
+      await drive.over('いま.md', nowText(v, hasNow));
+      nowSent = key;
+      pushLog();
+      // Claude が「段落に残して」と言われて答えを置いたかもしれないので、ときどき答えも見に行く（画面を分けているとアプリに戻ったことにならない）
+      if (Date.now() - ansAt > 30000) { ansAt = Date.now(); pullAnswers(CH); }
+    } catch (e) { if (e.drive) needLogin(); }
+    finally { nowRun = null; if (run.again || busy()) nowSoon(); }
+  }
+  addEventListener('scroll', () => nowSoon(), { passive: true });
+  wrap.addEventListener('scroll', () => nowSoon(), { passive: true });
+  addEventListener('resize', () => nowSoon());
+
+  // ---------- 読んだ跡 ----------
+  // AI が「いつ・どこを読み、どこに書いたか」をつかめるように、本ごと・日ごとに <本>/log/<日付>.md を書く（アプリだけが上書きする）。
+  // いま.md を書くとき（スクロールが止まった・書いた）に見えている段落を記録し、同じ章を 10 分以内に続けて見ていれば 1 行にまとめる。送るのは 1 分に 1 回まで
+  const LOG_GAP = 10 * 60000, LOG_MS = 60000;
+  let log = null, logAt = 0, logT = 0, logDirty = false;   // { k: 本, dir, title, pdf, d: 日付, rows: [{ c: 章, l: 章の名前, from, to, lo, hi: 見た段落, w: [書いた段落] }] }
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+  function noteRead(v) {
+    if (!v.bs.length) return;
+    const k = bookKey(), d = today(), now = Date.now(), lo = v.bs[0], hi = v.bs[v.bs.length - 1];
+    if (!log || log.k !== k || log.d !== d) {
+      if (log && logDirty) { logAt = 0; pushLog(); }   // 前の本・前の日の分を送ってから
+      let old = null; try { old = JSON.parse(store.get(PREF + ':log:' + k)); } catch {}
+      log = old && old.d === d ? old : { k, dir: bookDir(), title: book.title || '', pdf: isPdf(), d, rows: [] };
+    }
+    let r = log.rows[log.rows.length - 1];
+    if (!r || r.c !== CH || now - r.to > LOG_GAP) log.rows.push(r = { c: CH, l: (book.chapters.find((c) => c.id === CH) || {}).label || '', from: now, to: now, lo, hi, w: [] });
+    r.to = now; r.lo = Math.min(r.lo, lo); r.hi = Math.max(r.hi, hi);
+    if (wrote && wrote.k === k && wrote.c === CH && wrote.t >= r.from - 10000 && !r.w.includes(wrote.b)) { r.w.push(wrote.b); r.w.sort((a, b) => a - b); }
+    store.set(PREF + ':log:' + k, JSON.stringify(log));
+    logDirty = true;
+  }
+  function logText(L) {
+    const hm = (t) => clock(t).slice(0, 5), nums = (a, b) => a === b ? String(a) : a + '〜' + b, u = L.pdf ? 'ページ' : '';
+    return [`# ${L.d} の読んだ跡（「${L.title}」）`, '',
+      `Ink Reader（iPad）が書いています（書き換えないでください）。時刻は iPad の時計、番号は${L.pdf ? 'ページ' : '段落（章の上から数えたもの。いま.md と同じ）'}。`, '',
+      ...L.rows.map((r) => `- ${hm(r.from)}〜${hm(r.to)} ${L.pdf ? '' : `${r.c}「${r.l}」 段落 `}${nums(r.lo, r.hi)}${u}を見た${r.w.length ? `。書き込み: ${r.w.join(', ')}${u}` : ''}`),
+    ].join('\n') + '\n';
+  }
+  async function pushLog() {
+    clearTimeout(logT);
+    if (!logDirty || !log || !driveOn() || !drive.ok() || !online()) return;
+    const wait = logAt + LOG_MS - Date.now();
+    if (wait > 0) { logT = setTimeout(pushLog, wait); return; }
+    const L = log; logDirty = false; logAt = Date.now();
+    try { await drive.over(L.dir + '/log/' + L.d + '.md', logText(L)); } catch (e) { if (L === log) logDirty = true; if (e.drive) needLogin(); }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && logDirty) { logAt = 0; pushLog(); } });
+
   function frame() {
     raf = 0; frames++;
     if (!cur) return;
@@ -1779,6 +2213,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   const NAMES = { line: '直線', poly: '多角形', ellipse: '楕円', circle: '円' };
   const moveG = (g, dx, dy) => ({ ...g, v: g.k === 'ellipse' || g.k === 'circle' ? [[g.v[0][0] + dx, g.v[0][1] + dy], g.v[1]] : g.v.map(([x, y]) => [x + dx, y + dy]) });
+  // 投げ縄で動かしたときの図形の形（mp: 点の動かし方、f: 大きさの倍率、r: 回した角度）
+  const mapG = (g, mp, f, r) => g.k === 'ellipse' || g.k === 'circle' ? { ...g, v: [mp(...g.v[0]), [g.v[1][0] * f, g.v[1][1] * f]], a: (g.a || 0) + r }
+    : { ...g, v: g.v.map(([x, y]) => mp(x, y)) };
   // 水平・垂直に近い向き（10度まで）と斜め45度に近い向き（4度まで）はそろえる
   const DEG = Math.PI / 180;
   function snapAngle(a, b) {
@@ -1931,7 +2368,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function endHandle() {
     const s = edit, { g0, pts0 } = hdrag; hdrag = null;
     if (JSON.stringify(s.g) === JSON.stringify(g0)) { s.g = g0; s.pts = pts0; render(s, null, true); showHandles(); return; }   // 触っただけ
-    const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, g: s.g, pts: s.pts };
+    const n = { id: newId(), b: s.b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, ...(s.pr ? { pr: 1 } : {}), g: s.g, pts: s.pts };
     s.g = g0; s.pts = pts0; render(s, null, true);
     bbox(n); removeAll([s]); addAll([n]); push({ type: 'replace', from: [s], to: [n] });
     if (sel.includes(s)) { sel = [n]; showSel(); }
@@ -1948,8 +2385,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     curId = e.pointerId; curType = e.pointerType; penDown = true; seen = [e.clientX + ',' + e.clientY];
     t0 = e.timeStamp; samples = 1; frames = 0;
     if (edit && tool !== 'er') {
-      const [x, y] = toPage(e), i = hitHandle(x, y);
-      if (i >= 0) { hdrag = { i, g: cloneG(edit.g), g0: edit.g, pts0: edit.pts }; selMenu.hidden = true; return; }
+      const [x, y] = toPage(e), i = hitHandle(x, y), g = tool === 'ls' && gripAt(x, y);
+      // 選んだ枠のつまみ（大きさ・回転）と重なっていたら、近い方を動かす
+      if (i >= 0 && !(g && g.d < Math.hypot(handlePts(edit)[i][0] - x, handlePts(edit)[i][1] - y))) { hdrag = { i, g: cloneG(edit.g), g0: edit.g, pts0: edit.pts }; selMenu.hidden = true; return; }
       if (tool !== 'ls') setEdit(null);
     }
     if (tool === 'er') { erased = []; pieces = eraser.m === 'part' ? new Set() : null; svg.appendChild(erRing); eraseAt(toPage(e)); return; }
@@ -1957,6 +2395,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const y = toPage(e)[1], b = blockAt(y);
     curTop = tops[b] - (toSto(b, y - tops[b]) - (y - tops[b]));   // たたんだ余白の下では、開いたときの位置で持つ
     cur = { id: newId(), b, tool, c: color, s: size, pen: e.pointerType === 'pen', pts: [toRel(e)] };
+    if (tool === 'pen' && byPr) { cur.pr = 1; prs = { x: e.clientX, y: e.clientY, t: e.timeStamp, f: .5, raw: [], lo: 1, hi: 0, real: false }; pressIn(e, cur.pts[0]); } else prs = null;
     cur.el = document.createElementNS(NS, 'path'); paint(cur.el, cur);
     hold = null; holdC = null; holdT = 0;
     mount(cur); render(cur, null, false);
@@ -1983,8 +2422,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!cur) return;
     if (loopT) { const [x, y] = toPage(list[list.length - 1]); if (Math.hypot(x - loopAt[0], y - loopAt[1]) > 5 / scale) { clearTimeout(loopT); loopT = 0; } }
     if (cur.shape) { adjustLive(toRel(list[list.length - 1])); return; }
-    for (const ev of list) pending.push(toRel(ev));
+    for (const ev of list) pending.push(prs ? pressIn(ev, toRel(ev)) : toRel(ev));
     predicted = e.getPredictedEvents ? clipAhead(pending[pending.length - 1], e.getPredictedEvents().map(toRel)) : [];
+    if (prs) for (const q of predicted) q[2] = pending[pending.length - 1][2];
     if (!raf) raf = requestAnimationFrame(frame);
     // ペンを止めたまま押さえていたら、図形に直す（直線・円・三角・四角。マーカーは直線だけ）
     if (cur.tool === 'pen' || cur.tool === 'hl') {
@@ -1993,6 +2433,22 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (!holdC || Math.hypot(c[0] - holdC[0], c[1] - holdC[1]) > 5) { hold = q; holdC = c; clearTimeout(holdT); holdT = setTimeout(snapShape, 450); }
     }
   });
+  // 筆圧のペン: 筆圧の取れないペン（どの点も同じ値が来る）では、画面の上で書く速さから筆圧を作って点に入れる（ゆっくりは太く、速いと細い）。
+  // 画面の上の速さで決めるので、拡大率によらず同じ書き味になる。筆圧が変わりはじめたら（筆圧の取れるペン）、それまでの点も本当の筆圧に戻す
+  let prs = null;   // 書いている線の { x, y, t（前の点の画面の位置と時刻）, f（作った筆圧）, raw（届いた筆圧）, lo, hi, real }
+  function pressIn(ev, q) {
+    const c = prs;
+    c.raw.push(q[2]); c.lo = Math.min(c.lo, q[2]); c.hi = Math.max(c.hi, q[2]);
+    if (!c.real && c.hi - c.lo >= .03) { c.real = true; cur.pts.concat(pending).forEach((r, i) => { r[2] = c.raw[i]; }); }
+    if (c.real) return q;
+    // 速さ v は画面の px / ms。手で字を書く速さはふつう 0.1〜0.3（秒速 2〜6cm）、はね・はらいで 0.6 ほど。
+    // ふつうの速さでペンの太さの 0.9〜1.2 倍、はね・はらいで 0.5 倍ほど（筆圧 0.5 がペンの太さ）。30ms ほどかけて追いつかせる
+    const dt = ev.timeStamp > c.t ? ev.timeStamp - c.t : 4, v = Math.hypot(ev.clientX - c.x, ev.clientY - c.y) / dt;
+    c.f += (Math.max(.1, Math.min(.9, .75 - v)) - c.f) * (1 - Math.exp(-dt / 30));
+    c.x = ev.clientX; c.y = ev.clientY; c.t = ev.timeStamp;
+    q[2] = Math.round(c.f / PRESS * 100) / 100;
+    return q;
+  }
   // 予測点は、ペンの先から画面の 5px までにとどめる。長く伸ばすと、離したときにその分が消えて線の終わりが途切れて見える
   function clipAhead(from, list) {
     const out = []; let left = 5 / scale, q0 = from;
@@ -2056,7 +2512,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     try { page.releasePointerCapture(curId); } catch {}
     curId = null; penDown = false;
     if (erased) endErase();
-    if (drag) { drag = null; for (const s of sel) place(s); showSel(); }
+    if (drag) { const { k } = drag; drag = null; unpreview(k); showSel(); showHandles(); }
     if (lasso) { lasso = null; lassoEl.remove(); }
     if (cur) { cur.el.remove(); cur = null; pending = []; predicted = []; }
   }
@@ -2309,8 +2765,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
-    const [saved, ans, wait] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id))]);
+    const [saved, ans, wait, rv] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey())]);
     if (my !== opening) return;
+    useRates(rv);
     for (const s of strokes) s.el.remove();
     strokes = []; setEdit(null); undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
@@ -2337,7 +2794,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       }, 3000));
     }
     showPending();
-    lastPull = Date.now(); refreshChapter();
+    lastPull = Date.now(); refreshChapter(); nowSoon();
   }
   function syncNav(id) {
     const i = ids.indexOf(id);
@@ -2379,8 +2836,35 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     blocks[b].classList.toggle('bm', i < 0); showBm();
     stat.textContent = i < 0 ? 'しおりを付けました' : 'しおりを外しました';
   }
-  // box: PDF の検索で見つかった文字の位置（ページ内の紙の px）。そこが画面の上の方に来るようにして、一瞬だけ色を付ける
+  // 目次・しおり・検索・ページ番号で飛んだら、左下に「‹ 〜に戻る」の札を出す。押すと飛ぶ前の所へ戻り、× で消す（次に飛ぶと、その直前の所に変わる）
+  const back = $('#back');
+  let backTo = null;   // { k: 本, c: 章, y, x: 横のスクロール }
+  function placeName() {   // 今見ている所の名前: PDF はページ、md は画面のまん中より前の一番近い見出し（なければ章の名前）
+    if (isPdf()) return curPage() + 'ページ';
+    const y = (innerHeight / 2 - page.getBoundingClientRect().top) / scale;
+    for (let b = Math.min(blockAt(Math.max(0, y)), blocks.length - 1); b > 0; b--) if (/^H[1-4]$/.test(blocks[b].tagName)) return blockTitle(blocks[b]);
+    return (book.chapters.find((x) => x.id === CH) || {}).label || '元の所';
+  }
+  function showBack(to) {
+    backTo = to; back.hidden = !to;
+    if (to) { const t = to.name.length > 16 ? to.name.slice(0, 15) + '…' : to.name; $('#back-t').textContent = t; back.title = to.name + 'に戻る'; }
+  }
+  $('#back-go').onclick = async () => {
+    const to = backTo; showBack(null);
+    if (!to || to.k !== bookKey()) return;
+    if (to.c !== CH) await openChapter(to.c, false);
+    if (to.c !== CH) return;
+    scrollTo(0, to.y); wrap.scrollLeft = to.x;
+  };
+  $('#back-x').onclick = () => showBack(null);
   async function goTo(c, b, flash, box) {
+    const from = CH && book ? { k: bookKey(), c: CH, y: scrollY, x: wrap.scrollLeft, name: placeName() } : null;
+    await jump(c, b, flash, box);
+    // 同じ画面の中で動いただけなら出さない
+    if (from && from.k === bookKey() && (from.c !== CH || Math.abs(scrollY - from.y) > innerHeight / 2)) showBack(from);
+  }
+  // box: PDF の検索で見つかった文字の位置（ページ内の紙の px）。そこが画面の上の方に来るようにして、一瞬だけ色を付ける
+  async function jump(c, b, flash, box) {
     toc.close();
     if (c !== CH) await openChapter(c, false);
     if (c !== CH) return;
@@ -2630,12 +3114,21 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         if (at >= 0 && hits.length < 200) hits.push({ c, b: i + 1, t, at });
       });
     }
+    // Claude の答えも探す（この iPad に読み込んである章の分）。押すとその段落へ飛んで、答えを開く
+    for (const c of book.chapters) {
+      for (const a of parseAnswers(await kv.get(ansKey(c.id)))) {
+        const t = a.md.replace(/^> ?/gm, '').replace(/[$#*`]/g, '').replace(/\s+/g, ' ').trim(), at = t.toLowerCase().indexOf(ql);
+        if (at >= 0 && hits.length < 200) hits.push({ c, b: anchor(a), t, at, ans: true });
+      }
+    }
+    if (my !== searchSeq) return;
     const rows = hits.map((h) => {
       const s = Math.max(0, h.at - 18), frag = document.createElement('span'), m = document.createElement('mark');
       m.textContent = h.t.slice(h.at, h.at + q.length);
       frag.append((s ? '…' : '') + h.t.slice(s, h.at), m, h.t.slice(h.at + q.length, h.at + q.length + 60));
-      const li = isPdf() ? tocItem(frag, '', async () => goTo(CH, h.b, true, pdfHitBox((await ptext)[h.b - 1], h.at, q.length)), h.b + 'ページ')
-        : tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
+      const li = h.ans ? tocItem(frag, 'ans', async () => { await goTo(h.c.id, h.b); if (CH === h.c.id && !openQ.has(h.b)) toggleAns(h.b); }, '答え・' + (isPdf() ? h.b + 'ページ' : h.c.label))
+        : isPdf() ? tocItem(frag, '', async () => goTo(CH, h.b, true, pdfHitBox((await ptext)[h.b - 1], h.at, q.length)), h.b + 'ページ')
+          : tocItem(frag, '', () => goTo(h.c.id, h.b, true), h.c.label);
       li.querySelector('.bm-at').className = 'at';
       return li;
     });
@@ -2688,6 +3181,12 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       switchBook(src);
     }).catch((e) => showDrive(e.message));
   };
+  // Claude と画面を並べて使うとき、Claude のプロジェクトの指示（sakai_study のセッションなら CLAUDE.md）に一度貼っておく文
+  const CLAUDE_NOTE = 'iPad で Ink Reader（手書きのリーダー）と Claude を画面に並べて勉強しています。質問されたら、まず Google ドライブの「Ink Reader/いま.md」を読み、'
+    + 'そこに書いてある絵（Ink Reader/now.png と last.png）も見て、私がいま見ている所と最後に書いた所をつかんでから答えてください。'
+    + '「ここ」「この式」などは、たいてい最後に書いた所（ペンで丸や線を書いた所）のことです。いま.md の更新時刻が話と合わないほど古いときは、iPad のアプリがドライブにつながっているか確かめるよう言ってください。'
+    + '答えを段落に残してと頼まれたら、「Ink Reader/README.md」の手順で答えのファイルを作ってください。';
+  $('#cfg-claude').onclick = async () => showDrive(await copy(CLAUDE_NOTE) ? 'Claude への指示をコピーしました。Claude のプロジェクトの指示に貼ってください' : 'コピーできませんでした');
   function openCfg() {
     drive.prep().catch(() => {});
     showDrive();
@@ -2726,6 +3225,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 一覧は kv 'books' = [{ id, title }]（新しい順）
   function setSrc(v) { src = v; store.set(PREF + ':book', v); }
   function leaveBook() {   // 今の章を保存してから本を切り替える
+    showBack(null);
+    if (logDirty) { logAt = 0; pushLog(); }
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs) persist();
     if (cs && cs.pending.size) pushChapter(CH);
