@@ -169,6 +169,9 @@ html, body, body * { touch-action: manipulation; }
   background: conic-gradient(#e33, #e93, #ed3, #3c5, #3cd, #36e, #93e, #e3a, #e33); }
 #pop-colors .more input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 #ink .hd circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+/* 投げ縄で選んだ枠のつまみ（角の四角: 大きさ、上の丸: 回転） */
+#ink .grip rect, #ink .grip circle { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+#ink .grip line { stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 #pop-pen[hidden], #pop-er[hidden] { display: none; }
 /* 太さ: 3つから選び、下のつまみで選んだ太さを変える */
 #pop-size { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
@@ -371,7 +374,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="t-pen" aria-pressed="true" title="ペン（もう一度押すと色・太さ）"><span class="dot"></span>ペン</button>
     <button id="t-hl" aria-pressed="false" title="マーカー">マーカー</button>
     <button id="t-er" aria-pressed="false" title="消しゴム（もう一度押すと消し方・大きさ）">消しゴム</button>
-    <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・色変更・削除）">投げ縄</button>
+    <button id="t-ls" aria-pressed="false" title="投げ縄（囲んで移動・大きさ・向き・複製・色変更・削除）">投げ縄</button>
   </div>
   <div class="grp">
     <select id="zoomv" aria-label="拡大率" title="2本指のピンチでも拡大・縮小できます">
@@ -387,7 +390,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 </div>
 
 <div id="hint">
-  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。「ペン」をもう一度押すと、色と太さを選べます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。左上の矢印で、戻す・進むができます。「投げ縄」で囲むと、ドラッグで移動、「色・太さ」で変更、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（Claude の答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。設定で Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</p>
+  <p>Apple Pencilで書き込み、指でスクロール、2本指のピンチで拡大・縮小（拡大率の数字を押すと一覧からも選べます）。書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。線の終わりでペンを止めて押さえると、直線・円・三角・四角に直ります（離さずに動かすと向きや大きさが変わり、あとから丸いつまみで形を直せます。マーカーも止めると直線になります）。「ペン」をもう一度押すと、色と太さを選べます。消しゴムをもう一度押すと、線ごと消すか、なぞった所だけ消すかと、丸の大きさを選べます（書き込みを全部消すのもここから）。左上の矢印で、戻す・進むができます。「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができ（ペンのまま丸で囲み、その線をペンで長押ししても選べます）、「Claudeに聞く」でその箇所について質問できます（Claude の答えは、段落の右の「Q」から開けます）。本と書き込みはiPadに保存されるので、通信なしでも開けます。「本」から md ファイルや PDF を開けます（PDF は右下のページ番号を押すと、そのページへ飛べます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます）。設定で Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</p>
   <button id="hint-x" aria-label="説明を閉じる">閉じる</button>
 </div>
 <div id="empty" hidden>
@@ -413,6 +416,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="sel-ask">Claudeに聞く</button>
     <button id="sel-gap">下に余白</button>
     <button id="sel-ungap">余白を消す</button>
+    <button id="sel-dup">複製</button>
     <button id="sel-del">削除</button>
     <button id="sel-x">解除</button>
   </div>

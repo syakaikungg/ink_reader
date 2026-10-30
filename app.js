@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v50';
+  const APP_VERSION = 'ink-reader-v51';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -1215,7 +1215,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     toolBtns[3].click(); loopBack = 'pen';
     lasso = poly; finishLasso();
     // そのままペンを動かすと、選んだ線を動かせる
-    if (sel.length) drag = { x: loopAt[0], y: loopAt[1], dx: 0, dy: 0 };
+    if (sel.length) grab('move', -1, ...loopAt);
   }
   let cur = null, curId = null, curType = '', curTop = 0, erased = null, pending = [], predicted = [], raf = 0;
   let t0 = 0, samples = 0, frames = 0;
@@ -1324,12 +1324,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     return hit.length ? hit : null;
   }
   // ---------- 投げ縄 ----------
-  // 囲んだ線を選び、ドラッグで移動・色や太さの変更・削除ができる。
+  // 囲んだ線を選び、ドラッグで移動・色や太さの変更・複製・削除ができる。選んだ枠の角のつまみで大きさ、上の丸のつまみで向きを変える。
   // 移動や変更は「元の線を消して新しい線を足す」操作として記録し、移動先の段落に付け直す
   let sel = [], picked = [], lassoBox = null, lasso = null, drag = null;   // picked: 囲んだ段落の番号
+  // drag: 選んだ線を動かしている間 { k（move: 移動・size: 大きさ・turn: 回転）, i（つまみ）, x, y（押した位置）, box（押したときの枠）, M（動かし方） }
   const lassoEl = document.createElementNS(NS, 'path'); lassoEl.setAttribute('class', 'lasso');
   const selEl = document.createElementNS(NS, 'rect'); selEl.setAttribute('class', 'sel'); selEl.setAttribute('rx', 6);
+  const gripG = document.createElementNS(NS, 'g'); gripG.setAttribute('class', 'grip');
   const selMenu = $('#selmenu');
+  // 紙の座標の動かし方 M = [a, b, c, d, e, f]: (x, y) -> (a x + c y + e, b x + d y + f)（SVG の matrix と同じ並び）
+  const M0 = [1, 0, 0, 1, 0, 0];
+  const mapPt = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
+  const TURN = 28;   // 回転のつまみを枠の上にどれだけ離すか（画面の px）
   function inPoly(x, y, poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -1343,22 +1349,49 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     for (const s of sel) { const ty = top(s), pad = s.tool === 'hl' ? 8 : s.s; a = Math.min(a, s.bbox[0] - pad); b = Math.min(b, s.bbox[1] + ty - pad); c = Math.max(c, s.bbox[2] + pad); d = Math.max(d, s.bbox[3] + ty + pad); }
     return [a - 6, b - 6, c + 6, d + 6];
   }
-  function showSel(dx = 0, dy = 0) {
-    if (!sel.length && !picked.length) { selEl.remove(); selMenu.hidden = true; return; }
-    const [a, b, c, d] = sel.length ? selBox() : lassoBox;
-    selEl.setAttribute('x', a + dx); selEl.setAttribute('y', b + dy);
+  // 選んだ枠のつまみの位置: 0〜3 は角（左上から時計回り）、4 は上の回転のつまみ
+  function gripPts() {
+    const [a, b, c, d] = selBox();
+    return [[a, b], [c, b], [c, d], [a, d], [(a + c) / 2, b - TURN / scale]];
+  }
+  // (x, y) に近いつまみ { i, d（距離） }。どれにも触れていなければ null
+  function gripAt(x, y) {
+    if (!sel.length) return null;
+    let at = null;
+    gripPts().forEach(([gx, gy], i) => { const d = Math.hypot(gx - x, gy - y); if (d < 18 / scale && (!at || d < at.d)) at = { i, d }; });
+    return at;
+  }
+  function showGrips(M) {
+    if (!sel.length) { gripG.remove(); return; }
+    const g = gripPts().map(([x, y]) => M ? mapPt(M, x, y) : [x, y]), r = 6 / scale;
+    const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+    gripG.replaceChildren(mk('line', { x1: (g[0][0] + g[1][0]) / 2, y1: (g[0][1] + g[1][1]) / 2, x2: g[4][0], y2: g[4][1] }),
+      ...g.slice(0, 4).map(([x, y]) => mk('rect', { x: x - r, y: y - r, width: 2 * r, height: 2 * r, rx: 2 / scale })),
+      mk('circle', { cx: g[4][0], cy: g[4][1], r: 7 / scale }));
+    svg.appendChild(gripG);
+  }
+  function showSel() {
+    if (!sel.length && !picked.length) { selEl.remove(); gripG.remove(); selMenu.hidden = true; return; }
+    const [a, b, c, d] = sel.length ? selBox() : lassoBox, M = drag && drag.M;
+    selEl.setAttribute('x', a); selEl.setAttribute('y', b);
     selEl.setAttribute('width', c - a); selEl.setAttribute('height', d - b);
+    if (M) selEl.setAttribute('transform', `matrix(${M.join(' ')})`); else selEl.removeAttribute('transform');
     svg.appendChild(selEl);
-    selMenu.hidden = false;
-    selMenu.style.left = Math.max(0, (a + dx) * scale) + 'px';
-    selMenu.style.top = Math.max(0, (b + dy) * scale - selMenu.offsetHeight - 8) + 'px';
+    showGrips(M);
+    selMenu.hidden = !!drag;   // 動かしている間はメニューを隠す
+    if (drag) return;
     $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
-    $('#sel-del').hidden = !sel.length;
+    $('#sel-del').hidden = $('#sel-dup').hidden = !sel.length;
     selPen.hidden = !sel.some((s) => s.tool !== 'hl');
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
     $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
     $('#sel-ungap').hidden = !box || !spaceIn(box);
+    // メニューは枠の上（線を選んでいれば回転のつまみの分も空ける）。ツールバーに隠れるなら枠の下、そこも画面に入らなければツールバーのすぐ下
+    const h = selMenu.offsetHeight, sz = sizer.getBoundingClientRect(), y0 = Math.max(0, bar.getBoundingClientRect().bottom + 4 - sz.top);
+    const up = b * scale - h - 8 - (sel.length ? TURN + 8 : 0), down = d * scale + 14;
+    selMenu.style.left = Math.max(0, a * scale) + 'px';
+    selMenu.style.top = (up >= y0 ? up : sz.top + down + h <= innerHeight ? down : y0) + 'px';
   }
   function clearSel() {
     sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null);
@@ -1383,19 +1416,24 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
     picked = [...set].sort((x, y) => x - y);
     showSel(); setEdit(sel.length === 1 ? sel[0] : null);
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・「色・太さ」で変更）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
+    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・角で大きさ・上の丸で向き）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
   }
-  // 選んだ線を作り直す（移動量 dx,dy と、色・太さの変更 patch）
-  function rebuild(dx, dy, patch) {
-    const from = sel, to = from.map((s) => {
+  // 選んだ線を M で動かした新しい線（色・太さの変更 patch も入れる）。大きさを変えたときは、線の太さも同じ割合で変える
+  function moved(M, patch) {
+    const f = Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2])), rot = Math.atan2(M[1], M[0]);
+    return sel.map((s) => {
       const ty = top(s);
-      const abs = s.pts.map(([x, y, p]) => [x + dx, y + ty + dy, p]);
+      const abs = s.pts.map(([x, y, p]) => [...mapPt(M, x, y + ty), p]);
       let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
       const b = blockAt(minY), t = tops[b] - (toSto(b, minY - tops[b]) - (minY - tops[b]));   // たたんだ余白の下なら、開いたときの位置にする
-      const n = { id: newId(), b, tool: s.tool, c: s.c, s: s.s, pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
-      if (s.g) n.g = moveG(s.g, dx, ty + dy - t);
+      const n = { id: newId(), b, tool: s.tool, c: s.c, s: f === 1 || s.tool === 'hl' ? s.s : Math.max(.3, Math.round(s.s * f * 100) / 100), pen: s.pen, pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
+      if (s.g) n.g = mapG(s.g, (x, y) => { const q = mapPt(M, x, y + ty); q[1] -= t; return q; }, f, rot);
       bbox(n); return n;
     });
+  }
+  // 選んだ線を作り直す（M: 移動・大きさ・回転、patch: 色・太さの変更）
+  function rebuild(M, patch) {
+    const from = sel, to = moved(M, patch);
     removeAll(from); addAll(to);
     push({ type: 'replace', from, to });
     sel = to; showSel(); setEdit(sel.length === 1 ? sel[0] : null);
@@ -1405,9 +1443,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!sel.some((s) => s.tool !== 'hl')) return;
     const keep = sel.filter((s) => s.tool === 'hl');
     const all = sel; sel = all.filter((s) => s.tool !== 'hl');
-    rebuild(0, 0, sub);
+    rebuild(M0, sub);
     sel = sel.concat(keep); showSel();
   }
+  // 複製: 少し右下にずらして写し、写した方を選んだままにする（そのままドラッグで動かせる）
+  $('#sel-dup').onclick = () => {
+    if (!sel.length) return;
+    const o = 24 / scale, to = moved([1, 0, 0, 1, o, o], {});
+    addAll(to); push({ type: 'add', list: to });
+    sel = to; picked = [...new Set([...picked, ...to.map((s) => s.b)])].sort((x, y) => x - y);
+    showSel(); setEdit(sel.length === 1 ? sel[0] : null);
+    stat.textContent = `${to.length}画を複製しました（ドラッグで動かせます）`;
+  };
   $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
   $('#sel-x').onclick = clearSel;
   $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = '余白を入れました'; };
@@ -1424,26 +1471,57 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     stat.textContent = lineSpace(sum / poly.length) ?? '';
     return true;
   }
+  // 選んだ線を動かし始める（k: move・size・turn、i: つまみ）
+  function grab(k, i, x, y) { drag = { k, i, x, y, box: selBox(), M: M0 }; hdG.remove(); }
   function lassoDown(e) {
     const [x, y] = toPage(e);
     if (sel.length) {
-      const [a, b, c, d] = selBox();
-      if (x >= a && x <= c && y >= b && y <= d) { drag = { x, y, dx: 0, dy: 0 }; selMenu.hidden = true; return; }
+      const g = gripAt(x, y), [a, b, c, d] = selBox();
+      if (g) { grab(g.i < 4 ? 'size' : 'turn', g.i, x, y); showSel(); return; }
+      if (x >= a && x <= c && y >= b && y <= d) { grab('move', -1, x, y); selMenu.hidden = true; return; }
     }
     if (sel.length || picked.length) clearSel();
     if (tool !== 'ls') return;
     lasso = [[x, y]];
     lassoEl.setAttribute('d', ''); svg.appendChild(lassoEl);
   }
+  // 押した位置から (x, y) までペンを動かしたときの、選んだ線の動かし方
+  function dragM(x, y) {
+    const { k, i, box: [a, b, c, d] } = drag;
+    if (k === 'move') return [1, 0, 0, 1, x - drag.x, y - drag.y];
+    if (k === 'size') {
+      // 角のつまみ: 向かいの角を止めたまま、縦横の比を変えずに大きさを変える（押した位置からの、枠の対角線の向きの動きで決める）
+      const C = [[a, b], [c, b], [c, d], [a, d]], [ox, oy] = C[(i + 2) % 4], [cx, cy] = C[i], l = Math.hypot(cx - ox, cy - oy);
+      const along = (px, py) => ((px - ox) * (cx - ox) + (py - oy) * (cy - oy)) / l;
+      const f = Math.max(.1, 16 / l, Math.min(10, along(x, y) / Math.max(1, along(drag.x, drag.y))));
+      stat.textContent = `大きさ ${Math.round(f * 100)}%`;
+      return [f, 0, 0, f, ox * (1 - f), oy * (1 - f)];
+    }
+    // 回転のつまみ: 枠のまん中のまわりに回す。0・90・180・270 度の近くではそろえる
+    const mx = (a + c) / 2, my = (b + d) / 2;
+    const r = snapRot(Math.atan2(y - my, x - mx) - Math.atan2(drag.y - my, drag.x - mx), 5 * DEG), co = Math.cos(r), si = Math.sin(r);
+    stat.textContent = `向き ${(Math.round(r / DEG) % 360 + 540) % 360 - 180}°`;
+    return [co, si, -si, co, mx - co * mx + si * my, my - si * mx - co * my];
+  }
+  // 動かしている間は線を作り直さず、SVG の変形で見せる（離したときに作り直す）。マーカーは太さが変わらないので、大きさを変えるときだけ描き直す
+  function previewSel() {
+    const M = drag.M;
+    for (const s of sel) {
+      const ty = top(s);
+      if (s.tool === 'hl' && drag.k === 'size') {
+        render(s, s.pts.map(([x, y, p]) => { const q = mapPt(M, x, y + ty); return [q[0], q[1] - ty, p]; }), true);
+        s.el.setAttribute('transform', `translate(0 ${ty})`);
+      }
+      else s.el.setAttribute('transform', `matrix(${M[0]} ${M[1]} ${M[2]} ${M[3]} ${M[2] * ty + M[4]} ${M[3] * ty + M[5]})`);
+    }
+    showSel();
+  }
+  function unpreview(k) { for (const s of sel) { if (k === 'size' && s.tool === 'hl') render(s, null, true); place(s); } }
   function lassoMove(list) {
     const last = toPage(list[list.length - 1]);
     if (drag) {
-      drag.dx = last[0] - drag.x; drag.dy = last[1] - drag.y;
-      if (!raf) raf = requestAnimationFrame(() => {
-        raf = 0; if (!drag) return;
-        for (const s of sel) s.el.setAttribute('transform', `translate(${drag.dx} ${top(s) + drag.dy})`);
-        showSel(drag.dx, drag.dy); selMenu.hidden = true;
-      });
+      drag.M = dragM(last[0], last[1]);
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (drag) previewSel(); });
       return;
     }
     if (!lasso) return;
@@ -1455,11 +1533,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   function lassoUp() {
     if (drag) {
-      const { dx, dy } = drag; drag = null;
-      if (Math.hypot(dx, dy) < 2) { for (const s of sel) place(s); showSel(); return; }
-      rebuild(dx, dy, {});
+      const { k, M } = drag; drag = null;
+      unpreview(k);
+      // ほとんど動かしていなければ何もしない
+      if (k === 'move' ? Math.hypot(M[4], M[5]) < 2 : Math.abs(M[0] - 1) < .01 && Math.abs(M[1]) < .005) { showSel(); showHandles(); if (k !== 'move') stat.textContent = ''; return; }
+      rebuild(M, {});
       picked = [...new Set([...picked, ...sel.map((s) => s.b)])].sort((x, y) => x - y);
-      stat.textContent = `${sel.length}画を移動しました`;
+      const n = sel.length;
+      stat.textContent = { move: `${n}画を移動しました`, size: `${n}画の大きさを変えました`, turn: `${n}画の向きを変えました` }[k];
       return;
     }
     if (lasso) finishLasso();
@@ -1779,6 +1860,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   const NAMES = { line: '直線', poly: '多角形', ellipse: '楕円', circle: '円' };
   const moveG = (g, dx, dy) => ({ ...g, v: g.k === 'ellipse' || g.k === 'circle' ? [[g.v[0][0] + dx, g.v[0][1] + dy], g.v[1]] : g.v.map(([x, y]) => [x + dx, y + dy]) });
+  // 投げ縄で動かしたときの図形の形（mp: 点の動かし方、f: 大きさの倍率、r: 回した角度）
+  const mapG = (g, mp, f, r) => g.k === 'ellipse' || g.k === 'circle' ? { ...g, v: [mp(...g.v[0]), [g.v[1][0] * f, g.v[1][1] * f]], a: (g.a || 0) + r }
+    : { ...g, v: g.v.map(([x, y]) => mp(x, y)) };
   // 水平・垂直に近い向き（10度まで）と斜め45度に近い向き（4度まで）はそろえる
   const DEG = Math.PI / 180;
   function snapAngle(a, b) {
@@ -1948,8 +2032,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     curId = e.pointerId; curType = e.pointerType; penDown = true; seen = [e.clientX + ',' + e.clientY];
     t0 = e.timeStamp; samples = 1; frames = 0;
     if (edit && tool !== 'er') {
-      const [x, y] = toPage(e), i = hitHandle(x, y);
-      if (i >= 0) { hdrag = { i, g: cloneG(edit.g), g0: edit.g, pts0: edit.pts }; selMenu.hidden = true; return; }
+      const [x, y] = toPage(e), i = hitHandle(x, y), g = tool === 'ls' && gripAt(x, y);
+      // 選んだ枠のつまみ（大きさ・回転）と重なっていたら、近い方を動かす
+      if (i >= 0 && !(g && g.d < Math.hypot(handlePts(edit)[i][0] - x, handlePts(edit)[i][1] - y))) { hdrag = { i, g: cloneG(edit.g), g0: edit.g, pts0: edit.pts }; selMenu.hidden = true; return; }
       if (tool !== 'ls') setEdit(null);
     }
     if (tool === 'er') { erased = []; pieces = eraser.m === 'part' ? new Set() : null; svg.appendChild(erRing); eraseAt(toPage(e)); return; }
@@ -2056,7 +2141,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     try { page.releasePointerCapture(curId); } catch {}
     curId = null; penDown = false;
     if (erased) endErase();
-    if (drag) { drag = null; for (const s of sel) place(s); showSel(); }
+    if (drag) { const { k } = drag; drag = null; unpreview(k); showSel(); showHandles(); }
     if (lasso) { lasso = null; lassoEl.remove(); }
     if (cur) { cur.el.remove(); cur = null; pending = []; predicted = []; }
   }
