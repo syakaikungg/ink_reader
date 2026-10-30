@@ -399,7 +399,7 @@ dialog#cfg, dialog#ask { max-height: calc(100% - 90px); }
 #toc .row button { border-color: var(--rule); }
 /* しおりを付けた段落の左の印。段落の中に描くと数式の段落（横スクロールする）で隠れるので、紙の上の別の層に置く */
 /* 横線で入れた余白。点線で囲み、下の端のつまみ（押すとたたむ・長押しして上下に動かすと高さが変わる）。
-   たたんだ余白は、紙を横切る細い点線と、まん中の小さな文字だけにする（押すと開く）。
+   たたんだ余白は、紙を横切る細い点線と、まん中にそのつまみと同じ形の札（上下に開く矢印と中の線の数）だけにする（押すと開く）。
    md は画面の明暗に合わせた色、PDF はページが白いことが多いので、明暗によらず白い紙に目立たない灰色にする */
 #sps { position: absolute; z-index: 3; left: 0; top: 0; width: 100%; height: 0;
   --sp-line: var(--rule); --sp-text: var(--muted); --sp-bg: var(--paper); --sp-knob: var(--bar); }
@@ -411,7 +411,9 @@ body.pdf #sps { --sp-line: rgba(0,0,0,.16); --sp-text: rgba(0,0,0,.42); --sp-bg:
 #sps .sph.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 #sps .sph.fold { left: 0; width: 100%; height: 28px; margin-top: 0; border: 0; border-radius: 0; background: none; color: var(--sp-text); font: 11px/1 var(--f-ui); }
 #sps .sph.fold::before { position: absolute; left: 8px; right: 8px; top: 50%; width: auto; height: 0; margin: 0; border-top: 1px dashed var(--sp-line); border-bottom: 0; }
-#sps .sph.fold span { position: relative; padding: 2px 8px; background: var(--sp-bg); }
+#sps .sph.fold span { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-width: 48px; height: 22px; box-sizing: border-box; padding: 0 10px;
+  border: 1px solid var(--sp-line); border-radius: 11px; background: var(--sp-knob); }
+#sps .sph.fold svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 /* 方眼: 余白・白紙の右上の切り替えと、方眼の目（5mm ほど。線の下に敷く） */
 #sps .spg { position: absolute; right: 14px; height: 22px; min-width: 0; padding: 0 8px; border: 1px solid var(--sp-line); border-radius: 11px;
   background: var(--sp-knob); color: var(--sp-text); font: 600 11px/1 var(--f-ui); }
@@ -470,6 +472,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
 #pg-grid .lb { display: flex; align-items: center; justify-content: center; gap: 2px; margin-top: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 #pg-grid .cur .lb { color: var(--accent); font-weight: 600; }
 #pg-grid .th-m { min-width: 0; width: 30px; height: 26px; padding: 0; font-size: 16px; color: var(--muted); }
+/* 紙を指で長押しすると出るメニュー。指で隠れないよう、押した所の上（入らなければ下）に出す */
+#pmenu { position: fixed; z-index: 6; display: grid; min-width: 180px; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 6px 24px rgba(20,30,60,.18);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#pmenu[hidden] { display: none; }
+#pmenu button { height: 40px; text-align: left; font-weight: 400; font-size: 14px; border: 0; background: none; }
+#pmenu button + button { border-top: 1px solid var(--rule); border-radius: 0; }
+#pmenu button[hidden] { display: none; }
+#pm-del { color: var(--ink-r); }
 #th-menu { position: fixed; z-index: 5; display: grid; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
 #th-menu button { text-align: left; font-weight: 400; font-size: 14px; }
 #th-del { color: var(--ink-r); }
@@ -564,6 +574,14 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <button id="sel-x">解除</button>
   </div>
 </div>
+<!-- 紙を指で長押しすると、その場所に出るメニュー（しおり・余白・方眼・白紙） -->
+<div id="pmenu" hidden role="menu">
+  <button type="button" id="pm-bm" role="menuitem"></button>
+  <button type="button" id="pm-gap" role="menuitem">ここに余白を入れる</button>
+  <button type="button" id="pm-grid" role="menuitem"></button>
+  <button type="button" id="pm-blank" role="menuitem">後ろに白紙を入れる</button>
+  <button type="button" id="pm-del" role="menuitem"></button>
+</div>
 </div>
 <div id="hist" role="group" aria-label="戻す・進む">
   <button id="undo" disabled aria-label="元に戻す" title="元に戻す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5 4 9.5 8.5 14M4.5 9.5H15a4.75 4.75 0 0 1 0 9.5h-3"/></svg></button>
@@ -609,8 +627,9 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
         <li>書いた線の上をペンでぐちゃぐちゃっと塗ると消えます。消しゴムをもう一度押すと、線ごと消すかなぞった所だけ消すかと、丸の大きさの札が出ます（「…」から書き込みを全部消せます）。</li>
         <li>「投げ縄」で囲むと、ドラッグで移動、角のつまみで大きさ、上の丸で向き、「色・太さ」で変更、複製、削除ができます（ペンのまま丸で囲み、その線をペンで長押ししても選べます）。投げ縄をもう一度押すと、自由に囲むか四角で囲む（ななめに引く）かを選べます。「Claudeに聞く」でその箇所について質問でき、Claude の答えは段落の右の「Q」から開けます。</li>
         <li>「画像」で写真やファイルの画像を紙に貼れます（ほかのアプリからドラッグしても貼れます）。貼った画像は指で軽くたたくか、投げ縄でペンを軽く当てると選べて、動かす・大きさ・向き・複製・削除ができます（選んだ枠の中は指でも動かせます）。画像の上にも書けます。</li>
-        <li>書く場所が足りないときは、投げ縄のメニューの「下に余白」か、投げ縄（自由）で横にまっすぐ線を引くと余白が入ります。余白の下の端のつまみを押すとたためます。余白や白紙の右上の「方眼」を押すと方眼になります。</li>
-        <li>章の名前を押すと、目次・しおり・本文の検索が開きます。段落を指で長押しすると、しおりが付きます。設定・本・目次などの窓は、まわりの暗い所を触ると閉じます。</li>
+        <li>紙を指で長押しすると、その場所のメニューが出て、しおり・余白を入れる・方眼にする・余白を消す（PDF は白紙を入れる・消す）が選べます。</li>
+        <li>書く場所が足りないときは、ペンで横にまっすぐ線を引き、その線の上をペンで長押しすると、線が消えてそこに余白が入ります（ペンを離さずに上下に動かすと高さが変わります）。投げ縄（自由）で横に線を引くか、投げ縄のメニューの「下に余白」でも入ります。余白の下の端のつまみを押すとたためて、たたんだ余白は上下の矢印の札を押すと開きます。余白や白紙の右上の「方眼」を押すと方眼になります。</li>
+        <li>章の名前を押すと、目次・しおり・本文の検索が開きます。設定・本・目次などの窓は、まわりの暗い所を触ると閉じます。</li>
         <li>「読むだけ」をオンにすると、Apple Pencil でスクロールでき、書き込みはしません（ツールを押すと書けるように戻ります）。</li>
         <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、縮小画像の「…」から前や後ろに白紙を入れられます。そこの「書き出す」で、ページを選んで書き込みごと PDF にできます。</li>
         <li>本と書き込みはこの iPad に保存されるので、通信なしでも開けます。Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</li>
@@ -686,7 +705,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
         <div id="toc-bm" hidden><h2>しおり</h2><ul id="toc-bms"></ul></div>
         <h2>目次</h2>
         <ul id="toc-list"></ul>
-        <p>段落（PDF はページ）を指で長押しすると、しおりを付けたり外したりできます。</p>
+        <p>段落（PDF はページ）を指で長押しして出るメニューの「しおりを付ける」で、しおりを付けたり外したりできます。</p>
       </div>
     </div>
     <div id="toc-pages" hidden>

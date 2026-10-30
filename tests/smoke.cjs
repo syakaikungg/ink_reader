@@ -95,10 +95,11 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
   await touch('touchStart', [[300, 500]]); await touch('touchMove', [[320, 510]]); await touch('touchStart', [[300, 500], [420, 520]]); await touch('touchMove', [[290, 500], [440, 520]]); await touch('touchEnd', []); await p.waitForTimeout(100);
   console.log('finger pinch: paths', n0, '->', await p.evaluate(() => document.querySelectorAll('#ink path').length), await p.textContent('#zoomv option:first-child'));
 
-  // 目次・しおり: 段落を指で長押し → 印が付く → 目次に並ぶ → 別の章から押すと戻ってくる
+  // 目次・しおり: 段落を指で長押し → メニューの「しおりを付ける」で印が付く → 目次に並ぶ → 別の章から押すと戻ってくる
   await p.click('#finger');
   const bmY = await p.evaluate(() => { const el = document.querySelectorAll('#doc > p')[8]; el.scrollIntoView({ block: 'center' }); return el.getBoundingClientRect().top + 10; });
   await touch('touchStart', [[400, bmY]]); await p.waitForTimeout(700); await touch('touchEnd', []);
+  await p.click('#pm-bm');
   console.log('bookmark', await p.textContent('#stat'), await p.evaluate(() => [...document.querySelectorAll('#doc > *')].findIndex((e) => e.classList.contains('bm'))));
   await p.click('#chap'); console.log('toc bms', await p.$$eval('#toc-bms button', (o) => o.map((x) => x.textContent.slice(0, 30))), 'toc', await p.$$eval('#toc-list button', (o) => o.map((x) => x.className + ':' + x.textContent.slice(0, 12))));
   await p.screenshot({ path: path.join(OUT, 'toc.png') });
