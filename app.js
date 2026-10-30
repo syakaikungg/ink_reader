@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v76';
+  const APP_VERSION = 'ink-reader-v77';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -338,9 +338,10 @@
   function respan(b) {
     const el = blocks[b], out = [];
     if (!el) { delete spans[b]; return; }
-    if (!isPdf() && gaps[b]) { const e0 = el.offsetHeight - padV(b); out.push({ i: -1, e0, e1: e0 + gaps[b], c: folds.has(b) }); }
     let acc = 0;
     (sps[b] || []).forEach((p, i) => { out.push({ i, e0: p.at + acc, e1: p.at + acc + p.h, c: p.c }); acc += p.h; });
+    // md の段落の下の余白は、段落の途中の余白より下（線の座標は余白を開いたときの位置なので、たたんだ途中の余白の分を足す）
+    if (!isPdf() && gaps[b]) { const e0 = el.offsetHeight - padV(b) + (sps[b] || []).reduce((a, p) => a + (p.c ? p.h - FOLD : 0), 0); out.push({ i: -1, e0, e1: e0 + gaps[b], c: folds.has(b) }); }
     if (out.length) spans[b] = out; else delete spans[b];
   }
   // 段落 b の見た目を、余白の状態に合わせて作り直す
@@ -349,7 +350,17 @@
     if (!gaps[b]) { delete gaps[b]; folds.delete(b); }
     if (sps[b] && !sps[b].length) delete sps[b];
     if (!gaps[b] && !sps[b]) grids.delete(b);
-    if (el && !isPdf()) el.style.paddingBottom = gaps[b] ? padV(b) + 'px' : '';
+    if (el && !isPdf()) {
+      el.style.paddingBottom = gaps[b] ? padV(b) + 'px' : '';
+      // 段落の途中の余白は、行の切れ目に空き（span.msp）を入れる。段落の中身の高さが変わるので、長い章の「描かない」はやめる
+      if (sps[b] || el.querySelector('.msp')) {
+        if (el.classList.contains('lz')) lazyOff(b);
+        const list = (sps[b] || []).map((p) => [p.at, p.c ? FOLD : p.h]), key = list.map((x) => x[0]).join(), ks = el.querySelectorAll('.msp');
+        // 入れる所が同じなら高さだけ変える（つまみで高さを変えている間は毎こま来る）
+        if (el._sp === key && ks.length === list.length) for (const x of ks) x.style.height = list[+x.dataset.k][1] + 'px';
+        else { renderMarkdown.space(el, list, scale); el._sp = key; }
+      }
+    }
     if (el && isPdf()) {
       const ph = pageH(b), sh = sheet(b), px = gaps[b] || 0, n = Math.round(px / (ph + PAGE_GAP));
       el.style.height = sh + px + 'px'; el.style.setProperty('--ph', sh + 'px');
@@ -409,7 +420,23 @@
     if (!isPdf()) {
       const ch = el.offsetHeight - padV(b);
       if (v >= ch && gaps[b]) return SP_IN;
-      if (v < ch / 2 && b > 1) b--;
+      if ((spans[b] || []).some((p) => { const d0 = p.e0 - foldOff(b, p.e0); return v >= d0 && v < d0 + (p.c ? FOLD : p.e1 - p.e0); })) return SP_IN;
+      // 段落の途中（上下の端から 1 行より離れた所）は、近い行の切れ目に入れる（段落の字の折り返しは変わらない）。
+      // 最初の段落の上半分なら、その段落の上端に入れる（前の段落の下の余白の代わり。出典の行には結びつけない）
+      const line = parseFloat(getComputedStyle(el).lineHeight) || 30, y = toSto(b, v), first = b === 1 && v < ch / 2;
+      if (first || (v > line * 1.2 && v < ch - line * 1.2 && /^(P|LI|BLOCKQUOTE|DD)$/.test(el.tagName))) {
+        const list = (sps[b] || []).map((p) => ({ ...p }));
+        let c = first ? 0 : y, acc = 0;   // 余白を入れる前の位置（上にある途中の余白の高さを引く）
+        if (!first) for (const p of list) { if (p.at + acc + p.h <= y) c -= p.h; acc += p.h; }
+        const add = { at: c, h, c: false }, cand = list.concat(add).sort((p, q) => p.at - q.at || (q === add) - (p === add)), i = cand.indexOf(add);
+        add.at = renderMarkdown.space(el, cand.map((p) => [p.at, p.c ? FOLD : p.h]), scale)[i];   // 入る行の切れ目（入れ直しは changeSpace の relay）
+        if (list.some((p) => Math.abs(p.at - add.at) < 1)) { relay(b); return SP_IN; }
+        const e = add.at + cand.slice(0, i).reduce((a, p) => a + p.h, 0);
+        changeSpace(b, () => { sps[b] = cand; }, e, h, null, also);
+        spAt = { b, i };
+        return SP_OK;
+      }
+      if (v < ch / 2) b--;   // 段落の上半分なら、前の段落の下
       changeSpace(b, () => { gaps[b] = (gaps[b] || 0) + h; folds.delete(b); }, 0, 0, null, also);
       spAt = { b, i: -1 };
       return SP_OK;
@@ -1421,6 +1448,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     page.style.transform = `scale(${scale})`;
     zoomNow.textContent = Math.round(scale * 100) + '%';
     const next = blocks.map((el) => el.offsetTop);
+    if (!isPdf()) showPgno();
     if (next.some((v, i) => v !== tops[i])) { tops = next; for (const b in spans) respan(+b); for (const s of strokes) place(s); placeMarks(); placeBm(); showHandles(); showSps(); }
     if (sel.length) showSel();
     if (pdfDoc) pdfPump();
@@ -2298,13 +2326,22 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (c.firstElementChild && c.firstElementChild.tagName === 'PRE') return '```\n' + t + '\n```';
     return /^H[1-6]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' + t : t;
   }
+  // 段落の元の md（「Claudeに聞く」・いま.md に本文をそのまま渡す。表・リスト・リンクも崩れない）。段落の数が合わない章は画面の字から作る（blockMd）
+  let chMd = null, chSrc;
+  function blockSrc(b) {
+    if (chSrc === undefined) {
+      chSrc = null;
+      if (chMd != null) try { const l = renderMarkdown.source(chMd); if (l.length === blocks.length - 1) chSrc = l; } catch {}
+    }
+    return (chSrc && chSrc[b - 1]) || blockMd(blocks[b]);
+  }
   const pagesText = () => picked[0] + (picked.length > 1 ? '〜' + picked[picked.length - 1] : '') + 'ページ';
   function passage() {
     if (isPdf()) return `${pagesText()}（囲んだ範囲を画像で送ります）`;
     const out = [];
     const first = picked[0];
-    for (let i = first - 1; i > 0; i--) if (/^H[1-6]$/.test(blocks[i].tagName)) { out.push(blockMd(blocks[i])); if (i < first - 1) out.push('…'); break; }
-    for (const i of picked) out.push(blockMd(blocks[i]));
+    for (let i = first - 1; i > 0; i--) if (/^H[1-6]$/.test(blocks[i].tagName)) { out.push(blockSrc(i)); if (i < first - 1) out.push('…'); break; }
+    for (const i of picked) out.push(blockSrc(i));
     return out.join('\n\n');
   }
   function inkImage() {   // 選んだ段落の書き込み（なければ選んだ線）を白地の PNG に
@@ -2567,6 +2604,10 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       d.append(mk); box.append(d);
     }
     blocks[k].after(box);
+    // 段落から下にはみ出して書いた線（段落の下の線など）に答えが重ならないよう、答えはその線の下から始める
+    let ext = 0;
+    for (const s of strokes) if (s.b === k && !s.hid && s.bbox) ext = Math.max(ext, s.bbox[3] + top(s) - tops[k] - blocks[k].offsetHeight);
+    if (ext > 0) box.style.marginTop = Math.ceil(ext + 8) + 'px';
     renderMarkdown.fit(box);
   }
   function toggleAns(k) {
@@ -2782,7 +2823,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   function blockTexts(bs, max = 6000) {
     const out = []; let n = 0;
     for (const b of bs) {
-      const t = blockMd(blocks[b]);
+      const t = blockSrc(b);
       if (n + t.length > max && out.length) { out.push('…（ここまで。続きは本文のファイルで読めます）'); break; }
       out.push(`**段落 ${b}**\n${t}`); n += t.length;
     }
@@ -2842,7 +2883,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       // 最後に書いた所: 書いたあと最初の 1 回だけ、線のまわりを切り抜いて置く
       if (wrote && wrote.t !== lastSent && wrote.k === bk && wrote.c === ch) {
         const w = wrote, m = Math.max(120, (300 - (w.y[1] - w.y[0])) / 2), y0 = Math.max(0, w.y[0] - m), y1 = Math.min(page.offsetHeight, w.y[1] + m, y0 + 1600);
-        w.md = isPdf() || !blocks[w.b] ? null : blockMd(blocks[w.b]).slice(0, 3000);
+        w.md = isPdf() || !blocks[w.b] ? null : blockSrc(w.b).slice(0, 3000);
         const bl = await paperPng(y0, y1);
         if (busy()) return;
         await drive.over('last.png', bl);
@@ -3391,16 +3432,25 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   // 端の「12 / 300」。押すとページの一覧（目次の画面の「ページ」）を開く
   const pgno = $('#pgno'), pgIn = $('#pg-in');
   let pgRaf = 0;
+  // md の本は、章の中のどこまで読んだか（%）。押すと目次を開き、今いる見出しを見せる。短い章（画面 2 つ分まで）は出さない
   function showPgno() {
-    pgno.hidden = !isPdf();
+    const md = !isPdf() && !!CH && blocks.length > 2 && page.offsetHeight * scale > innerHeight * 2;
+    pgno.hidden = !isPdf() && !md; pgno.classList.toggle('md', md);
+    if (md) {
+      const r = page.getBoundingClientRect(), t = Math.round(Math.min(1, Math.max(0, (innerHeight - r.top) / r.height)) * 100) + '%', c = $('#pg-c');
+      if (c.textContent !== t) c.textContent = t;
+      pgno.setAttribute('aria-label', '章の中の位置（押すと目次）');
+      return;
+    }
     if (!isPdf()) return;
+    pgno.setAttribute('aria-label', 'ページの一覧');
     $('#pg-c').textContent = curPage(); $('#pg-n').textContent = $('#pg-all').textContent = blocks.length - 1;
   }
-  pgno.onclick = () => openToc('pages');
+  pgno.onclick = () => isPdf() ? openToc('pages') : openToc('main', true);
   let hdT = 0;
   const onScroll = () => {
-    if (!isPdf()) return;
     if (!pgRaf) pgRaf = requestAnimationFrame(() => { pgRaf = 0; showPgno(); });
+    if (!isPdf()) return;
     clearTimeout(hdT); hdT = setTimeout(pdfPump, 150);   // 拡大しているときは、止まったところを細かく描き直す
   };
   addEventListener('scroll', onScroll, { passive: true });
@@ -3495,7 +3545,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
-    const [saved, ans, wait0, rv, seen, ab, lz] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey()), kv.get(hsKey(id)), kv.get(ansbKey(id)), isPdf() ? null : kv.get(htsKey(id))]);
+    const [saved, ans, wait0, rv, seen, ab, lz, mdv] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey()), kv.get(hsKey(id)), kv.get(ansbKey(id)), isPdf() ? null : kv.get(htsKey(id)), isPdf() ? null : kv.get('md:' + bookKey() + ':' + id)]);
     if (my !== opening) return;
     let wait = wait0;
     ansMoved = ab || {};
@@ -3507,6 +3557,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
+    chMd = mdv ? mdv.md : null; chSrc = undefined;
     initBlocks();
     // 長い章: 前に測った高さがあれば、画面から遠い段落は描かずに開く（速い）。なければ全部並べてから測って覚える
     const lk = lazyKey(), lzHit = !isPdf() && blocks.length > LAZY_N && lz && lz.key === lk;
@@ -3521,6 +3572,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     fillImages();
     if (document.fonts) document.fonts.ready.then(() => {
       if (!isPdf() && !lzHit) renderMarkdown.fit(doc);
+      if (!isPdf() && CH === id && my === opening) for (const b in sps) { blocks[b]._sp = null; relay(+b); }   // 字体が変わると行の切れ目も変わる
       layout();
       if (!isPdf() && !lzHit && blocks.length > LAZY_N && CH === id && my === opening) lazyMeasure(id, lk);
     });
@@ -3573,7 +3625,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   async function lazyMeasure(id, key) {
     const bk = bookKey(), pos = () => blocks.map((el) => el.offsetTop).concat(page.offsetHeight);
     // 横にはみ出す段落（描かないと切れる）と画像のある段落（あとから読めて高さが変わる）は、いつも描く
-    const before = pos(), hs = blocks.map((el, b) => !b || el.scrollWidth > el.clientWidth + 1 || el.querySelector('img') ? null : innerH(el));
+    const before = pos(), hs = blocks.map((el, b) => !b || el.scrollWidth > el.clientWidth + 1 || el.querySelector('img, .msp') ? null : innerH(el));
     // 描くとき・描かないときで位置が変わる段落（中の余白が外に出る並べ方。ゆるいリスト・details など）は、いつも描く。
     // 描いているとき（中に閉じ込める並べ方）は contain で、描かないときは content-visibility: auto を付けて 2 こま待って（一度描いてから並べ方が変わる）比べる
     const drop = () => {
@@ -3747,7 +3799,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   }
   chapSel.onclick = () => openToc('main');
   // tab: 'main'（目次・しおり・検索）か 'pages'（PDF のページの一覧）
-  async function openToc(tab) {
+  // here: 今いる見出しを見せる（md の本の右下の「%」から開いたとき）
+  async function openToc(tab, here) {
     if (!book) return;
     if (!isPdf()) tab = 'main';
     $('#toc-head').hidden = false; $('#toc-tabs').hidden = !isPdf();   // md の本は「エクスポート」だけ
@@ -3760,7 +3813,11 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     for (const c of book.chapters) {
       rows.push(tocItem(c.label, c.id === CH ? 'cur' : '', () => goTo(c.id, 0)));
       // 開いている章だけ、見出しも並べる（章の最初の見出しは章の名前と同じなので飛ばす）
-      if (c.id === CH) blocks.forEach((el, b) => { if (/^H[2-4]$/.test(el.tagName)) rows.push(tocItem(el.cloneNode(true), el.tagName.toLowerCase(), () => goTo(CH, b))); });
+      if (c.id === CH) {
+        const at = isPdf() ? 0 : curPage(); let hb = 0;
+        blocks.forEach((el, b) => { if (b <= at && /^H[2-4]$/.test(el.tagName)) hb = b; });
+        blocks.forEach((el, b) => { if (/^H[2-4]$/.test(el.tagName)) rows.push(tocItem(el.cloneNode(true), el.tagName.toLowerCase() + (b === hb ? ' here' : ''), () => goTo(CH, b))); });
+      }
       // PDF は PDF に入っている目次（しおり）を並べる
       if (c.id === CH) for (const o of ol) rows.push(tocItem(o.t, 'h' + (o.d + 2), () => goTo(CH, o.n), o.n ? String(o.n) : ''));
     }
@@ -3768,6 +3825,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     $('#toc-q').value = ''; showHits('');
     if (!toc.open) toc.showModal();
     showTab(tab);
+    if (here) { const h = $('#toc-list .here') || $('#toc-list .cur'); if (h) h.scrollIntoView({ block: 'center' }); }
     pgIn.value = '';
     if (toc.contains(document.activeElement)) document.activeElement.blur();   // 開いただけでキーボードが出ないようにする
   }

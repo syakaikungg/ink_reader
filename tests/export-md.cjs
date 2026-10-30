@@ -1,7 +1,7 @@
 // md の本の書き出しの確認（Playwright + pypdf + pdftoppm）。2章の md の本（数式・図・太字・長い章・字体にない字）に書き込んで書き出す。GitHub は使わない。
 // 使い方: node tests/export-md.cjs [スクリーンショットの出力先]   （python3 と pypdf、pdftoppm（poppler）が要る）
 // 確認すること: 目次に「書き出す」→ 章を選ぶ（1章・すべて）→「PDF にする」→ 共有される PDF
-// → 文字は文字のまま（取り出せる・字体が埋め込まれている）→ 章ごとに新しいページ・長い章は複数ページ → 書き込みが同じ位置に出る（開いていない章も）→ 余白は開いて出す
+// → 文字は文字のまま（取り出せる・字体が埋め込まれている）→ 章ごとに新しいページ・長い章は複数ページ → 書き込みが同じ位置に出る（開いていない章も）→ 余白（段落の下・段落の途中）は開いて出す
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os'), { execFileSync } = require('child_process');
 const APP = path.resolve(__dirname, '..'), OUT = process.argv[2] || os.tmpdir(), DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ink-export-md-'));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.webmanifest': 'application/manifest+json' };
@@ -68,18 +68,21 @@ const py = (code, ...args) => execFileSync('python3', ['-c', code, ...args], { e
   });
   // 1章の最初の段落（2番目の段落）の下に余白（書き込み JSON の gap）を入れて、たたんでおく → 書き出しでは開くので、下のものは GAP だけ下に出る
   // （投げ縄の操作は gap.cjs で確かめているので、ここでは保存した書き込みを書き換えて開き直す）
-  const GAP = 60;
+  const GAP = 60, SPH = 150;
   await p.waitForTimeout(500);
-  await p.evaluate(async (GAP) => {
+  await p.evaluate(async ([GAP, SPH]) => {
     const db = await new Promise((res) => { const r = indexedDB.open('ink-reader', 1); r.onsuccess = () => res(r.result); });
     const get = (k) => new Promise((res) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); });
     const id = (await get('books'))[0].id, key = 'ink:' + id + ':c1', v = await get(key);
     v.blocks[2] = { ...(v.blocks[2] || { strokes: {} }), gap: GAP, fold: 1 };
+    // 2章（開いていない章）の段落2（3番目の段落）の頭に、段落の途中の余白（sp）をたたんで入れておく → 書き出しでは開いて、段落1と段落2の間が SPH だけ広がる
+    const k2 = 'ink:' + id + ':c2', v2 = await get(k2);
+    v2.blocks[3] = { ...(v2.blocks[3] || { b: 3, strokes: {} }), sp: [[0, SPH, 1]] };
     // 本の図（赤い画像）も入れておく
     const cv = document.createElement('canvas'); cv.width = 40; cv.height = 30; const g = cv.getContext('2d'); g.fillStyle = '#e00000'; g.fillRect(0, 0, 40, 30);
     const png = await new Promise((ok) => cv.toBlob(ok, 'image/png')), bk = await get('book:' + id);
-    await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, key); t.objectStore('kv').put(png, 'img:' + bk.imageDir + '/fig.png'); t.oncomplete = res; });
-  }, GAP);
+    await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, key); t.objectStore('kv').put(v2, k2); t.objectStore('kv').put(png, 'img:' + bk.imageDir + '/fig.png'); t.oncomplete = res; });
+  }, [GAP, SPH]);
   await p.reload(); await p.waitForFunction(() => document.getElementById('chap-t').textContent.includes('第1章')); await p.waitForTimeout(800);
   ok('余白はたたんである（画面）', await p.evaluate(() => document.querySelectorAll('#doc > *')[2].style.paddingBottom !== '') , await p.evaluate(() => document.querySelectorAll('#doc > *')[2].style.paddingBottom));
 
@@ -112,6 +115,15 @@ print(json.dumps({'n': len(r.pages), 'size': [float(r.pages[0].mediabox.width), 
   ok('名前に章の名前', /（書き込み 第2章 行列）\.pdf$/.test(one.name), one.name);
   ok('A4 で、長い章は何ページかに分かれる', info1.n >= 3 && info1.n <= 6 && Math.abs(info1.size[0] - 595.28) < .5 && Math.abs(info1.size[1] - 841.89) < .5, info1.n);
   ok('文字は文字のまま取り出せる', /第2章\s*行列/.test(info1.text) && /段落1。行列/.test(info1.text), info1.text.slice(0, 60));
+  // 段落の頭の「段」の高さ（pt）: 段落1→2 の間は、段落2→3 より SPH だけ広い（たたんだ段落の途中の余白も開いて出す）
+  const dan = JSON.parse(py(`import sys, json
+from pypdf import PdfReader
+ys = []
+def v(t, cm, tm, fd, fs):
+    if '段' in t: ys.append(tm[5] * cm[3] + cm[5])
+PdfReader(sys.argv[1]).pages[0].extract_text(visitor_text=v)
+print(json.dumps(ys[:3]))`, one.f));
+  ok('段落の途中の余白（たたんでいても）は開いて出す', dan.length === 3 && Math.abs((dan[0] - dan[1]) - (dan[1] - dan[2]) - SPH * 595.28 / 680) < 2, dan);
 
   // すべて選ぶ
   await p.click('#ex-all');
