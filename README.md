@@ -27,10 +27,10 @@ GitHub の Settings → Developer settings → Fine-grained tokens で、対象�
 - `index.html` / `app.js`: 画面と書き込み・同期
 - `render.js`: md → HTML（KaTeX）。段落の分け方を変えると既存の書き込みがずれるので注意
 - `sw.js`: アプリ本体のキャッシュ（更新したら `VERSION` を上げる）
-- `vendor/`: KaTeX 0.16.11、marked 12.0.2、perfect-freehand 1.2.2、PDF.js 5.7.284、pdf-lib 1.17.1（PDF の書き出し）、Source Serif 4
+- `vendor/`: KaTeX 0.16.11、marked 12.0.2、perfect-freehand 1.2.2、PDF.js 5.7.284、pdf-lib 1.17.1 と @pdf-lib/fontkit 1.1.1（PDF の書き出し）、Source Serif 4、Noto Serif JP（md の本の書き出しだけ。`vendor/fonts/pdf/`）
 
 ## 著作権
 
 Copyright (C) 2026 syakaikungg. All rights reserved.
 
-`vendor/` のライブラリは、それぞれのライセンス（KaTeX・marked・perfect-freehand・pdf-lib は MIT、PDF.js は Apache 2.0）に従います。
+`vendor/` のライブラリは、それぞれのライセンス（KaTeX・marked・perfect-freehand・pdf-lib・fontkit は MIT、PDF.js は Apache 2.0、字体の Source Serif 4・Noto Serif JP は SIL Open Font License 1.1）に従います。

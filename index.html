@@ -431,6 +431,11 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   border: 2px solid #fff; background: rgba(20,30,60,.18); box-shadow: 0 0 0 1px rgba(20,30,60,.25); font: 700 13px/18px var(--f-ui); color: #fff; text-align: center; }
 #toc.picking #pg-grid .on .im { outline: 3px solid var(--accent); outline-offset: 2px; }
 #toc.picking #pg-grid .on .im::after { content: "✓"; background: var(--accent); }
+/* md の本: 書き出す章を選ぶ。章の行の左に印。選んでいる間は検索・しおり・見出しを出さない */
+#toc.picking #toc-q, #toc.picking #toc-hits, #toc.picking #toc-bm, #toc.picking #toc-main > h2, #toc.picking #toc-main > p { display: none; }
+#toc li .ck { display: flex; align-items: center; gap: 10px; color: var(--fg); font-weight: 400; }
+#toc li .ck::before { content: ""; flex: none; width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--rule); font: 700 12px/16px var(--f-ui); color: var(--paper); text-align: center; }
+#toc li .ck.on::before { content: "✓"; background: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -588,7 +593,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
     <div id="toc-head" hidden>
       <div id="toc-tabs" role="tablist"><button type="button" role="tab" data-t="pages">ページ</button><button type="button" role="tab" data-t="main">目次・しおり</button></div>
       <label class="go" id="pg-go">ページ <input id="pg-in" inputmode="numeric" enterkeyhint="go" autocomplete="off" aria-label="飛ぶページの番号" placeholder="番号"> / <span id="pg-all"></span></label>
-      <button type="button" id="ex-on" hidden title="ページを選んで、書き込みごと PDF にする">書き出す</button>
+      <button type="button" id="ex-on" hidden title="ページ（md の本は章）を選んで、書き込みごと PDF にする">書き出す</button>
       <div id="ex-bar" hidden><span id="ex-n"></span><button type="button" id="ex-all">すべて選択</button><button type="button" id="ex-x">やめる</button><button type="button" id="ex-go" class="primary">PDF にする</button></div>
       <p id="ex-msg" hidden aria-live="polite"></p>
     </div>
