@@ -5,12 +5,13 @@
 // - ページの途中の余白（sp）: そのページを縦に伸ばし、元のページを余白のところで切って並べる（view/p<ページ>.png と同じ並べ方）
 // - 後ろの白紙（gap）: 直前のページと同じ大きさの別ページ。たたんだ余白も開いて出す（線の座標は余白をすべて開いたときの位置なので、そのまま描ける）
 // - ページの境目をまたぐ線は、かかった紙それぞれに描く
+// - 紙に貼った画像（書き込み JSON の pics）は、線より下に、画面と同じ位置・大きさ・向きで入れる
 // すべて選んだときは元の PDF に手を入れて使い（目次・リンクが残る）、一部のときは選んだページだけを新しい PDF に写す
 const W = 680, PAGE_GAP = 14;   // app.js と同じ（紙の幅、ページの間の隙間）
 export const INK = { k: '#15181f', r: '#d0302a', b: '#1d56d8' }, HL = '#ffd53d';   // 既定の3色（明るい画面のとき）とマーカー（export-md.js も使う）
 const pageH = (sizes, n) => Math.round(W * sizes[n - 1][1] / sizes[n - 1][0]);
 // 行列 [a b c d e f]（PDF の cm）。mul(m, n) は m をかけてから n をかける
-const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
+export const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
   m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
 const inv = ([a, b, c, d, e, f]) => { const k = a * d - b * c; return [d / k, -b / k, -c / k, a / k, (c * f - d * e) / k, (b * e - a * f) / k]; };
 
@@ -58,8 +59,10 @@ export function viewOf(L, P) {
 // L: pdf-lib、pdf: 元の PDF（Uint8Array）、unlock: 鍵のかかった PDF のとき、その PDF を開いた PDF.js の文書を返す（なくてもよい）、sizes / title: 本の情報（book.json）、
 // ink: 線 [{ b（ページ）, d（輪郭の SVG パス。紙の px、ページの上端から）, hl（マーカー）, c（色）, y0, y1（上下の端） }]、
 // gaps / sps: 書き込み JSON の gap / sp（sps は { ページ: [{ at, h }] }）、keys: 書き出す紙の Set（'<ページ>:<白紙>'。null ならすべて）、
-// viewT(n): ページ n の向き・範囲（なければ viewOf）、say: 途中の知らせ。返すもの: { bytes, name, count（紙の数） }
-export async function exportPdf({ L, pdf, unlock, sizes, title, ink, gaps = {}, sps = {}, keys = null, viewT, say = () => {} }) {
+// viewT(n): ページ n の向き・範囲（なければ viewOf）、say: 途中の知らせ、
+// pics: 貼った画像 [{ b（ページ）, f（名前）, p: [左上, 右上, 左下]（紙の px、ページの上端から）, y0, y1 }]、pic(f): 画像の中身（JPEG か PNG の Uint8Array。なければ null）。
+// 返すもの: { bytes, name, count（紙の数） }
+export async function exportPdf({ L, pdf, unlock, sizes, title, ink, gaps = {}, sps = {}, keys = null, viewT, say = () => {}, pics = [], pic = async () => null }) {
   const N = sizes.length, PN = (s) => L.PDFName.of(s);
   ink = ink.filter((s) => s.d).sort((x, y) => y.hl - x.hl);   // マーカーは下に描く
   const { sheets, top0 } = sheetsOf(sizes, gaps, sps);
@@ -104,9 +107,23 @@ export async function exportPdf({ L, pdf, unlock, sizes, title, ink, gaps = {}, 
   }
   const hex = (c) => { const x = INK[c] || (/^#[0-9a-f]{6}$/i.test(c) ? c : INK.k); return L.rgb(...[1, 3, 5].map((i) => parseInt(x.slice(i, i + 2), 16) / 255)); };
   const hl = hex(HL);
-  const hits = (sh) => ink.filter((s) => top0[s.b] != null && top0[s.b] + s.y1 > sh.y && top0[s.b] + s.y0 < sh.y + sh.h);
-  // 紙 sh にかかる線を描く。U は紙の座標（pt、上から下へ）を出す先のページの座標に直す行列
-  function drawSheet(P, sh, U, k) {
+  const on = (sh) => (s) => top0[s.b] != null && top0[s.b] + s.y1 > sh.y && top0[s.b] + s.y0 < sh.y + sh.h;
+  const hits = (sh) => ink.filter(on(sh)), picHits = (sh) => pics.filter(on(sh));
+  const ims = new Map();   // 画像の名前 -> 埋め込んだ画像（同じ画像は1つだけ入れる）
+  const embed = (f) => {
+    if (!ims.has(f)) ims.set(f, (async () => { const d = await pic(f); return d ? d[0] === 0x89 ? pd.embedPng(d) : pd.embedJpg(d) : null; })().catch(() => null));
+    return ims.get(f);
+  };
+  // 紙 sh にかかる画像と線を描く。U は紙の座標（pt、上から下へ）を出す先のページの座標に直す行列
+  async function drawSheet(P, sh, U, k) {
+    for (const s of picHits(sh)) {
+      const im = await embed(s.f);
+      if (!im) continue;
+      // 画像の (0, 0)〜(1, 1)（左下が原点）を、紙の上の四隅（左下・右下・左上）に合わせる
+      const [p0, p1, p3] = s.p, M = [p1[0] - p0[0], p1[1] - p0[1], p0[0] - p3[0], p0[1] - p3[1], p3[0], p3[1]];
+      P.pushOperators(L.pushGraphicsState(), L.concatTransformationMatrix(...mul(mul(mul(M, [1, 0, 0, 1, 0, top0[s.b] - sh.y]), [k, 0, 0, k, 0, 0]), U)),
+        L.drawObject(P.node.newXObject('Im', im.ref)), L.popGraphicsState());
+    }
     let gs = null;
     for (const s of hits(sh)) {
       if (s.hl && !gs) gs = P.node.newExtGState('GS', pd.context.obj({ Type: 'ExtGState', ca: .45, BM: 'Multiply' }));
@@ -138,9 +155,9 @@ export async function exportPdf({ L, pdf, unlock, sizes, title, ink, gaps = {}, 
   let done = 0;
   for (const [sh, P] of out) {
     const n = sh.n, [w, h] = sizes[n - 1], k = w / W;
-    if (sh.i) drawSheet(P, sh, [1, 0, 0, -1, 0, h], k);
-    else if (sps[n]) { const Hs = h + sh.h * k - pageH(sizes, n) * k; await stretch(P, n, Hs); drawSheet(P, sh, [1, 0, 0, -1, 0, Hs], k); }
-    else if (hits(sh).length) drawSheet(P, sh, inv(await viewT(n)), k);
+    if (sh.i) await drawSheet(P, sh, [1, 0, 0, -1, 0, h], k);
+    else if (sps[n]) { const Hs = h + sh.h * k - pageH(sizes, n) * k; await stretch(P, n, Hs); await drawSheet(P, sh, [1, 0, 0, -1, 0, Hs], k); }
+    else if (hits(sh).length || picHits(sh).length) await drawSheet(P, sh, inv(await viewT(n)), k);
     if (++done % 10 === 0) { say(`作っています ${done} / ${out.length}`); await new Promise((r) => setTimeout(r)); }
   }
   say('まとめています');
@@ -191,13 +208,18 @@ function smooth(pts, r) {
     return [x / k, y / k, q[2]];
   });
 }
-// blocks: 書き込み JSON（ink/<章>.json）の blocks。getStroke: perfect-freehand。返すもの: exportPdf に渡す { ink, gaps, sps }
+// blocks: 書き込み JSON（ink/<章>.json）の blocks。getStroke: perfect-freehand。返すもの: exportPdf に渡す { ink, gaps, sps, pics }
 export function readInk(blocks, getStroke) {
-  const ink = [], gaps = {}, sps = {};
+  const ink = [], gaps = {}, sps = {}, pics = [];
   for (const b in blocks) {
     const blk = blocks[b];
     if (blk.gap) gaps[b] = blk.gap;
     if (blk.sp && blk.sp.length) sps[b] = blk.sp.map(([at, h]) => ({ at, h }));
+    // 貼った画像: 左上・右上・左下（×10）。右下は 右上 + 左下 - 左上
+    for (const id in blk.pics || {}) {
+      const d = blk.pics[id], v = d.p.map((x) => x / 10), ys = [v[1], v[3], v[5], v[3] + v[5] - v[1]];
+      pics.push({ b: +b, f: d.f, p: [[v[0], v[1]], [v[2], v[3]], [v[4], v[5]]], y0: Math.min(...ys), y1: Math.max(...ys) });
+    }
     for (const id in blk.strokes || {}) {
       const d = blk.strokes[id], pts = [], seen = [];
       for (let i = 0; i + 2 < d.p.length; i += 3) {
@@ -215,13 +237,14 @@ export function readInk(blocks, getStroke) {
       ink.push({ b: +b, d: pathD(outl.map(([x, y]) => [x / 10, y / 10])), hl: d.t === 'hl', c: d.c, y0: Math.min(...ys) - 10, y1: Math.max(...ys) + 10 });
     }
   }
-  return { ink, gaps, sps };
+  return { ink, gaps, sps, pics };
 }
 
 // ---------- node で動かす（クラウドの Claude 用） ----------
 const USAGE = `書き込みつき PDF を作ります（Ink Reader の「書き出す」と同じもの）。
-使い方: node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <ink/pdf.json> [--pages 3-5,8] [--out <出す PDF>]
+使い方: node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <ink/pdf.json> [--pages 3-5,8] [--pics <フォルダ>] [--out <出す PDF>]
   --pages  書き出すページ（ページの後ろの白紙も一緒に入る）。省くとすべて
+  --pics   紙に貼った画像のフォルダ（ドライブの <本>/pics/）。省くと、今のフォルダかインクの JSON の隣の pics/
   --out    出すファイル（省くと「<題名>（書き込み …）.pdf」）
 先に、このファイルと同じフォルダか今のフォルダで npm i pdf-lib@1.17.1 perfect-freehand@1.2.2 をしておく。`;
 async function main(args) {
@@ -238,7 +261,11 @@ async function main(args) {
   const getStroke = pf ? new Function('window', fs.readFileSync(pf, 'utf8') + '\nreturn window.getStroke;')({}) : need('perfect-freehand').getStroke;
   const bk = JSON.parse(fs.readFileSync(a.book, 'utf8')), raw = JSON.parse(fs.readFileSync(a.ink, 'utf8'));
   if (!bk.pdf || !bk.sizes) throw new Error('PDF の本の book.json ではありません');
-  const { ink, gaps, sps } = readInk(raw.blocks || {}, getStroke);
+  const { ink, gaps, sps, pics } = readInk(raw.blocks || {}, getStroke);
+  // 貼った画像はファイルのフォルダから。見つからない画像は入れずに知らせる
+  const picDir = typeof a.pics === 'string' ? a.pics : ['pics', path.join(path.dirname(a.ink), 'pics'), path.join(path.dirname(a.ink), '..', 'pics')].find((d) => fs.existsSync(d));
+  const lost = new Set();
+  const pic = async (f) => { const p = picDir && path.join(picDir, path.basename(f)); if (p && fs.existsSync(p)) return new Uint8Array(fs.readFileSync(p)); lost.add(f); return null; };
   let keys = null;
   if (typeof a.pages === 'string') {
     const want = new Set();
@@ -253,10 +280,11 @@ async function main(args) {
     if (!pj) throw new Error('鍵のかかった PDF です。npm i pdfjs-dist@5.7.284 をしてから、もう一度動かしてください');
     return pj.getDocument({ data: pdf.slice(), verbosity: 0 }).promise;
   };
-  const t0 = Date.now(), r = await exportPdf({ L, pdf, unlock, sizes: bk.sizes, title: bk.title, ink, gaps, sps, keys, say: (t) => console.log(t) });
+  const t0 = Date.now(), r = await exportPdf({ L, pdf, unlock, sizes: bk.sizes, title: bk.title, ink, gaps, sps, keys, pics, pic, say: (t) => console.log(t) });
   const out = typeof a.out === 'string' ? a.out : r.name;
   fs.writeFileSync(out, r.bytes);
   const z = r.bytes.length;
+  if (lost.size) console.log(`貼った画像 ${lost.size} 枚が見つからないので、入れていません（ドライブの <本>/pics/ から取って --pics で指定してください）: ${[...lost].join(' ')}`);
   console.log(`できました: ${out}（${r.count}枚、${z < 1048576 ? Math.ceil(z / 1024) + 'KB' : (z / 1048576).toFixed(1) + 'MB'}、${((Date.now() - t0) / 1000).toFixed(1)}秒）`);
 }
 if (typeof process === 'object' && process.versions && process.versions.node && process.argv[1]) {

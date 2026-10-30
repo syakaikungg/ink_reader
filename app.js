@@ -134,13 +134,39 @@
     el.setAttribute('class', s.tool === 'hl' ? 'hl' : hex ? 'x' : s.c);
     if (hex) el.style.fill = s.c; else el.style.removeProperty('fill');
   }
+  // 貼った画像（tool: 'img'）も線と同じく段落に結びつけ、pts に四隅（左上・右上・右下・左下。段落の上端から）を持つ。
+  // 投げ縄の移動・大きさ・向きは四隅を動かすだけでよい。画像は線とマーカーより下（picG の中）に置く
+  const picG = document.createElementNS(NS, 'g'); svg.append(picG);
   function mount(s) {
-    if (!s.el) {
+    if (!s.el && s.tool === 'img') makePic(s);
+    else if (!s.el) {
       s.el = document.createElementNS(NS, 'path'); paint(s.el, s);
       render(s, null, true);
     }
     place(s);
-    if (s.tool === 'hl') svg.insertBefore(s.el, svg.firstChild); else svg.appendChild(s.el);
+    if (s.tool === 'img') picG.appendChild(s.el);
+    else if (s.tool === 'hl') svg.insertBefore(s.el, picG.nextSibling); else svg.appendChild(s.el);
+  }
+  // 画像の大きさと向き: 左上を原点に、幅 w・高さ h の画像を四隅に合わせる行列 m
+  function picFrame(s) {
+    const [p0, p1, , p3] = s.pts, w = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) || 1, h = Math.hypot(p3[0] - p0[0], p3[1] - p0[1]) || 1;
+    return { w, h, m: [(p1[0] - p0[0]) / w, (p1[1] - p0[1]) / w, (p3[0] - p0[0]) / h, (p3[1] - p0[1]) / h, p0[0], p0[1]] };
+  }
+  function makePic(s) {
+    const { w, h, m } = picFrame(s);
+    s.el = document.createElementNS(NS, 'g'); s.el.setAttribute('class', 'pic');
+    for (const t of ['rect', 'image']) {   // rect: 画像がまだ読めていないときの枠
+      const e = document.createElementNS(NS, t);
+      e.setAttribute('width', w); e.setAttribute('height', h); e.setAttribute('transform', `matrix(${m.join(' ')})`);
+      if (t === 'image') e.setAttribute('preserveAspectRatio', 'none');
+      s.el.append(e);
+    }
+    fillPic(s);
+  }
+  async function fillPic(s) {
+    const u = await picUrl(s.f).catch(() => null);
+    s.el.setAttribute('class', u ? 'pic' : 'pic miss');
+    if (u) s.el.lastChild.setAttribute('href', u);
   }
   function blockAt(y) {
     let lo = 0, hi = tops.length - 1;
@@ -166,6 +192,12 @@
     if (d.g) { const v = []; for (let i = 0; i + 1 < d.g.v.length; i += 2) v.push([d.g.v[i] / 10, d.g.v[i + 1] / 10]); s.g = { k: d.g.k, v, a: d.g.a / 1000, p: d.g.p / 100 }; }
     bbox(s); return s;
   }
+  // 画像は名前と、左上・右上・左下の三隅（右下は決まる）
+  const serPic = (s) => ({ f: s.f, p: [0, 1, 3].flatMap((i) => [Math.round(s.pts[i][0] * 10), Math.round(s.pts[i][1] * 10)]) });
+  function dePic(id, b, d) {
+    const v = d.p.map((x) => x / 10), s = { id, b, tool: 'img', f: d.f, pts: [[v[0], v[1], 0], [v[2], v[3], 0], [v[2] + v[4] - v[0], v[3] + v[5] - v[1], 0], [v[4], v[5], 0]] };
+    bbox(s); return s;
+  }
   // 今の章の書き込みを段落ごとの形にする（GitHub の ink/<章>.json と同じ形）
   function serialize() {
     const out = {};
@@ -173,7 +205,8 @@
       // PDF は b がページ番号。ページの大きさ（pt）も残し、座標（幅 680 の紙の px）を PDF の座標に直せるようにする
       const blk = out[s.b] ||= isPdf() ? { b: s.b, pt: book.sizes[s.b - 1], strokes: {} }
         : { b: s.b, h: hashes[s.b], text: blocks[s.b] ? blocks[s.b].textContent.slice(0, 80) : '', strokes: {} };
-      if (s.pts) blk.strokes[s.id] = ser(s);
+      if (s.tool === 'img') (blk.pics ||= {})[s.id] = serPic(s);
+      else if (s.pts) blk.strokes[s.id] = ser(s);
       if (gaps[s.b]) blk.gap = gaps[s.b];
       if (folds.has(s.b)) blk.fold = 1;
       if (sps[s.b]) blk.sp = sps[s.b].map((p) => [p.at, p.h, p.c ? 1 : 0]);
@@ -193,6 +226,7 @@
       if (d.fold && d.gap) folds.add(+b);
       if (d.sp && d.sp.length) sps[b] = d.sp.map(([at, h, c]) => ({ at, h, c: !!c }));
       if (d.gap || d.sp) relay(+b);
+      for (const id in d.pics || {}) { const s = dePic(id, +b, d.pics[id]); mount(s); strokes.push(s); }
       for (const id in d.strokes || {}) { const s = de(id, +b, d.strokes[id]); mount(s); strokes.push(s); }
     }
     showSps();
@@ -269,7 +303,7 @@
       const y = sy(x);
       if (rm && y >= rm[0] && y < rm[1]) del.push(x);
       else if (dy && y >= e) {
-        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, ...(x.pr ? { pr: 1 } : {}), pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
+        const m = { id: newId(), b, tool: x.tool, c: x.c, s: x.s, pen: x.pen, ...(x.pr ? { pr: 1 } : {}), ...(x.f ? { f: x.f } : {}), pts: x.pts.map(([px, py, pp]) => [px, py + dy, pp]) };
         if (x.g) m.g = moveG(x.g, 0, dy);
         bbox(m); old.push(x); moved.push(m);
       }
@@ -620,7 +654,8 @@ iPad の手書きリーダー「Ink Reader」が置いているフォルダで�
 - \`<本>/chapters/<章>.md\`: md の本の本文（数式は TeX）。段落番号は、空行で区切った段落・見出し・数式のかたまりを上から 1, 2, … と数えたもの。
 - \`<本>/view/p<ページ>.png\`: PDF の本の、書き込みのあるページ（と質問されたページ）の画像。ページの絵に手書きを重ねてある。
 - \`<本>/asks/<質問ID>.png\`: 質問のときに囲んだ範囲の画像（手書き入り）。
-- \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。
+- \`<本>/ink/<章>.json\`: 手書きの座標（アプリ用。人が読むものではない。書き込みつきの PDF を作るときに使う）。段落ごとの \`pics\` は、紙に貼った画像の名前と位置。
+- \`<本>/pics/<名前>.jpg\`（.png）: 利用者が紙に貼った画像（写真・図・スクリーンショットなど）。ページの画像・now.png・last.png にも貼った所に入っている。
 - \`ink_export.mjs\`: 書き込みつきの PDF を作る道具（アプリの「書き出す」と同じもの。使い方は下）。
 - \`いま.md\`・\`now.png\`・\`last.png\`: いま iPad で見ている所と、最後に書いた所（下の「いま見ている所」）。
 - \`<本>/marks.json\`: 答えごとに利用者が付けた「わかった」「まだ」。\`{ "<章>-<質問ID>": { "m": "ok"（わかった）| "no"（まだ）| null（外した）, "t": 押した時刻, "c": 章, "b": [段落] } }\`。理解度をつかむのに使ってください。
@@ -646,10 +681,11 @@ iPad で Ink Reader と Claude を画面に並べて使うときのために、�
 
 PDF の本は、アプリの「書き出す」と同じ PDF（元のページに手書きを重ね、ページの途中の余白・後ろの白紙も入れたもの）を作れます。コマンドを動かせる環境（Claude Code など）で:
 
-1. ドライブから4つをダウンロードする: \`Ink Reader/ink_export.mjs\`、\`<本>/book.json\`、\`<本>/book.pdf\`、\`<本>/ink/pdf.json\`
+1. ドライブから4つをダウンロードする: \`Ink Reader/ink_export.mjs\`、\`<本>/book.json\`、\`<本>/book.pdf\`、\`<本>/ink/pdf.json\`（紙に画像を貼ってあれば \`<本>/pics/\` の画像も、作業フォルダの \`pics/\` に）
 2. 作業フォルダに \`ink_export.mjs\` を置き、そこで \`npm i pdf-lib@1.17.1 perfect-freehand@1.2.2\`（鍵のかかった PDF は \`pdfjs-dist@5.7.284\` も）
 3. \`node ink_export.mjs --pdf <book.pdf> --book <book.json> --ink <pdf.json> --pages 3-5 --out <名前>.pdf\`
    - \`--pages\` は書き出すページ（そのページの後ろに入れた白紙も一緒に入る）。省くとすべて
+   - 貼った画像は作業フォルダの \`pics/\` から入れる（別の所に置いたら \`--pics <フォルダ>\`）
 
 \`book.pdf\` がない本（10MB より大きい）は作れないので、iPad のアプリで、右下のページ番号から開くページの一覧の「書き出す」で作ってもらってください。
 iPad で書いた直後は、ドライブに届くまで少し待ってから（アプリの下に「ドライブに保存しました」と出る）ダウンロードしてください。
@@ -786,6 +822,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       for (let tryNo = 0; tryNo < 2; tryNo++) {
         sent = new Set(st.pending);
         if (id === CH) st.blocks = serialize();
+        await upPics(dir, bk, st.blocks, R);
         const body = JSON.stringify({ chapter: id, blocks: st.blocks }, null, 0);
         try {
           st.sha = await R.put(inkPath(id, dir), body, st.sha, `ink: ${dir.split('/').pop()} ${id}`);
@@ -815,7 +852,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 送信中に書き足された段落は送信済みにしない
   function sameBlock(b, sentBlock) {
     const now = strokes.filter((s) => s.b === b).map((s) => s.id).sort().join();
-    return now === Object.keys((sentBlock && sentBlock.strokes) || {}).sort().join();
+    return now === Object.keys({ ...(sentBlock && sentBlock.strokes), ...(sentBlock && sentBlock.pics) }).sort().join();
   }
   // 本の情報を、最初に一度だけ置く。ファイルの md の本は本文も置く（GitHub の本の本文は GitHub にあるので、場所だけ書く）。
   // ドライブには AI への説明（README.md）と道具も置く
@@ -923,6 +960,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       v += c1 - c0 + (p ? p.h : 0); c0 = c1;
     }
     pc.width = pc.height = 0;
+    await readyPics(list);
     g.scale(k, k); drawInk(g, list, () => 0);
     return cv;
   }
@@ -959,6 +997,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
     pullAnswers(id); upPdf(); moveGhBook(); syncRates();
+    for (const s of strokes) if (s.tool === 'img' && s.el.getAttribute('class') === 'pic miss') fillPic(s);   // つなぐ前に読めなかった画像
     // この iPad でまだ何もない章は、置き場所の分を取り込む（ほかの iPad で書いた分・ドライブから戻した本）
     if (!st.at && !st.sha && !st.pending.size && !Object.keys(st.blocks).length) st.at = where().name;
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
@@ -981,6 +1020,129 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   });
   // Claude と画面を分けているときは、アプリに戻っても上の visibilitychange が来ない。Claude の側から戻ったとき（focus）に答えを見に行く
   addEventListener('focus', () => { if (Date.now() - lastPull > 5000) { lastPull = Date.now(); refreshChapter(); } });
+
+  // ---------- 画像（紙に貼る） ----------
+  // 写真やファイルの画像を紙に貼る（ツールバーの「画像」、ほかのアプリからのドラッグ、キーボードの貼り付け）。貼った画像は投げ縄で選んで、動かす・大きさ・向き・複製・削除。
+  // 画像は長い辺 PIC_MAX px までに縮めて JPEG（透けている所があれば PNG）にし、中身の SHA-256 の頭 24 字を名前にする（同じ画像は1つ。位置情報などは落ちる）。
+  // 端末は kv 'pic:<本>:<名前>'、置き場所（ドライブ）は <本>/pics/<名前>（一度置けば変わらない）。書き込み JSON は段落ごとに pics: { <id>: { f: 名前, p: 左上・右上・左下（×10） } }
+  const PIC_MAX = 2000;
+  const picKey = (f, bk = bookKey()) => 'pic:' + bk + ':' + f;
+  const asBlob = (v) => v instanceof Blob ? v : v && v.buf ? new Blob([v.buf], { type: v.type }) : null;
+  const picNames = (blocks) => { const out = new Set(); for (const b in blocks || {}) for (const id in blocks[b].pics || {}) out.add(blocks[b].pics[id].f); return out; };
+  async function savePic(f, bl, bk = bookKey()) {
+    try { await kv.set(picKey(f, bk), bl); } catch { await kv.set(picKey(f, bk), { type: bl.type, buf: await bl.arrayBuffer() }); }
+  }
+  // 画像の中身。この iPad になければ（ほかの iPad で貼った・ドライブから戻した本）ドライブから取って覚える
+  async function picBlob(f, bk = bookKey(), dir = bookDir()) {
+    let bl = asBlob(await kv.get(picKey(f, bk)));
+    if (!bl && where() === drive && drive.ok() && online()) {
+      bl = await drive.blob(dir + '/pics/' + f).catch((e) => { if (e.drive) needLogin(); return null; });
+      if (bl) await savePic(f, bl, bk);
+    }
+    return bl;
+  }
+  const picUrls = new Map();   // '<本>:<名前>' -> 画像の blob URL の Promise（読めなかったものは覚えず、次にまた試す）
+  function picUrl(f) {
+    const k = bookKey() + ':' + f;
+    if (!picUrls.has(k)) picUrls.set(k, picBlob(f).then((bl) => { if (!bl) throw new Error('no pic'); return URL.createObjectURL(bl); }).catch((e) => { picUrls.delete(k); throw e; }));
+    return picUrls.get(k);
+  }
+  // 絵（ページの画像・いま見ている所・書き出しの縮小画像など）に描くときの画像。drawInk は待たずに描くので、先に readyPics で読んでおく。
+  // 読んだ画像は、多くなったら古いものから捨てる（大きな画像をいくつも覚えておくと重い）
+  const picIms = new Map();   // '<本>:<名前>' -> { p: 読み込みの Promise, im: 読めた画像 }
+  function picImg(f) {
+    const k = bookKey() + ':' + f;
+    let e = picIms.get(k);
+    if (e) { picIms.delete(k); picIms.set(k, e); return e.p; }
+    e = { im: null };
+    e.p = picUrl(f).then(async (u) => { const im = new Image(); im.src = u; await im.decode(); return e.im = im; }).catch(() => { picIms.delete(k); return null; });
+    picIms.set(k, e);
+    if (picIms.size > 12) picIms.delete(picIms.keys().next().value);
+    return e.p;
+  }
+  const readyPics = (list) => Promise.all(list.filter((s) => s.tool === 'img').map((s) => picImg(s.f)));
+  // 書き込みに貼った画像を、まだ置いていなければ置き場所の <本>/pics/ に置く。書き込みより先に置く（ほかの iPad が書き込みを読んだときに画像があるように）
+  async function upPics(dir, bk, blocks, R) {
+    const names = picNames(blocks);
+    if (!names.size) return;
+    const key = 'picup:' + tag(R) + bk, done = (await kv.get(key)) || {};
+    for (const f of names) {
+      if (done[f]) continue;
+      const bl = asBlob(await kv.get(picKey(f, bk)));
+      if (!bl) continue;   // この iPad にない画像（ほかの iPad で貼ったもの）は、貼った iPad が置く
+      const path = dir + '/pics/' + f;
+      if (!await R.sha(path)) await R.put(path, bl, null, `pic: ${dir.split('/').pop()} ${f}`);
+      done[f] = 1; await kv.set(key, done);
+    }
+  }
+  // 選んだ画像のファイルを縮めて、名前をつける
+  async function readPic(file) {
+    const url = URL.createObjectURL(file), im = new Image();
+    try {
+      im.src = url; await im.decode();
+      const w0 = im.naturalWidth, h0 = im.naturalHeight;
+      if (!w0 || !h0) throw new Error('size');
+      const k = Math.min(1, PIC_MAX / Math.max(w0, h0)), w = Math.max(1, Math.round(w0 * k)), h = Math.max(1, Math.round(h0 * k)), cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const g = cv.getContext('2d');
+      g.drawImage(im, 0, 0, w, h);
+      let clear = false;
+      if (!/jpe?g|hei[cf]/i.test(file.type)) { const d = g.getImageData(0, 0, w, h).data; for (let i = 3; i < d.length; i += 4) if (d[i] < 250) { clear = true; break; } }
+      const bl = await new Promise((ok) => cv.toBlob(ok, clear ? 'image/png' : 'image/jpeg', .9));
+      cv.width = cv.height = 0;
+      if (!bl) throw new Error('blob');
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await bl.arrayBuffer())).slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      return { f: hash + (clear ? '.png' : '.jpg'), bl, w, h };
+    } finally { URL.revokeObjectURL(url); }
+  }
+  // 画像を貼る。at: 紙の上の位置（ドラッグで落とした所）。なければ見えている所のまん中。いくつか選んだときは少しずつずらす
+  async function addPics(files, at) {
+    files = files.filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|gif|webp|hei[cf]|bmp)$/i.test(f.name));
+    if (!files.length || !CH || !book) return;
+    const bk = bookKey(), ch = CH, v = inView(), made = [];
+    stat.textContent = '画像を読み込んでいます…';
+    for (const file of files) {
+      let p;
+      try { p = await readPic(file); } catch { continue; }
+      if (bk !== bookKey() || ch !== CH) return;
+      await savePic(p.f, p.bl, bk);
+      // 大きさ: 紙の幅の 6 割、見えている高さの 6 割に収める（小さい画像は大きくしない）
+      const k = Math.min(1, W * .6 / p.w, Math.max(160, (v.y1 - v.y0) * .6) / p.h), w = p.w * k, h = p.h * k, o = made.length * 24;
+      const x0 = Math.max(0, Math.min(W - w, (at ? at.x : W / 2) - w / 2 + o)), y0 = Math.max(tops[1] || 0, (at ? at.y : (v.y0 + v.y1) / 2) - h / 2 + o);
+      const b = Math.max(1, blockAt(y0)), y = toSto(b, y0 - tops[b]);   // たたんだ余白の下なら、開いたときの位置にする
+      const s = { id: newId(), b, tool: 'img', f: p.f, pts: [[x0, y, 0], [x0 + w, y, 0], [x0 + w, y + h, 0], [x0, y + h, 0]] };
+      bbox(s); made.push(s);
+    }
+    if (!made.length) { stat.textContent = '画像を読み込めませんでした'; return; }
+    addAll(made); push({ type: 'add', list: made });
+    // 貼った画像は投げ縄で選んだままにする（そのまま動かせる）。選び終わると前の道具に戻る
+    const back = tool;
+    if (tool !== 'ls') { toolBtns[3].click(); loopBack = back; }
+    sel = made; picked = [...new Set(made.map((s) => s.b))].sort((x, y) => x - y); lassoBox = selBox();
+    showSel(); setEdit(null);
+    stat.textContent = `${cnt(made)}を貼りました（ペンでドラッグして移動・角で大きさ・上の丸で向き）`;
+  }
+  const picIn = $('#pic-file');
+  $('#t-pic').onclick = () => { if (!CH) { stat.textContent = '先に本を開いてください'; return; } picIn.value = ''; picIn.click(); };
+  picIn.onchange = () => addPics([...picIn.files]);
+  // ほかのアプリ（写真・ファイル）から画像をドラッグして落とす。紙の上なら落とした所に貼る（ページの外に落としても、画像が開いてアプリから出ないようにする）
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  document.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.target.closest && e.target.closest('dialog')) return;
+    const r = page.getBoundingClientRect(), on = page.contains(e.target);
+    addPics([...e.dataTransfer.files], on ? { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale } : null);
+  });
+  // キーボードの貼り付け（⌘V）で、写した画像を貼る
+  document.addEventListener('paste', (e) => {
+    if (e.target.closest && e.target.closest('input, textarea, dialog')) return;
+    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (files.some((f) => /^image\//.test(f.type))) { e.preventDefault(); addPics(files); }
+  });
+  // 選んだ・消した数（「3画」「画像1枚」「画像1枚・3画」）
+  const cnt = (list) => { const n = list.filter((s) => s.tool === 'img').length, m = list.length - n; return [n && `画像${n}枚`, m && `${m}画`].filter(Boolean).join('・') || '0画'; };
 
   // ---------- history ----------
   // op: {type:'add'|'erase', list} か {type:'replace', from, to}（投げ縄の移動・色変更）
@@ -1187,7 +1349,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   // 小窓に出す今の色・太さ。投げ縄で選んだ線なら、その線のもの（ばらばらなら null）
   function penNow() {
     if (popFor !== selPen) return { c: color, s: size };
-    const ss = sel.filter((s) => s.tool !== 'hl');
+    const ss = sel.filter((s) => s.tool === 'pen');
     if (!ss.length) return { c: null, s: null };
     return { c: ss.every((s) => s.c === ss[0].c) ? ss[0].c : null, s: ss.every((s) => s.s === ss[0].s) ? ss[0].s : null };
   }
@@ -1258,7 +1420,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     if (!strokes.length) return;
     clearSel();
     const list = strokes.slice(); removeAll(list); push({ type: 'erase', list });
-    stat.textContent = `${list.length}画を消しました（「戻す」で戻せます）`;
+    stat.textContent = `${cnt(list)}を消しました（「戻す」で戻せます）`;
   };
   $('#finger').onclick = (e) => { finger = !finger; e.currentTarget.setAttribute('aria-pressed', String(finger)); page.classList.toggle('finger', finger); bar.classList.toggle('finger', finger); showMore(false); };
   // 幅が狭いとき（Claude と画面を分けたときなど）は、拡大率・指で書く・設定を「…」の中に入れる。選ぶか外を触ると閉じる
@@ -1275,6 +1437,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   let penDown = false;
   const stylusGuard = (e) => {
     if (penDown) { e.preventDefault(); return; }
+    // 投げ縄で選んだ枠の中を指で押したときは、紙を動かさずに選んだものを動かす
+    if (e.type === 'touchstart' && e.touches.length === 1 && e.touches[0].touchType !== 'stylus' && !palms.has(e.touches[0].identifier) && onSel(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
     for (const t of e.changedTouches) if (t.touchType === 'stylus' && page.contains(e.target)) { e.preventDefault(); return; }
     if (e.type === 'touchmove' && [...e.touches].some((t) => palms.has(t.identifier))) e.preventDefault();
   };
@@ -1319,7 +1483,13 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   document.addEventListener('touchstart', stylusGuard, { passive: false });
   document.addEventListener('touchmove', stylusGuard, { passive: false });
 
-  const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (finger && e.pointerType === 'touch');
+  const accepts = (e) => e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.pointerType === 'touch' && (finger || onSel(e.clientX, e.clientY)));
+  // 画面の位置が、投げ縄で選んだ枠の中かつまみの上か（そこを指で押すと、ペンと同じように動かす・大きさ・向きを変えられる）
+  function onSel(cx, cy) {
+    if (!sel.length || tool !== 'ls' || finger || curId !== null) return false;
+    const r = page.getBoundingClientRect(), x = (cx - r.left) / scale, y = (cy - r.top) / scale, [a, b, c, d] = selBox();
+    return !!gripAt(x, y) || (x >= a && x <= c && y >= b && y <= d);
+  }
   let hold = null, holdC = null, holdT = 0;   // ペンを止めた位置（紙と画面）と、図形に直すまでのタイマー
   // 丸で囲んで長押し: ペンで書いた最後の線が輪なら、その線の上でペンを止めて押さえると、線が消えて中が投げ縄で選ばれる。
   // 選び終わったら（外を押す・解除・削除）ペンに戻る
@@ -1368,7 +1538,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     erRing.setAttribute('cx', x); erRing.setAttribute('cy', y); erRing.setAttribute('r', rad);
     const hit = [];
     for (const s of strokes) {
-      if (s.hid) continue;
+      if (s.hid || s.tool === 'img') continue;   // 画像は消しゴムでは消さない（投げ縄で選んで削除）
       const ty = top(s), [a, b, c, d] = s.bbox, pad = rad + (s.tool === 'hl' ? 8 : s.s);
       if (x < a - pad || x > c + pad || y < b + ty - pad || y > d + ty + pad) continue;
       if (eraser.m === 'part') { cutAt(s, x, y - ty, pad); continue; }
@@ -1442,7 +1612,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const hull = convexHull(pts.map(([x, y]) => [x, y + ty])), m = s.s / 2 + 2 * u, m2 = m + 6 * u, hit = [], bits = [];
     const near = (x, y, r) => inPoly(x, y, hull) || hull.some((q, k) => segDist(x, y, q, hull[(k + 1) % hull.length]) < r);
     for (const o of strokes) {
-      if (o.hid) continue;
+      if (o.hid || o.tool === 'img') continue;
       const oy = top(o), [oa, ob, oc, od] = o.bbox;
       if (oc < a - m2 || oa > c + m2 || od + oy < b - m2 || ob + oy > d + m2) continue;
       const small = Math.max(oc - oa, od - ob) < Math.max(10 * u, Math.min(w, h) * .5);
@@ -1478,7 +1648,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   function selBox() {
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
-    for (const s of sel) { const ty = top(s), pad = s.tool === 'hl' ? 8 : s.s; a = Math.min(a, s.bbox[0] - pad); b = Math.min(b, s.bbox[1] + ty - pad); c = Math.max(c, s.bbox[2] + pad); d = Math.max(d, s.bbox[3] + ty + pad); }
+    for (const s of sel) { const ty = top(s), pad = s.tool === 'hl' ? 8 : s.s || 0; a = Math.min(a, s.bbox[0] - pad); b = Math.min(b, s.bbox[1] + ty - pad); c = Math.max(c, s.bbox[2] + pad); d = Math.max(d, s.bbox[3] + ty + pad); }
     return [a - 6, b - 6, c + 6, d + 6];
   }
   // 選んだ枠のつまみの位置: 0〜3 は角（左上から時計回り）、4 は上の回転のつまみ
@@ -1512,9 +1682,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     showGrips(M);
     selMenu.hidden = !!drag;   // 動かしている間はメニューを隠す
     if (drag) return;
-    $('#sel-n').textContent = sel.length ? `${sel.length}画` : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
+    $('#sel-n').textContent = sel.length ? cnt(sel) : `${picked.length}${isPdf() ? 'ページ' : '段落'}`;
     $('#sel-del').hidden = $('#sel-dup').hidden = !sel.length;
-    selPen.hidden = !sel.some((s) => s.tool !== 'hl');
+    selPen.hidden = !sel.some((s) => s.tool === 'pen');
     // 余白・白紙: 囲んだ最後の段落（ページ）の下に足す。囲んだ範囲が足した部分にかかっていれば、消すこともできる
     const last = picked[picked.length - 1], box = sel.length ? selBox() : lassoBox;
     $('#sel-gap').hidden = isPdf() || sel.length > 0 || !last;
@@ -1528,17 +1698,20 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   function clearSel() {
     sel = []; picked = []; drag = null; lassoEl.remove(); showSel(); if (tool === 'ls') setEdit(null);
     if (popFor === selPen) closePop();
-    if (loopBack) { loopBack = null; toolBtns[0].click(); }   // 丸で囲んで選んだときは、選び終わったらペンに戻る
+    // 丸で囲んで選んだときはペンに、画像を貼ったときは前の道具に、選び終わったら戻る
+    if (loopBack) { const t = loopBack; loopBack = null; toolBtns[['pen', 'hl', 'er', 'ls'].indexOf(t)].click(); }
   }
   function finishLasso() {
     const poly = lasso; lasso = null; lassoEl.remove();
+    if (tapPic(poly)) return;
     if (poly.length < 3) return;
     if (lineGesture(poly)) return;
     sel = strokes.filter((s) => {
       if (s.hid) return false;
       const ty = top(s); let n = 0;
       for (const [x, y] of s.pts) if (inPoly(x, y + ty, poly)) n++;
-      return n >= s.pts.length / 2;
+      // 画像は四隅の半分か、まん中が入っていれば選ぶ
+      return n >= s.pts.length / 2 || (s.tool === 'img' && inPoly((s.bbox[0] + s.bbox[2]) / 2, (s.bbox[1] + s.bbox[3]) / 2 + ty, poly));
     });
     // 囲んだ範囲にかかる段落と、選んだ線の段落（「Claudeに聞く」で渡す本文）
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
@@ -1548,7 +1721,25 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     blocks.forEach((el, i) => { if (i > 0 && tops[i] < d && tops[i] + el.offsetHeight > b) set.add(i); });
     picked = [...set].sort((x, y) => x - y);
     showSel(); setEdit(sel.length === 1 ? sel[0] : null);
-    stat.textContent = sel.length ? `${sel.length}画を選択（ドラッグで移動・角で大きさ・上の丸で向き）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
+    stat.textContent = sel.length ? `${cnt(sel)}を選択（ドラッグで移動・角で大きさ・上の丸で向き）` : picked.length ? `${picked.length}${isPdf() ? 'ページ' : '段落'}を選択` : '囲んだ中に何もありません';
+  }
+  // 投げ縄でペンを軽くたたいたところに画像があれば、その画像を選ぶ（大きな画像は囲みにくいので）
+  function tapPic(poly) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const [x, y] of poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+    if (Math.max(c - a, d - b) > 10 / scale) return false;
+    const hit = picAt(...poly[0]);
+    if (hit) pickPic(hit);
+    return !!hit;
+  }
+  // 紙の位置 (x, y) にある画像（重なっていれば上のもの）
+  const picAt = (x, y) => strokes.filter((s) => s.tool === 'img' && !s.hid && inPoly(x, y - top(s), s.pts)).pop();
+  // 画像を選ぶ（指でたたいたときは投げ縄に切り替え、選び終わったら前の道具に戻る）
+  function pickPic(s) {
+    if (tool !== 'ls') { const back = tool; toolBtns[3].click(); loopBack = back; }
+    sel = [s]; picked = [s.b]; lassoBox = selBox();
+    showSel(); setEdit(null);
+    stat.textContent = '画像を選択（ドラッグで移動・角で大きさ・上の丸で向き）';
   }
   // 選んだ線を M で動かした新しい線（色・太さの変更 patch も入れる）。大きさを変えたときは、線の太さも同じ割合で変える
   function moved(M, patch) {
@@ -1558,7 +1749,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       const abs = s.pts.map(([x, y, p]) => [...mapPt(M, x, y + ty), p]);
       let minY = Infinity; for (const q of abs) minY = Math.min(minY, q[1]);
       const b = blockAt(minY), t = tops[b] - (toSto(b, minY - tops[b]) - (minY - tops[b]));   // たたんだ余白の下なら、開いたときの位置にする
-      const n = { id: newId(), b, tool: s.tool, c: s.c, s: f === 1 || s.tool === 'hl' ? s.s : Math.max(.3, Math.round(s.s * f * 100) / 100), pen: s.pen, ...(s.pr ? { pr: 1 } : {}), pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
+      const n = { id: newId(), b, tool: s.tool, c: s.c, s: f === 1 || s.tool !== 'pen' ? s.s : Math.max(.3, Math.round(s.s * f * 100) / 100), pen: s.pen, ...(s.pr ? { pr: 1 } : {}), ...(s.f ? { f: s.f } : {}), pts: abs.map(([x, y, p]) => [x, y - t, p]), ...patch };
       if (s.g) n.g = mapG(s.g, (x, y) => { const q = mapPt(M, x, y + ty); q[1] -= t; return q; }, f, rot);
       bbox(n); return n;
     });
@@ -1572,9 +1763,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   }
   function restyle(patch) {
     const sub = patch.s != null ? { s: patch.s } : { c: patch.c };
-    if (!sel.some((s) => s.tool !== 'hl')) return;
-    const keep = sel.filter((s) => s.tool === 'hl');
-    const all = sel; sel = all.filter((s) => s.tool !== 'hl');
+    if (!sel.some((s) => s.tool === 'pen')) return;
+    const keep = sel.filter((s) => s.tool !== 'pen');   // マーカーと画像はそのまま
+    const all = sel; sel = all.filter((s) => s.tool === 'pen');
     rebuild(M0, sub);
     sel = sel.concat(keep); showSel();
   }
@@ -1585,9 +1776,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     addAll(to); push({ type: 'add', list: to });
     sel = to; picked = [...new Set([...picked, ...to.map((s) => s.b)])].sort((x, y) => x - y);
     showSel(); setEdit(sel.length === 1 ? sel[0] : null);
-    stat.textContent = `${to.length}画を複製しました（ドラッグで動かせます）`;
+    stat.textContent = `${cnt(to)}を複製しました（ドラッグで動かせます）`;
   };
-  $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${list.length}画を消しました`; };
+  $('#sel-del').onclick = () => { if (!sel.length) return; const list = sel; removeAll(list); push({ type: 'erase', list }); clearSel(); stat.textContent = `${cnt(list)}を消しました`; };
   $('#sel-x').onclick = clearSel;
   $('#sel-gap').onclick = () => { const b = picked[picked.length - 1]; clearSel(); addGap(b); stat.textContent = '余白を入れました'; };
   $('#sel-ungap').onclick = () => { const r = spaceIn(sel.length ? selBox() : lassoBox); clearSel(); if (r) removeSpace(r.b, r.i); stat.textContent = '余白を消しました'; };
@@ -1671,8 +1862,8 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (k === 'move' ? Math.hypot(M[4], M[5]) < 2 : Math.abs(M[0] - 1) < .01 && Math.abs(M[1]) < .005) { showSel(); showHandles(); if (k !== 'move') stat.textContent = ''; return; }
       rebuild(M, {});
       picked = [...new Set([...picked, ...sel.map((s) => s.b)])].sort((x, y) => x - y);
-      const n = sel.length;
-      stat.textContent = { move: `${n}画を移動しました`, size: `${n}画の大きさを変えました`, turn: `${n}画の向きを変えました` }[k];
+      const n = cnt(sel);
+      stat.textContent = { move: `${n}を移動しました`, size: `${n}の大きさを変えました`, turn: `${n}の向きを変えました` }[k];
       return;
     }
     if (lasso) finishLasso();
@@ -1712,11 +1903,18 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     drawInk(g, list);
     return cv;
   }
+  // 画像 -> マーカー -> ペンの順に描く。画像は先に readyPics で読んだものだけ（読めていなければ描かない）
+  const layer = (s) => s.tool === 'img' ? 0 : s.tool === 'hl' ? 1 : 2;
   function drawInk(g, list, ty = top) {
-    for (const s of [...list].sort((x, y) => (y.tool === 'hl') - (x.tool === 'hl'))) {
+    for (const s of [...list].sort((x, y) => layer(x) - layer(y))) {
       g.save(); g.translate(0, ty(s));
-      g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || (/^#/.test(s.c) ? s.c : INK.k);
-      g.fill(new Path2D(s.el.getAttribute('d')));
+      if (s.tool === 'img') {
+        const e = picIms.get(bookKey() + ':' + s.f), { w, h, m } = picFrame(s);
+        if (e && e.im) { g.transform(...m); g.drawImage(e.im, 0, 0, w, h); }
+      } else {
+        g.fillStyle = s.tool === 'hl' ? 'rgba(255,213,61,.45)' : INK[s.c] || (/^#/.test(s.c) ? s.c : INK.k);
+        g.fill(new Path2D(s.el.getAttribute('d')));
+      }
       g.restore();
     }
   }
@@ -1781,8 +1979,9 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       `質問: ${q || '（この箇所を分かりやすく説明してください）'}`,
     ].filter((v) => v != null).join('\n');
   }
-  $('#sel-ask').onclick = () => {
+  $('#sel-ask').onclick = async () => {
     if (!picked.length) return;
+    await readyPics(strokes.filter((s) => picked.includes(s.b) || sel.includes(s)));   // 囲んだ所の画像も絵に入れる
     askId = Math.random().toString(36).slice(2, 8);
     askImg = isPdf() ? pdfImage() : inkImage();
     $('#ask-pv').textContent = passage();
@@ -2082,6 +2281,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     }
     for (const im of el.querySelectorAll('img')) { const [x, y, w, h] = at(im.getBoundingClientRect()); g.strokeRect(x, y, w, h); g.fillText('図', x + 6, y + 12); }
   }
+  const inRange = (y0, y1) => strokes.filter((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > y0 && s.bbox[1] + t < y1; });
   // 紙の [y0, y1) を絵にする。PDF はページの絵、md は段落の枠と本文の文字。その上に手書きと、段落（ページ）の番号の札
   function paperImage(y0, y1) {
     const h = Math.max(1, y1 - y0), k = Math.min(1.5, Math.sqrt(4e6 / (W * h))), cv = document.createElement('canvas');
@@ -2100,7 +2300,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
         g.strokeRect(.5, t + .5, W - 1, el.offsetHeight - 1);
       } else { g.strokeRect(el.offsetLeft - 6, t - 3, el.offsetWidth + 12, el.offsetHeight + 6); drawText(g, el); }
     }
-    drawInk(g, strokes.filter((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > y0 && s.bbox[1] + t < y1; }));
+    drawInk(g, inRange(y0, y1));
     g.font = '700 12px sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'center';
     for (const b of bs) {
       const t = String(b), w = g.measureText(t).width + 12, x = isPdf() ? 6 : blocks[b].offsetLeft - 10 - w, y = Math.max(tops[b], y0 + 2);
@@ -2176,6 +2376,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (wrote && wrote.t !== lastSent && wrote.k === bk && wrote.c === ch) {
         const w = wrote, m = Math.max(120, (300 - (w.y[1] - w.y[0])) / 2), y0 = Math.max(0, w.y[0] - m), y1 = Math.min(page.offsetHeight, w.y[1] + m, y0 + 1600);
         w.md = isPdf() || !blocks[w.b] ? null : blockMd(blocks[w.b]).slice(0, 3000);
+        await readyPics(inRange(y0, y1));
         const cv = paperImage(y0, y1), bl = await pngOf(cv);
         cv.width = cv.height = 0;
         if (busy()) return;
@@ -2187,6 +2388,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       const ink = strokes.some((s) => { if (s.hid) return false; const t = top(s); return s.bbox[3] + t > v.y0 && s.bbox[1] + t < v.y1; });
       const hasNow = v.bs.length > 0 && (isPdf() || ink);
       if (hasNow) {
+        await readyPics(inRange(v.y0, v.y1));
         const cv = paperImage(v.y0, v.y1), bl = await pngOf(cv);
         cv.width = cv.height = 0;
         if (busy()) return;
@@ -3032,8 +3234,10 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
       if (i) { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
       // 線は元のページ（白紙）の上の位置に直して描く。ページの途中の余白に書いた線は入れない
       const sp = spans[n] || [], up = (s) => i ? 0 : sp.reduce((a, p) => a + (p.e1 <= sy(s) ? p.e1 - p.e0 : 0), 0);
+      const list = strokes.filter((s) => s.b === n && (i || !sp.some((p) => sy(s) >= p.e0 && sy(s) < p.e1)) && s.bbox[3] - up(s) > y0 && s.bbox[1] - up(s) < y0 + ph);
+      await readyPics(list);
       g.save(); g.scale(k, k); g.translate(0, -y0);
-      drawInk(g, strokes.filter((s) => s.b === n && (i || !sp.some((p) => sy(s) >= p.e0 && sy(s) < p.e1)) && s.bbox[3] - up(s) > y0 && s.bbox[1] - up(s) < y0 + ph), (s) => -up(s));
+      drawInk(g, list, (s) => -up(s));
       g.restore();
       if (el.isConnected && thIO) { im.append(cv); el.dataset.d = 1; } else cv.width = cv.height = 0;
     } catch {}
@@ -3144,12 +3348,14 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     say('準備しています');
     const [{ exportPdf: make }, L] = await Promise.all([import('./export.js'), import('./' + PDFLIB)]);
     // 今の書き込みと余白を写しておく（作っている間に書いても混ざらない）。線は画面に描いた輪郭をそのまま使う
-    const ink = strokes.filter((s) => s.b > 0 && s.el).map((s) => ({ b: s.b, d: s.el.getAttribute('d'), hl: s.tool === 'hl', c: s.c, y0: s.bbox[1] - 10, y1: s.bbox[3] + 10 }));
-    const spl = {};
+    const ink = strokes.filter((s) => s.b > 0 && s.el && s.tool !== 'img').map((s) => ({ b: s.b, d: s.el.getAttribute('d'), hl: s.tool === 'hl', c: s.c, y0: s.bbox[1] - 10, y1: s.bbox[3] + 10 }));
+    const pics = strokes.filter((s) => s.b > 0 && s.tool === 'img').map((s) => ({ b: s.b, f: s.f, p: [0, 1, 3].map((i) => s.pts[i].slice(0, 2)), y0: s.bbox[1], y1: s.bbox[3] }));
+    const spl = {}, bk = bookKey(), dir = bookDir();
     for (const b in sps) spl[b] = sps[b].map((p) => ({ ...p }));
     const { bytes, name } = await make({
       L, pdf: await pdfBytes(await kv.get('pdf:' + src)), unlock: () => pdfDoc,
       sizes: book.sizes, title: book.title, ink, gaps: { ...gaps }, sps: spl, keys, say,
+      pics, pic: async (f) => { const bl = await picBlob(f, bk, dir); return bl && new Uint8Array(await bl.arrayBuffer()); },
       viewT: async (n) => (await pdfDoc.getPage(n)).getViewport({ scale: 1 }).transform,   // 画面で見ていたページの向き・範囲
     });
     return new File([bytes], name, { type: 'application/pdf' });
@@ -3166,7 +3372,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   async function exportMd(chs, say) {
     say('準備しています');
     const [{ exportMd: make }, L, fontkit] = await Promise.all([import('./export-md.js'), import('./' + PDFLIB), loadFontkit()]);
-    const list = book.chapters.filter((c) => chs.has(c.id)), chapters = [];
+    const list = book.chapters.filter((c) => chs.has(c.id)), chapters = [], bk = bookKey(), dir = bookDir();
     for (const c of list) {
       const html = await chapterHtml(c.id);
       if (html == null) throw new Error(`「${c.label}」はまだこのiPadに保存されていません`);
@@ -3175,7 +3381,7 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     }
     const { bytes, name } = await make({
       L, fontkit, chapters, title: book.title, src: book.source || book.title || '', all: list.length === book.chapters.length, getStroke, say,
-      img: (f) => kv.get('img:' + book.imageDir + '/' + f),
+      img: (f) => kv.get('img:' + book.imageDir + '/' + f), pic: (f) => picBlob(f, bk, dir),
     });
     return new File([bytes], name, { type: 'application/pdf' });
   }
@@ -3235,22 +3441,26 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
   $('#toc-q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(() => showHits($('#toc-q').value), 200); };
   $('#toc-q').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchT); showHits($('#toc-q').value); $('#toc-q').blur(); } };
 
-  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる。投げ縄の選択も指のタップで外れる（「指で書く」がオフのとき）
+  // 段落を指で長押しすると、しおりを付ける・外す。しおりの印を指でタップしても外れる。画像を指でたたくと選ぶ。投げ縄の選択は、枠の外を指でたたくと外れる（「指で書く」がオフのとき）
   let lp = null;
   const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
   page.addEventListener('touchstart', (e) => {
     lpStop();
     const t = e.touches[0];
     if (finger || e.touches.length !== 1 || t.touchType === 'stylus' || palms.has(t.identifier) || e.target.closest('.sph')) return;
-    const x = t.clientX, y = t.clientY;
-    lp = { x, y, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
+    const x = t.clientX, y = t.clientY, ui = !!e.target.closest('.qm, .ans, .mk, a, button');
+    if (onSel(x, y)) { lp = { x, y, t: 0, ui, in: true }; return; }   // 選んだ枠の中は、動かすのに使う（長押しでしおりにしない）
+    lp = { x, y, ui, t: setTimeout(() => { lp = null; toggleBm(blockAt((y - page.getBoundingClientRect().top) / scale)); }, 550) };
   }, { passive: true });
   page.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (lp && Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 8) lpStop(); }, { passive: true });
   page.addEventListener('touchend', () => {
     if (!lp) return;
-    const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale;
+    const r = page.getBoundingClientRect(), x = (lp.x - r.left) / scale, y = (lp.y - r.top) / scale, { ui, in: inSel } = lp;
     lpStop();
-    // 投げ縄で選んでいるときは、指で軽く触ると選択を外す
+    const hit = !ui && picAt(x, y);
+    if (hit) { pickPic(hit); return; }
+    if (inSel) return;
+    // 投げ縄で選んでいるときは、枠の外を指で軽く触ると選択を外す
     if (sel.length || picked.length) { clearSel(); return; }
     // 印は紙の左余白、段落の上端あたりにある。指で押しやすいよう、余白全体と上端から 36px までを当たりにする
     const b = blockAt(y);
@@ -3605,8 +3815,11 @@ iPad で書いた直後は、ドライブに届くまで少し待ってから（
     const id = bkAt; bkMenu.hidden = true;
     if (!id) return;
     const meta = await kv.get('book:' + id);
-    for (const c of (meta && meta.chapters) || []) for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + id + ':' + c.id);
-    for (const k of ['book:', 'pdf:', 'ptext:', 'cover:']) await kv.del(k + id);
+    for (const c of (meta && meta.chapters) || []) {
+      for (const f of picNames(((await kv.get('ink:' + id + ':' + c.id)) || {}).blocks)) await kv.del(picKey(f, id));   // 貼った画像
+      for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + id + ':' + c.id);
+    }
+    for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:']) await kv.del(k + id);
     await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== id));
     const o = openedAt(); delete o[id]; store.set(PREF + ':opened', JSON.stringify(o));
     if (id === src) { CH = null; cs = null; await switchBook('gh'); }

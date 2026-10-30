@@ -4,8 +4,9 @@
 // - 文字は字体を埋め込んで文字のまま（選べる・探せる）。日本語は Noto Serif JP、英数字は Source Serif 4、数式は KaTeX の字体。字体にない字は画面の字を絵にする
 // - 分数の線などの罫線・背景は四角、根号などの SVG と図は絵、本の図（img）はその画像
 // - 書き込みは export.js と同じ輪郭（書き込み JSON から作る）を線のまま重ねる。余白（gap）はたたんでいても開いて出す
+// - 紙に貼った画像は、画面と同じく本文の上・線の下に入れる
 // - ページは A4（紙の幅 680px を 595pt に）。段落の切れ目（長い段落は行の切れ目）で分け、章ごとに新しいページから始める
-import { readInk, INK, HL } from './export.js';
+import { readInk, mul, INK, HL } from './export.js';
 
 const W = 680, PW = 595.28, PH = 841.89, K = PW / W, PAGE = PH / K;   // 紙の幅（px）、A4（pt）、px -> pt、1ページの紙の高さ（px）
 const MT = 40, MB = 44;   // ページの上下の余白（紙の px）。章の最初のページの上は、#doc の上の余白があるので足さない
@@ -48,13 +49,13 @@ const parseColor = (s) => {
 };
 
 // 章 c を紙に並べて、PDF に描くもの（文字・四角・絵・書き込み）と、ページを分けてよい位置を集める
-async function layChapter(sheet, c, { getStroke, img, src }) {
+async function layChapter(sheet, c, { getStroke, img, pic, src }) {
   const { page, doc } = sheet;
   doc.innerHTML = '';
   const s0 = document.createElement('p'); s0.className = 'src'; s0.textContent = src;
   doc.append(s0); doc.insertAdjacentHTML('beforeend', c.html);
   const blocks = [...doc.children];
-  const { ink, gaps } = readInk(c.blocks || {}, getStroke);
+  const { ink, gaps, pics } = readInk(c.blocks || {}, getStroke);
   for (const b in gaps) if (blocks[b]) blocks[b].style.paddingBottom = gaps[b] + 'px';   // 余白は開いて出す
   void doc.offsetHeight;
   if (document.fonts) await document.fonts.ready;
@@ -132,7 +133,8 @@ async function layChapter(sheet, c, { getStroke, img, src }) {
     if (q.width && q.height) items.push({ t: 'img', ...at(q), name: im.dataset.img });
   }
   // 書き込み（段落の上端から）
-  const strokes = ink.map((s) => { const t = tops[Math.min(s.b, tops.length - 1)] || 0; return { ...s, top: t, y0: t + s.y0, y1: t + s.y1 }; });
+  const onTop = (s) => { const t = tops[Math.min(s.b, tops.length - 1)] || 0; return { ...s, top: t, y0: t + s.y0, y1: t + s.y1 }; };
+  const strokes = ink.map(onTop), pics2 = pics.map(onTop);
   // ページを分けてよい位置: 段落の上端と、段落の中の行の切れ目
   for (let b = 1; b < blocks.length; b++) cuts.add(tops[b] - 2);
   const lines = new Map();
@@ -140,10 +142,10 @@ async function layChapter(sheet, c, { getStroke, img, src }) {
   const ls = [...lines].sort((a, z) => a[0] - z[0]);
   for (let i = 1; i < ls.length; i++) if (ls[i][0] >= ls[i - 1][1] - .5) cuts.add((ls[i][0] + ls[i - 1][1]) / 2);
   // 絵（図・式）と書き込みの途中では分けない（分けられる所がなければ、ページの下で切る）
-  const solid = items.filter((it) => it.t === 'svg' || it.t === 'img').map((it) => [it.y, it.y + it.h]).concat(strokes.map((s) => [s.y0, s.y1]));
+  const solid = items.filter((it) => it.t === 'svg' || it.t === 'img').map((it) => [it.y, it.y + it.h]).concat(strokes.concat(pics2).map((s) => [s.y0, s.y1]));
   // 章の終わり: 最後の段落の下（#doc の下の余白は入れない）か、それより下の書き込み
-  const end = Math.max(at(blocks[blocks.length - 1].getBoundingClientRect()).y + blocks[blocks.length - 1].getBoundingClientRect().height + 12, ...strokes.map((s) => s.y1 + 10));
-  return { items, strokes, cuts: [...cuts].filter((y) => !solid.some(([a, z]) => y > a && y < z)).sort((a, z) => a - z), end, img };
+  const end = Math.max(at(blocks[blocks.length - 1].getBoundingClientRect()).y + blocks[blocks.length - 1].getBoundingClientRect().height + 12, ...strokes.concat(pics2).map((s) => s.y1 + 10));
+  return { items, strokes, pics: pics2, cuts: [...cuts].filter((y) => !solid.some(([a, z]) => y > a && y < z)).sort((a, z) => a - z), end, img, pic };
 }
 
 // 紙の [0, end) をページに分ける。返すもの: [[a, z, 上の余白]]
@@ -186,8 +188,8 @@ async function rasterChar(it) {
 }
 
 // L: pdf-lib、fontkit: @pdf-lib/fontkit、chapters: [{ id, label, html, blocks（書き込み JSON の blocks） }]、title / src: 本の題名・出典の行、
-// getStroke: perfect-freehand、img(name): 本の図の Blob、say: 途中の知らせ。返すもの: { bytes, name, count（ページの数） }
-export async function exportMd({ L, fontkit, chapters, title, src = '', all = true, getStroke, img = async () => null, say = () => {} }) {
+// getStroke: perfect-freehand、img(name): 本の図の Blob、pic(name): 紙に貼った画像の Blob、say: 途中の知らせ。返すもの: { bytes, name, count（ページの数） }
+export async function exportMd({ L, fontkit, chapters, title, src = '', all = true, getStroke, img = async () => null, pic = async () => null, say = () => {} }) {
   if (!chapters.length) throw new Error('章を選んでください');
   const pdf = await L.PDFDocument.create();
   pdf.registerFontkit(fontkit);
@@ -206,13 +208,13 @@ export async function exportMd({ L, fontkit, chapters, title, src = '', all = tr
   say('字体を読んでいます');
   await font('jp');
   const sheet = await makeSheet();
-  const pngs = new Map();
+  const pngs = new Map(), ims = new Map();   // ims: 貼った画像の名前 -> 埋め込んだ画像
   let count = 0;
   try {
     for (const [ci, c] of chapters.entries()) {
       say(`並べています ${ci + 1} / ${chapters.length}章`);
       await tick();
-      const lay = await layChapter(sheet, c, { getStroke, img, src });
+      const lay = await layChapter(sheet, c, { getStroke, img, pic, src });
       // 字体を決める（字体にない字は日本語の字体、それにもなければ絵）
       for (const it of lay.items) {
         if (it.t !== 'ch') continue;
@@ -226,16 +228,17 @@ export async function exportMd({ L, fontkit, chapters, title, src = '', all = tr
         const Y = (y) => PH - (y - a + top) * K;   // 紙の y（px）-> PDF の y（pt）
         const hit = (y0, y1) => y1 > a && y0 < z;
         P.pushOperators(L.pushGraphicsState(), L.rectangle(0, Y(z), PW, (z - a) * K), L.clip(), L.endPath());
-        // 背景 -> マーカー -> 罫線・絵 -> 文字 -> ペンの線
+        // 背景 -> マーカー -> 罫線・絵 -> 文字 -> 貼った画像 -> 画像に重なるマーカー -> ペンの線
         const box = (it) => [it.x * K, Y(it.y + it.h), it.w * K, it.h * K];
+        const picsHere = lay.pics.filter((s) => hit(s.y0, s.y1)), over = (s) => picsHere.some((q) => s.y1 > q.y0 && s.y0 < q.y1);
         for (const it of lay.items) if (it.t === 'rect' && it.bg && hit(it.y, it.y + it.h)) {
           const col = parseColor(it.color), [x, y, w, h] = box(it);
           P.drawRectangle({ x, y, width: w, height: h, color: L.rgb(col.r, col.g, col.b), opacity: col.a });
         }
         let gs = null;
-        const ink = (hl) => {
+        const ink = (hl, ok = () => true) => {
           for (const s of lay.strokes) {
-            if (s.hl !== hl || !hit(s.y0, s.y1)) continue;
+            if (s.hl !== hl || !hit(s.y0, s.y1) || !ok(s)) continue;
             if (hl && !gs) gs = P.node.newExtGState('GS', pdf.context.obj({ Type: 'ExtGState', ca: .45, BM: 'Multiply' }));
             const x = INK[s.c] || (/^#[0-9a-f]{6}$/i.test(s.c) ? s.c : INK.k), col = L.rgb(...[1, 3, 5].map((i) => parseInt((hl ? HL : x).slice(i, i + 2), 16) / 255));
             // 線の輪郭は紙の px（段落の上端から）。drawSvgPath は上下を返して描くので、先に返しておく
@@ -243,7 +246,7 @@ export async function exportMd({ L, fontkit, chapters, title, src = '', all = tr
               ...L.drawSvgPath(s.d, { x: 0, y: 0, color: col, graphicsState: hl ? gs : undefined }), L.popGraphicsState());
           }
         };
-        ink(true);
+        ink(true, (s) => !over(s));
         for (const it of lay.items) {
           if (!hit(it.y, it.y + it.h)) continue;
           if (it.t === 'rect' && !it.bg) {
@@ -288,6 +291,16 @@ export async function exportMd({ L, fontkit, chapters, title, src = '', all = tr
             L.setTextMatrix(1, 0, 0, 1, h0.x * K, Y(h0.base)), L.PDFOperator.of(L.PDFOperatorNames.ShowTextAdjusted, [pdf.context.obj(arr)]), L.endText());
           i = j;
         }
+        for (const s of picsHere) {
+          if (!ims.has(s.f)) ims.set(s.f, (async () => { const bl = await lay.pic(s.f), d = bl && new Uint8Array(await bl.arrayBuffer()); return d ? d[0] === 0x89 ? pdf.embedPng(d) : pdf.embedJpg(d) : null; })().catch(() => null));
+          const im = await ims.get(s.f);
+          if (!im) continue;
+          // 画像の (0, 0)〜(1, 1)（左下が原点）を、紙の上の四隅（左下・右下・左上）に合わせる
+          const [p0, p1, p3] = s.p;
+          P.pushOperators(L.pushGraphicsState(), L.concatTransformationMatrix(...mul([p1[0] - p0[0], p1[1] - p0[1], p0[0] - p3[0], p0[1] - p3[1], p3[0], p3[1]], [K, 0, 0, -K, 0, Y(s.top)])),
+            L.drawObject(P.node.newXObject('Im', im.ref)), L.popGraphicsState());
+        }
+        ink(true, over);
         ink(false);
         P.pushOperators(L.popGraphicsState());
         if (count % 5 === 0) { say(`作っています ${count}ページ`); await tick(); }
