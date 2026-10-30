@@ -1,0 +1,132 @@
+// 色・太さの札と「読むだけ」の確認（Playwright。GitHub とドライブは使わない）
+// 使い方: node tests/rail.cjs [スクリーンショットの出力先]
+// 確認すること: 広い画面でははじめから札が出ている → 色・太さを押すとペンが変わり、札は書いても閉じない → 選んでいるペンをもう一度押すとしまう・出す（覚える）
+// → 4 つにない色を小窓で選ぶと、一番長く使っていない色の場所に入る → 消しゴムの札（消し方・大きさ 3 つ）→ マーカー・投げ縄では出さない
+// → 長押しして右へ動かすと右の端に置き、開き直しても右 → 札の「…」で小窓が札の横に出る → 幅 590px では細く、はじめはしまっている、本文にかからない
+// → 読むだけ: 書けない・札は隠れる・ツールを押すと戻る・指で書くと同時にはオンにならない → 幅 744px では「…」の中
+const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
+const APP = path.resolve(__dirname, '..'), OUT = process.argv[2] || os.tmpdir();
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' };
+const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8777);
+let ok = true;
+const check = (name, v, info) => { console.log(v ? '✓' : '✗', name, info === undefined ? '' : JSON.stringify(info)); if (!v) ok = false; };
+
+(async () => {
+  const b = await chromium.launch();
+  const open = async (w, h) => {
+    const ctx = await b.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, hasTouch: true });
+    await ctx.route('https://**', (r) => r.fulfill({ status: 404, body: '{}' }));
+    const p = await ctx.newPage(); p.errs = []; p.on('pageerror', (e) => p.errs.push(e.message)); p.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && p.errs.push(m.text()));
+    await p.goto('http://localhost:8777/'); await p.waitForTimeout(400);
+    await p.click('#hint .open-sample');
+    await p.waitForFunction(() => document.getElementById('chap-t').textContent.includes('見本'), null, { timeout: 10000 });
+    await p.waitForTimeout(400);
+    return p;
+  };
+  const line = async (p, x, y) => { await p.mouse.move(x, y); await p.mouse.down(); for (let i = 0; i < 20; i++) await p.mouse.move(x + i * 5, y + (i % 2) * 3); await p.mouse.up(); await p.waitForTimeout(100); };
+  const n = (p) => p.evaluate(() => document.querySelectorAll('#ink path').length);
+  const pens = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('ink:pens') || '{}'));
+  const rect = (p, s) => p.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top), r: Math.round(r.right), b: Math.round(r.bottom), w: Math.round(r.width), h: Math.round(r.height) }; }, s);
+  const fill = (p) => p.evaluate(() => { const ps = [...document.querySelectorAll('#ink path')]; const x = ps[ps.length - 1]; return x.getAttribute('class') + ' ' + x.style.fill; });
+
+  // ---------- 広い画面（横向き） ----------
+  const p = await open(1180, 820);
+  check('広い画面でははじめから札が出ている（ペン）', await p.isVisible('#rail') && await p.isVisible('#rail-pen') && await p.isHidden('#rail-er'));
+  const r0 = await rect(p, '#rail'), h0 = await rect(p, '#hist');
+  check('札は戻す・進むの札の下・左の端', r0.l === h0.l && r0.t >= h0.b && r0.t - h0.b < 20, [r0, h0]);
+  check('色 4 つ・太さ 3 つ', await p.$$eval('#rail .rc button', (x) => x.length) === 4 && await p.$$eval('#rail .rw button', (x) => x.length) === 3);
+  await p.click('#rail .rc button:nth-child(2)');
+  check('札の赤を押すとペンが赤', (await pens(p)).c === 'r' && await p.getAttribute('#rail .rc button:nth-child(2)', 'aria-pressed') === 'true');
+  await line(p, 300, 400);
+  check('赤で書ける・書いても札は閉じない', /\br\b/.test(await fill(p)) && await p.isVisible('#rail'));
+  await p.click('#rail .rw button:nth-child(3)');
+  check('太さを押すと太いペン', (await pens(p)).si === 2 && await p.getAttribute('#rail .rw button:nth-child(3)', 'aria-pressed') === 'true');
+  await p.screenshot({ path: path.join(OUT, 'rail-pen.png') });
+  await p.click('#t-pen');
+  check('選んでいるペンをもう一度押すと札をしまう（小窓は出ない）', await p.isHidden('#rail') && await p.isHidden('#pop'));
+  check('しまったことを覚える', JSON.parse(await p.evaluate(() => localStorage.getItem('ink:rail'))).on === false);
+  await p.click('#t-pen');
+  check('もう一度押すと出す', await p.isVisible('#rail'));
+
+  // 「…」で小窓。札の横に出る
+  await p.click('#rail-pen .rm');
+  const pr = await rect(p, '#pop'), rr = await rect(p, '#rail');
+  check('札の「…」で小窓（12 色・筆圧）が札の右に出る', await p.isVisible('#pop-colors') && await p.isVisible('#pop-kind') && pr.l >= rr.r, [pr, rr]);
+  // 4 つにない色（紫）を選ぶと、一番長く使っていない場所（黒・青・緑のうち、まだ使っていない最初の黒）に入る
+  await p.click('#pop-colors button:nth-child(6)');
+  const pp = await pens(p);
+  check('4 つにない色は、一番長く使っていない色の場所に入る', pp.c === '#7b3fc4' && pp.fav[0] === '#7b3fc4' && pp.fav[1] === 'r' && await p.getAttribute('#rail .rc button:nth-child(1)', 'aria-pressed') === 'true', pp.fav);
+  await p.click('#rail-pen .rm');
+  check('もう一度押すと小窓を閉じる', await p.isHidden('#pop'));
+
+  // 消しゴム
+  await p.click('#t-er');
+  check('消しゴムでは消し方・大きさの札', await p.isVisible('#rail-er') && await p.isHidden('#rail-pen'));
+  await p.click('#rail-er [data-m=part]');
+  await p.click('#rail-er .rs button:nth-child(3)');
+  const er = JSON.parse(await p.evaluate(() => localStorage.getItem('ink:eraser')));
+  check('消し方と大きさを覚える', er.m === 'part' && er.ri === 2 && er.r === er.rs[2], er);
+  await p.screenshot({ path: path.join(OUT, 'rail-er.png') });
+  await p.click('#t-er');
+  check('選んでいる消しゴムをもう一度押すと札をしまう', await p.isHidden('#rail'));
+  await p.click('#t-er');
+  await p.click('#t-hl');
+  check('マーカーでは出さない', await p.isHidden('#rail'));
+  await p.click('#t-ls');
+  check('投げ縄では出さない', await p.isHidden('#rail'));
+  await p.click('#t-pen');
+  check('ペンに戻すと出る', await p.isVisible('#rail'));
+
+  // 長押しして右へ動かす
+  const c0 = await rect(p, '#rail .rw');
+  await p.mouse.move(c0.l + 20, c0.t + 4); await p.mouse.down(); await p.waitForTimeout(500);
+  for (let k = 1; k <= 10; k++) await p.mouse.move(c0.l + 20 + k * 100, c0.t + 4 + k * 10);
+  await p.mouse.up(); await p.waitForTimeout(150);
+  const r1 = await rect(p, '#rail');
+  check('長押しして引っぱると右の端に置く', r1.r === 1180 - 12 && r1.t > r0.t, r1);
+  check('動かしたときは太さを変えない', (await pens(p)).si === 2);
+  await p.reload(); await p.waitForTimeout(800);
+  const r2 = await rect(p, '#rail');
+  check('開き直しても右の端・同じ高さ', r2.r === 1180 - 12 && Math.abs(r2.t - r1.t) < 2, r2);
+  await p.screenshot({ path: path.join(OUT, 'rail-right.png') });
+
+  // 読むだけ
+  await p.click('#readonly');
+  const before = await n(p);
+  await line(p, 300, 500);
+  check('読むだけでは書けない', await n(p) === before && await p.getAttribute('#readonly', 'aria-pressed') === 'true');
+  check('読むだけでは札を隠す', await p.isHidden('#rail'));
+  await p.click('#t-pen');
+  check('ペンを押すと書けるように戻る（札も戻る）', await p.getAttribute('#readonly', 'aria-pressed') === 'false' && await p.isVisible('#rail'));
+  await line(p, 300, 520);
+  check('戻ったら書ける', await n(p) === before + 1);
+  await p.click('#finger'); await p.click('#readonly');
+  check('読むだけにすると指で書くはオフ', await p.getAttribute('#finger', 'aria-pressed') === 'false' && await p.getAttribute('#readonly', 'aria-pressed') === 'true');
+  await p.click('#finger');
+  check('指で書くにすると読むだけはオフ', await p.getAttribute('#readonly', 'aria-pressed') === 'false' && await p.getAttribute('#finger', 'aria-pressed') === 'true');
+  await p.click('#finger');
+  check('エラーなし（広い画面）', !p.errs.length, p.errs);
+
+  // ---------- 画面を半分（590px） ----------
+  const q = await open(590, 820);
+  check('幅 590px でははじめは札をしまっている', await q.isHidden('#rail'));
+  await q.click('#t-pen');
+  const s0 = await rect(q, '#rail'), text = await q.evaluate(() => { const pg = document.getElementById('page').getBoundingClientRect(); return Math.round(pg.left + 48 * pg.width / 680); });
+  check('出すと細い札で、本文にかからない', await q.isVisible('#rail') && s0.w === 40 && s0.r <= text, [s0, text]);
+  await q.screenshot({ path: path.join(OUT, 'rail-split.png') });
+  check('エラーなし（590px）', !q.errs.length, q.errs);
+
+  // ---------- iPad mini の縦（744px） ----------
+  const m = await open(744, 1133);
+  const bar = await m.evaluate(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); return { pen: r('#t-pen').top, more: r('#more').top, ro: r('#readonly').width }; });
+  check('幅 744px では拡大率・指で書く・読むだけ・設定は「…」の中（ツールは1行）', Math.abs(bar.more - bar.pen) < 4 && bar.ro === 0, bar);
+  await m.click('#more');
+  check('「…」に読むだけがある', await m.isVisible('#readonly'));
+  await m.click('#readonly');
+  check('読むだけにすると「…」は閉じて青くなる', await m.isHidden('#readonly') && await m.evaluate(() => getComputedStyle(document.getElementById('more')).color) === 'rgb(39, 71, 201)');
+  check('エラーなし（744px）', !m.errs.length, m.errs);
+
+  await b.close(); srv.close();
+  console.log(ok ? '\nすべて OK' : '\n失敗あり');
+  process.exit(ok ? 0 : 1);
+})();
