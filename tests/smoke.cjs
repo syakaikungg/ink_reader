@@ -258,11 +258,11 @@ const srv = http.createServer((q, r) => { const f = path.join(APP, decodeURIComp
     await p.click('#ask button[value=cancel]');
     await p.reload(); await p.waitForTimeout(1500);
     console.log('local after reload', await p.textContent('#chap-t'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length), 'puts', putCount - puts);
-    await p.click('#books'); console.log('shelf', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent + (x.getAttribute('aria-current') === 'true' ? '*' : ''))));
-    await p.click('#shelf-list li:first-child .open'); await p.waitForTimeout(1000);
+    await p.click('#books'); console.log('shelf', await p.$$eval('#shelf-list .bk', (o) => o.map((x) => x.querySelector('.nm').textContent + (x.querySelector('.cv').getAttribute('aria-current') === 'true' ? '*' : ''))));
+    await p.click('#shelf-list .bk[data-id="gh"] .cv'); await p.waitForTimeout(1000);
     console.log('back to gh', await p.textContent('#chap-t'), 'strokes', await p.evaluate(() => document.querySelectorAll('#ink path:not(.lasso)').length));
-    await p.click('#books'); await p.click('#shelf-list li:nth-child(2) .del'); await p.click('#shelf-list li:nth-child(2) .del'); await p.waitForTimeout(300);
-    console.log('after delete', await p.$$eval('#shelf-list .open', (o) => o.map((x) => x.textContent)));
+    await p.click('#books'); await p.click('#shelf-list .bk:not([data-id="gh"]) .bk-m'); await p.click('#bk-del'); await p.click('#bk-del'); await p.waitForTimeout(300);
+    console.log('after delete', await p.$$eval('#shelf-list .nm', (o) => o.map((x) => x.textContent)));
   }
   // 設定の見出しの版が sw.js の VERSION と同じ
   { const v = fs.readFileSync(path.join(APP, 'sw.js'), 'utf8').match(/VERSION = 'ink-reader-(v\d+)'/)[1], shown = await p.textContent('#cfg-ver');

@@ -7,6 +7,7 @@ const FILES = [
   'index.html',
   'app.js',
   'render.js',
+  'sample/guide.md',   // 見本の本（最初の案内と設定の「使い方」から開く）
   'manifest.webmanifest',
   'icon-180.png',
   'icon-512.png',
