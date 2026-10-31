@@ -2,13 +2,13 @@
 // 使い方: node tests/files-sync.cjs
 // 確認すること: GitHub のトークンがあっても GitHub には何も送らない（前は books/files/ に送っていた）→ ドライブにつなぐと、前に書いた分も送る
 // （book.json・ink・書き込みのあるページの画像。画像に文字と手書きが入る）→ 書き足すとそのページの画像も送る → 「sakai_studyで聞く」は出さない
-// → 答えのファイルが Q 印になる → たたんだ余白は開いて画像にする → md の本も本文ごと送る
+// → 答えのファイルが Q 印になる → たたんだ余白は開いて画像にする → md の本も本文ごと送る（絵は書き込みのある段落だけ）
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), http = require('http'), os = require('os');
 const APP = path.resolve(__dirname, '..'), N = 5;
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
 const srv = http.createServer((q, r) => { const u = decodeURIComponent(q.url.split('?')[0]), f = path.join(APP, u === '/' ? 'index.html' : u); fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' }); r.end(b); }); }).listen(8769);
 let ok = true;
-const check = (name, v) => { console.log(v ? '✓' : '✗', name); if (!v) ok = false; };
+const check = (name, v, info) => { console.log(v ? '✓' : '✗', name, info === undefined ? '' : JSON.stringify(info)); if (!v) ok = false; };
 const { createDrive, GIS, connected } = require('./drive-mock.cjs');
 const drv = createDrive(), { files, byPath } = drv;
 (async () => {
@@ -134,7 +134,10 @@ const drv = createDrive(), { files, byPath } = drv;
   const mtop = Object.values(files).find((f) => /^試しの章 \(/.test(f.name)), mdir = mtop && 'Ink Reader/' + mtop.name;
   check('md の本文を送る', !!mdir && remote[mdir + '/chapters/c1.md'].content.toString().startsWith('# 試しの章'));
   check('md の書き込みを送る', !!mdir && !!remote[mdir + '/ink/c1.json']);
-  check('md は画像を送らない', !!mdir && !remote[mdir + '/view']);
+  // md はページの画像ではなく、書き込みのある段落の絵（view/<章>-b<段落>.png）だけ
+  const vid = Object.keys(files).find((k) => files[k] === remote[mdir + '/view']);
+  const mview = Object.values(files).filter((f) => vid && !f.trashed && (f.parents || []).includes(vid)).map((f) => f.name);
+  check('md は書き込みのある段落の絵だけ送る', !!mdir && mview.length === 1 && /^c1-b\d+\.png$/.test(mview[0]), mview);
   check('最後まで GitHub には何も送らない', sent() === 0);
   check('同じフォルダ・ファイルを二つ作らない', !drv.twins());
   check('エラーなし', !errs.length); if (errs.length) console.log(errs);

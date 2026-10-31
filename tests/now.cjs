@@ -71,7 +71,8 @@ const dims = (bf) => [bf.readUInt32BE(16), bf.readUInt32BE(20)];
   console.log('last.png px', px);
   check('last.png に手書きと段落番号の札', px.dark > 200 && px.blue > 200);
 
-  // 何もしていない間は送らない
+  // 何もしていない間は送らない（書いた分を送り終える（書き込み・段落の絵）のを待ってから）
+  for (let n = -1, i = 0; i < 50 && n !== calls.length; i++) { n = calls.length; await p.waitForTimeout(1000); }
   const c0 = calls.length;
   await p.waitForTimeout(4000);
   check('眺めているだけの間は送らない', calls.length === c0);
