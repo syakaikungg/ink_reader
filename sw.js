@@ -1,7 +1,7 @@
 // Copyright (C) 2026 syakaikungg. All rights reserved.
 // アプリ本体をキャッシュして、通信なしでも起動できるようにする。
 // 本文と書き込みは IndexedDB 側（app.js）。アプリを更新したら VERSION を上げる（app.js の APP_VERSION も同じ値にする）
-const VERSION = 'ink-reader-v77';
+const VERSION = 'ink-reader-v78';
 const FILES = [
   './',
   'index.html',
@@ -44,6 +44,7 @@ const FILES = [
   'vendor/fonts/KaTeX_Typewriter-Regular.woff2',
   'vendor/fonts/SourceSerif4-latin-italic.woff2',
   'vendor/fonts/SourceSerif4-latin.woff2',
+  'vendor/fonts/NotoSerifJP-cp932.woff2',   // md の本文の日本語（約 1.4MB）。端末が違っても行の折り返しをそろえるので、先にキャッシュしておく（通信なしで初めて開いても同じ字）
 ];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
