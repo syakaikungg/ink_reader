@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v72';
+  const APP_VERSION = 'ink-reader-v73';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -20,14 +20,78 @@
   let strokes = [];
   const undoStack = [], redoStack = [];
   let blocks = [], tops = [], hashes = [];
+  // 段落の字（頭 300 字）のハッシュ。書き込み JSON の段落ごとの h と章の hs に入れ、本文が変わったときの付け直しに使う
+  const hashOf = (t) => { let h = 5381; t = t.slice(0, 300); for (let i = 0; i < t.length; i++) h = (h * 33 + t.charCodeAt(i)) >>> 0; return h.toString(36); };
   function initBlocks() {
     blocks = [...doc.children];
     tops = blocks.map(() => -1);
-    hashes = blocks.map((el) => {
-      let h = 5381; const t = el.textContent.slice(0, 300);
-      for (let i = 0; i < t.length; i++) h = (h * 33 + t.charCodeAt(i)) >>> 0;
-      return h.toString(36);
+    hashes = blocks.map((el) => hashOf(el.textContent));
+  }
+  // 章の HTML の段落ごとのハッシュ（開いていない章。0 は出典の行）
+  function hashesOf(html) { const t = document.createElement('template'); t.innerHTML = html; return [''].concat([...t.content.children].map((el) => hashOf(el.textContent))); }
+  // 本文が変わったときの付け直し。from: 書いたときの段落ごとのハッシュ（前の版の記録で分からない段落は null）、to: 今のハッシュ。
+  // 返すもの: 前の段落番号 -> 今の段落番号の配列（変わらなければ null）。0 は出典の行でいつも 0。
+  // 両方に 1 回だけ出てくるハッシュを目印にし（順番の入れ替わった目印は外す）、目印の前後で同じハッシュが続く所を広げる。
+  // 目印に入らない段落（書き直した・消した段落）は、前の目印から数えて置く（消えて置き場がなければ前の目印の段落へ）
+  function remapOf(from, to) {
+    const n = from.length, m = to.length;
+    if (from.every((h, i) => i === 0 || h == null || h === to[i])) return null;
+    const count = (a) => { const c = new Map(); a.forEach((h, i) => { if (i && h != null) c.set(h, (c.get(h) || 0) + 1); }); return c; };
+    const cf = count(from), ct = count(to), at = new Map();
+    to.forEach((h, j) => { if (j && ct.get(h) === 1) at.set(h, j); });
+    const pairs = [];
+    from.forEach((h, i) => { if (i && h != null && cf.get(h) === 1 && at.has(h)) pairs.push([i, at.get(h)]); });
+    // 今の番号が増えていく一番長い並び（目印の順番がそろうもの）
+    const tails = [], prev = [];
+    pairs.forEach((p, k) => {
+      let lo = 0, hi = tails.length;
+      while (lo < hi) { const md = (lo + hi) >> 1; if (pairs[tails[md]][1] < p[1]) lo = md + 1; else hi = md; }
+      prev[k] = lo ? tails[lo - 1] : -1; tails[lo] = k;
     });
+    const anchors = [];
+    for (let k = tails.length ? tails[tails.length - 1] : -1; k >= 0; k = prev[k]) anchors.unshift(pairs[k]);
+    anchors.unshift([0, 0]); anchors.push([n, m]);
+    const map = new Array(n).fill(-1);
+    for (let a = 0; a < anchors.length - 1; a++) {
+      const [i0, j0] = anchors[a], [i1, j1] = anchors[a + 1];
+      if (i0 < n) map[i0] = j0;
+      let i = i0 + 1, j = j0 + 1;
+      while (i < i1 && j < j1 && from[i] != null && from[i] === to[j]) map[i++] = j++;
+      let x = i1 - 1, y = j1 - 1;
+      while (x >= i && y >= j && from[x] != null && from[x] === to[y]) map[x--] = y--;
+      // 残り（i..x の前の段落を j..y の今の段落へ）は、近い方の目印からの数で置く。今の方が足りなければ前の段落へ寄せる
+      for (let k = i; k <= x; k++) {
+        const dl = k - i + 1, dr = x + 1 - k, v = dl <= dr ? j - 1 + dl : y + 1 - dr;
+        map[k] = Math.max(0, Math.min(m - 1, Math.max(j - 1, Math.min(v, Math.max(y, j - 1)))));
+      }
+    }
+    for (const [i, j] of pairs) map[i] = j;   // 1 回だけ出てくる段落は、順番が入れ替わっていてもその段落へ
+    return map.every((v, i) => v === i) ? null : map;
+  }
+  // 前の版の記録（章の hs がない）は、書き込みのある段落の h だけで付け直す
+  const sparseHs = (data) => { const a = []; for (const b in data || {}) a[b] = data[b].h; return Array.from(a, (h) => h ?? null); };
+  // 段落ごとの記録（書き込み JSON の blocks か base）を、新しい段落番号に移す。二つの段落が一つになったら、線・画像を合わせる
+  function moveBlocks(data, map, to) {
+    const out = {};
+    for (const b in data || {}) {
+      const n = map[b] ?? Math.min(+b, to.length - 1), d = { ...data[b] };
+      if ('b' in d) d.b = n;
+      if ('h' in d) d.h = to[n];
+      const o = out[n];
+      if (!o) { out[n] = d; continue; }
+      if (d.strokes || o.strokes) o.strokes = { ...o.strokes, ...d.strokes };
+      if (d.pics || o.pics) o.pics = { ...o.pics, ...d.pics };
+      if (d.ids || o.ids) o.ids = [...(o.ids || []), ...(d.ids || [])];
+      for (const k of PROPS) if (o[k] == null && d[k] != null) o[k] = d[k];
+    }
+    return out;
+  }
+  // 書き込み JSON（{ hs, blocks }）を、今の段落（to のハッシュ）に合わせる。合わせたら moved
+  function onDoc(j, to) {
+    const blocks = j.blocks || {};
+    if (!to || (book && book.pdf)) return { blocks, moved: false };
+    const mp = remapOf(j.hs || sparseHs(blocks), to);
+    return mp ? { blocks: moveBlocks(blocks, mp, to), moved: true } : { blocks, moved: false };
   }
 
   const store = {
@@ -814,7 +878,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   }
 
   // ---------- 書き込みの保存と同期 ----------
-  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号], at:置き場所, base }。置き場所: <本>/ink/<章>.json = { chapter, blocks }
+  // 端末: kv 'ink:<本>:<章>' = { blocks, sha, pending:[段落番号], at:置き場所, base, hs }。置き場所: <本>/ink/<章>.json = { chapter, hs, blocks }
+  // hs は書いたときの段落ごとのハッシュ。本文が変わっていたら、読んだときにこれと比べて段落を付け直す（onDoc / reanchor）
   // pending でない段落は置き場所の側を正とする。pending の段落は、前に置き場所とそろえたときの形（base: 段落ごとの線・画像の id と余白など）と比べ、
   // 端末で増やした線・消した線だけを置き場所の側に反映する（ほかの端末が同じ段落に書いた線も残る）。線は動かしても書き直しても新しい id になるので、id の出入りを見ればよい
   // 置き場所: どの本もドライブ（つないでいるとき）。前は GitHub の本は GitHub、ファイルの本もトークンがあれば GitHub に送っていた（at が無く sha があれば GitHub）
@@ -823,12 +888,19 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   const inkPath = (id, dir = bookDir()) => dir + '/ink/' + id + '.json';
   const tag = (R) => R === hub ? '' : 'drive:';   // 置き場所ごとに覚えること（送った本・画像）のキーの頭
   let saveT = 0;
-  const saved = (st) => ({ blocks: st.blocks, sha: st.sha, pending: [...st.pending], at: st.at, base: st.base });
+  const saved = (st) => ({ blocks: st.blocks, sha: st.sha, pending: [...st.pending], at: st.at, base: st.base, hs: st.hs });
   function persist() {
     clearTimeout(saveT);
     const key = inkKey(CH), st = cs;
     st.blocks = serialize();
-    saveT = setTimeout(() => kv.set(key, saved(st)).catch(() => {}), 150);
+    if (!isPdf()) st.hs = hashes;   // この段落の分け方で書いた（本文が変わったら、これと比べて付け直す）
+    saveT = setTimeout(() => { saveT = 0; kv.set(key, saved(st)).catch(() => {}); }, 150);
+  }
+  // 待っている保存をすぐ書く。同じ章を開き直したとき（新しい版）に、あとから前の記録で上書きしないように
+  function flushSave() {
+    if (!saveT) return;
+    clearTimeout(saveT); saveT = 0;
+    if (cs && CH) kv.set(inkKey(CH), saved(cs)).catch(() => {});
   }
   function touch(list) {
     if (!cs) return;
@@ -871,9 +943,10 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     }
     return out;
   }
-  async function pullInk(id, dir = bookDir(), R = where()) {
+  // to: 今の段落のハッシュ。置き場所の JSON を書いたときと本文が変わっていれば、段落を付け直してから返す
+  async function pullInk(id, dir = bookDir(), R = where(), to = null) {
     const f = await R.get(inkPath(id, dir));
-    return f ? { sha: f.sha, blocks: (JSON.parse(f.text || '{}').blocks) || {} } : { sha: null, blocks: {} };
+    return f ? { sha: f.sha, ...onDoc(JSON.parse(f.text || '{}'), to) } : { sha: null, blocks: {} };
   }
   // 置き場所を変えた（GitHub からドライブへ、など）章は、書き込みを全部送り直す
   const atOf = (st) => st.at || (st.sha ? hub.name : null);
@@ -901,7 +974,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
         sent = new Set(st.pending);
         if (id === CH) st.blocks = serialize();
         await upPics(dir, bk, st.blocks, R);
-        const out = st.blocks, body = JSON.stringify({ chapter: id, blocks: out }, null, 0);
+        const out = st.blocks, body = JSON.stringify({ chapter: id, hs: meta && !meta.pdf ? (id === CH ? hashes : st.hs) : undefined, blocks: out }, null, 0);
         try {
           st.sha = await R.put(inkPath(id, dir), body, st.sha, `ink: ${dir.split('/').pop()} ${id}`);
           st.base = baseOf(out);
@@ -910,7 +983,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
         } catch (e) {
           if (e.status !== 409 && e.status !== 422) throw e;
           // 他の端末が先に保存していた: 取り直してまとめ、もう一度
-          const remote = await pullInk(id, dir, R);
+          const remote = await pullInk(id, dir, R, id === CH ? hashes : st.hs);
           st.sha = remote.sha;
           st.blocks = merge(st, remote.blocks); st.base = baseOf(remote.blocks);
           if (id === CH) { showBlocks(st.blocks); undoStack.length = redoStack.length = 0; syncHist(); }
@@ -945,8 +1018,9 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   }
   async function upBook1(dir, bk, meta, R) {
     if (R === drive) await upTools().catch((e) => { if (e.drive) throw e; });
-    if (!meta || await kv.get('up:' + tag(R) + bk)) return dir;
-    const local = bk.startsWith('local:'), put = async (path, text) => { if (!await R.sha(path)) await R.put(path, text, null, `book: ${dir.split('/').pop()}`); };
+    const up = await kv.get('up:' + tag(R) + bk), again = up === 'again';   // again: ファイルの md を新しい版にした（本文と book.json を置き直す）
+    if (!meta || (up && !again)) return dir;
+    const local = bk.startsWith('local:'), put = async (path, text) => { const sha = await R.sha(path); if (!sha || again) await R.put(path, text, sha, `book: ${dir.split('/').pop()}`); };
     if (R === drive && local && !meta.dir) {
       const d = await sameOnDrive(meta, bk, dir);
       if (d) {
@@ -957,7 +1031,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       }
     }
     if (R === drive) await drive.mkdir(dir + '/answers');   // 答えを置くフォルダを先に作っておく
-    const chapters = meta.chapters.map((c) => meta.pdf || !local ? { id: c.id, label: c.label, file: c.file } : { id: c.id, label: c.label, file: 'chapters/' + c.id + '.md' });
+    const chapters = meta.chapters.map((c) => meta.pdf || !local ? { id: c.id, label: c.label, file: c.file } : { id: c.id, label: c.label, file: 'chapters/' + c.id + '.md', name: c.file });
     for (const c of meta.pdf || !local ? [] : meta.chapters) {
       const v = await kv.get('md:' + bk + ':' + c.id);
       if (v) await put(dir + '/chapters/' + c.id + '.md', v.md);
@@ -992,7 +1066,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       const st = live || await kv.get(key).then((v) => v && { ...v, pending: new Set(v.pending) });
       if (st && atOf(st) === drive.name) return;
       // ドライブにもうある章は、ほかの iPad が写したもの（新しい iPad で開いたとき）: ドライブの分を取り込み、GitHub の古い分は使わない
-      const done = await pullInk(id, dir, drive), remote = done.sha ? done : await pullInk(id, cfg.book, hub), s = st || { blocks: {}, sha: null, pending: new Set() };
+      const to = live ? hashes : st && st.hs, done = await pullInk(id, dir, drive, to), remote = done.sha ? done : await pullInk(id, cfg.book, hub, to), s = st || { blocks: {}, sha: null, pending: new Set() };
       if (live && (s !== cs || atOf(s) === drive.name)) return moveInk(id);   // 待っている間に章を開き直した
       if (s === cs) s.blocks = serialize();
       s.blocks = merge(s, remote.blocks);   // いつもの取り込みと同じ: iPad の未送信の段落はそのまま、ほかは GitHub（ドライブ）の分
@@ -1104,13 +1178,13 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   async function refreshChapter() {   // 置き場所の書き込みと答えを取り込む（他の端末・Claude の変更）
     if (!canPush() || !cs) return;
     const id = CH, st = cs;
-    pullAnswers(id); upPdf(); moveGhBook(); syncRates();
+    pullAnswers(id); upPdf(); moveGhBook(); syncRates(); pullVersion().catch(() => {});
     for (const s of strokes) if (s.tool === 'img' && s.el.getAttribute('class') === 'pic miss') fillPic(s);   // つなぐ前に読めなかった画像
     // この iPad でまだ何もない章は、置き場所の分を取り込む（ほかの iPad で書いた分・ドライブから戻した本）
     if (!st.at && !st.sha && !st.pending.size && !Object.keys(st.blocks).length) st.at = where().name;
     if (atOf(st) !== where().name) return;   // まだ送っていない置き場所からは取らない
     try {
-      const remote = await pullInk(id);
+      const remote = await pullInk(id, undefined, undefined, hashes);
       if (id !== CH) return;
       if (remote.sha === st.sha) { if (!st.base && st.sha) { st.base = baseOf(remote.blocks); persist(); } return; }   // 前の版で保存した章は、ここで base を覚える
       st.sha = remote.sha; st.blocks = merge(st, remote.blocks); st.base = baseOf(remote.blocks);
@@ -2371,8 +2445,12 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     return out.map((a) => ({ id: a.id, text: a.lines.join('\n').trim() + '\n' }));
   }
   const anchor = (x) => Math.min(...x.b);   // 何段落かにまたがる質問は、最初の段落に付ける
+  // 本文が変わって付け直した答えの段落（答えのファイルは書き換えない）。kv 'ansb:<本>:<章>' = { 質問ID: [段落] }
+  const ansbKey = (id) => 'ansb:' + bookKey() + ':' + id;
+  let ansMoved = {};
   function setAnswers(md, list) {
     ansMd = md; answers = parseAnswers(md); asks = list || asks;
+    for (const a of answers) if (ansMoved[a.id]) a.b = ansMoved[a.id];
     const n = asks.length;
     asks = asks.filter((q) => !answers.some((a) => a.id === q.id));   // 答えが届いた質問は答え待ちから外す
     if (asks.length !== n) kv.set(askKey(CH), asks).catch(() => {});
@@ -3305,6 +3383,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (!ids.includes(id)) id = ids.includes('ch1') ? 'ch1' : ids[0];
     const my = opening = {};
     syncNav(id);
+    flushSave();
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
     if (cs && cs.pending.size) pushChapter(CH);
     doc.classList.add('loading');
@@ -3312,18 +3391,22 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (html == null && canSync()) { try { await syncBook(); html = await chapterHtml(id); } catch {} }
     if (my !== opening) return;
     if (html == null) { stat.textContent = isPdf() ? 'PDF を開けませんでした' : 'この章はまだiPadに保存されていません。通信できるときに開いてください'; doc.classList.remove('loading'); if (CH) syncNav(CH); return; }
-    const [saved, ans, wait, rv] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey())]);
+    const [saved, ans, wait0, rv, seen, ab] = await Promise.all([kv.get(inkKey(id)), kv.get(ansKey(id)), kv.get(askKey(id)), kv.get(ratesKey()), kv.get(hsKey(id)), kv.get(ansbKey(id))]);
     if (my !== opening) return;
+    let wait = wait0;
+    ansMoved = ab || {};
     useRates(rv);
     for (const s of strokes) s.el.remove();
     strokes = []; setEdit(null); undoStack.length = 0; redoStack.length = 0; syncHist();
     CH = id;
-    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []), at: saved && saved.at, base: saved && saved.base };
+    cs = { blocks: (saved && saved.blocks) || {}, sha: saved ? saved.sha : null, pending: new Set(saved ? saved.pending : []), at: saved && saved.at, base: saved && saved.base, hs: saved && saved.hs };
     store.set(memKey('chapter'), id);
     doc.replaceChildren(srcLine);
     doc.insertAdjacentHTML('beforeend', html);
     if (!isPdf()) renderMarkdown.fit(doc);
-    initBlocks(); markBm(); layout(); startPdf(); needCover();
+    initBlocks();
+    if (!isPdf()) wait = reanchor(id, saved, seen, ans, wait);
+    markBm(); layout(); startPdf(); needCover();
     showBlocks(cs.blocks);
     openQ = new Set(); setAnswers(ans || '', wait || []);
     doc.classList.remove('loading');
@@ -3343,6 +3426,30 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     }
     showPending();
     lastPull = Date.now(); refreshChapter(); nowSoon();
+  }
+  // 本文が変わった章（GitHub の本の直し・ファイルの md の新しい版）を開いたとき、段落の字で付け直す。
+  // 書き込みは、書いたときの段落の分け方（記録の hs。前の版の記録は段落ごとの h）と比べる。しおり・答え待ち・答えの段落は、前に開いたときの分け方（kv 'hs:<本>:<章>'）と比べる
+  const hsKey = (id) => 'hs:' + bookKey() + ':' + id;
+  function reanchor(id, rec, seen, ans, wait) {
+    const mp = rec && remapOf(rec.hs || sparseHs(rec.blocks), hashes);
+    if (mp) {
+      cs.blocks = moveBlocks(cs.blocks, mp, hashes);
+      if (cs.base) cs.base = moveBlocks(cs.base, mp, hashes);
+      cs.pending = new Set([...cs.pending].map((b) => mp[b] ?? b).concat(Object.keys(cs.blocks).map(Number)));   // 付け直した章は、置き場所にも送り直す（AI が今の段落番号で読めるように）
+      cs.hs = hashes; kv.set(inkKey(id), saved(cs)).catch(() => {});
+      if (hasRemote()) schedulePush(1500);
+      stat.textContent = '本文が変わったので、書き込みを段落の字で付け直しました';
+    }
+    const m2 = seen && remapOf(seen, hashes);
+    if (m2) {
+      const to = (b) => m2[b] ?? b, bk = loadBm();
+      store.set(memKey('bm'), JSON.stringify(bk.map((x) => x.c === id ? { ...x, b: to(x.b) } : x)));
+      if (wait && wait.length) { wait = wait.map((q) => ({ ...q, b: (q.b || []).map(to) })); kv.set(askKey(id), wait).catch(() => {}); }
+      for (const a of parseAnswers(ans)) ansMoved[a.id] = (ansMoved[a.id] || a.b).map(to);
+      kv.set(ansbKey(id), ansMoved).catch(() => {});
+    }
+    if (!seen || m2) kv.set(hsKey(id), hashes).catch(() => {});
+    return wait;
   }
   function syncNav(id) {
     const i = ids.indexOf(id);
@@ -3716,7 +3823,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       const html = await chapterHtml(c.id);
       if (html == null) throw new Error(`「${c.label}」はまだこのiPadに保存されていません`);
       // 開いている章は、まだ保存していない書き込みも入れる
-      chapters.push({ id: c.id, label: c.label, html, blocks: c.id === CH && cs ? serialize() : ((await kv.get(inkKey(c.id))) || {}).blocks || {} });
+      const rec = c.id === CH && cs ? null : await kv.get(inkKey(c.id));   // 開いていない章は、本文が変わっていれば付け直してから
+      chapters.push({ id: c.id, label: c.label, html, blocks: rec ? onDoc(rec, hashesOf(html)).blocks : c.id === CH && cs ? serialize() : {} });
     }
     const { bytes, name } = await make({
       L, fontkit, chapters, title: book.title, src: book.source || book.title || '', all: list.length === book.chapters.length, getStroke, say,
@@ -3922,7 +4030,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     showBack(null);
     if (logDirty) { logAt = 0; pushLog(); }
     if (CH) store.set(memKey('pos:' + CH), String(scrollY));
-    if (cs) persist();
+    if (cs) { persist(); flushSave(); }
     if (cs && cs.pending.size) pushChapter(CH);
     CH = null; cs = null;
     closePdf();
@@ -4003,7 +4111,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
   // ドライブの本のフォルダ d を、この iPad の本にする。本文は手元のもの（data: PDF のファイルか、md の章の本文の配列）か、ドライブから取る。
   // 書き込みと答えは、章を開いたときにドライブから取り込む（refreshChapter）
   async function restoreBook(d, data, fp) {
-    const j = d.json, id = 'local:' + newId(), chapters = j.chapters.map((c) => ({ id: c.id, label: c.label, file: c.file }));
+    const j = d.json, id = 'local:' + newId(), chapters = j.chapters.map((c) => ({ id: c.id, label: c.label, file: c.name || c.file }));
     try {
       if (j.pdf) {
         const bl = data || await drive.blob(d.dir + '/book.pdf');
@@ -4012,7 +4120,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
         if (j.fp && fp && fp !== j.fp) throw new Error(`ドライブの「${j.title}」とは違う PDF です`);
         try { await kv.set('pdf:' + id, bl); } catch { await kv.set('pdf:' + id, await bl.arrayBuffer()); }
       } else {
-        const texts = data || await Promise.all(chapters.map(async (c) => { const f = await drive.get(d.dir + '/' + c.file); if (!f) throw new Error('ドライブに本文がありません'); return f.text; }));
+        const texts = data || await Promise.all(j.chapters.map(async (c) => { const f = await drive.get(d.dir + '/' + c.file); if (!f) throw new Error('ドライブに本文がありません'); return f.text; }));
         for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: 'drive:' + (fp || i), md: texts[i] });
         fp ||= await fpOf(texts);
       }
@@ -4026,11 +4134,86 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : ''), x = { fp: await fpOf(texts), title, texts };
     const had = await findOnDevice(x);
     if (had) return had;
+    const up = await findUpdate(files, texts);
+    if (up) return updateMd(up, files, texts);
     const d = await findOnDrive(x);
     if (d) return restoreBook(d, texts, x.fp);
     const id = 'local:' + newId();
     for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: files[i].name + ':' + files[i].size + ':' + files[i].lastModified, md: texts[i] });
     return addBook(id, { title, local: true, chapters, images: {}, fp: x.fp });
+  }
+  // 直した md を開き直したとき・章を足したときは、前の本の新しい版にする（書き込みは、章を開いたときに段落の字で付け直す）。
+  // 前の本の章とファイル名が同じで、本文の行が 3 割以上同じものが 1 つでもあれば（違うものがなければ）、その本。名前の違うファイルは章として足す
+  const fileKey = (n) => (n || '').split('/').pop().trim().toLowerCase();
+  const lineSet = (t) => new Set(t.split('\n').map((l) => l.trim()).filter((l) => l.length > 3));
+  function alike(a, b) {
+    const A = lineSet(a), B = lineSet(b);
+    if (!A.size || !B.size) return a.trim() === b.trim();
+    let n = 0; for (const l of A) if (B.has(l)) n++;
+    return n / Math.min(A.size, B.size) >= .3;
+  }
+  async function findUpdate(files, texts) {
+    let best = null;
+    for (const r of (await kv.get('books')) || []) {
+      const m = await kv.get('book:' + r.id);
+      if (!m || m.pdf || !m.local) continue;
+      let hit = 0, bad = false;
+      for (const [i, f] of files.entries()) {
+        const c = m.chapters.find((x) => fileKey(x.file) === fileKey(f.name));
+        if (!c) continue;
+        if (alike(((await kv.get('md:' + r.id + ':' + c.id)) || {}).md || '', texts[i])) hit++; else bad = true;
+      }
+      if (hit && !bad && (!best || hit > best.hit)) best = { id: r.id, hit };
+    }
+    return best && best.id;
+  }
+  // 本 id の章を、ファイル名が同じものは入れ替え、ほかは足す（本棚の「…」の「ファイルを足す・入れ替える」からも）
+  async function updateMd(id, files, texts) {
+    const m = await kv.get('book:' + id), chapters = m.chapters.map((c) => ({ ...c }));
+    let changed = 0, added = 0, n = Math.max(0, ...chapters.map((c) => +((c.id.match(/^c(\d+)$/) || [])[1] || 0)));
+    for (const [i, f] of files.entries()) {
+      let c = chapters.find((x) => fileKey(x.file) === fileKey(f.name));
+      const key = c && 'md:' + id + ':' + c.id, old = c && await kv.get(key);
+      if (old && old.md === texts[i]) continue;
+      if (!c) { c = { id: 'c' + ++n, file: f.name }; chapters.push(c); added++; } else changed++;
+      c.label = mdTitle(texts[i], f.name);
+      await kv.set('md:' + id + ':' + c.id, { sha: f.name + ':' + f.size + ':' + f.lastModified, md: texts[i] });
+    }
+    if (!changed && !added) return { id, title: m.title, again: true };
+    const all = await Promise.all(chapters.map(async (c) => ((await kv.get('md:' + id + ':' + c.id)) || {}).md || ''));
+    const autoT = (cs) => cs[0].label + (cs.length > 1 ? ` ほか${cs.length - 1}章` : ''), title = m.title === autoT(m.chapters) ? autoT(chapters) : m.title;
+    await kv.set('book:' + id, { ...m, chapters, title, fp: await fpOf(all) });
+    if (title !== m.title) await kv.set('books', ((await kv.get('books')) || []).map((r) => r.id === id ? { ...r, title } : r));
+    if (await kv.get('up:drive:' + id)) await kv.set('up:drive:' + id, 'again');   // ドライブの本文と book.json も置き直す
+    if (id === bookKey()) book = await kv.get('book:' + id);
+    return { id, title, update: [changed, added] };
+  }
+  // ほかの端末でファイルの md を新しい版にしたとき（ドライブの book.json の指紋が変わる）は、本文を取り直す。10 秒に 1 回まで。
+  // この端末で新しい版にしてまだ置いていないときは取らない
+  let verAt = 0;
+  async function pullVersion() {
+    if (!isLocal() || isPdf() || !book || !book.fp || where() !== drive) return;
+    const bk = bookKey(), dir = bookDir(), up = await kv.get('up:drive:' + bk);
+    if (up === 'again') { await upBook(dir, bk, book, drive); return; }
+    if (up !== true || Date.now() - verAt < 10000) return;
+    verAt = Date.now();
+    const f = await drive.get(dir + '/book.json'), j = f && JSON.parse(f.text || 'null');
+    if (!j || j.from !== 'file' || !j.fp || j.fp === book.fp || bk !== bookKey()) return;
+    const m = await kv.get('book:' + bk), chapters = [];
+    let cur = false;
+    for (const c of j.chapters) {
+      const t = await drive.get(dir + '/' + c.file);
+      if (!t) return;   // 置いている途中。次に
+      const key = 'md:' + bk + ':' + c.id, old = await kv.get(key), was = m.chapters.find((x) => x.id === c.id);
+      if (!old || old.md !== t.text) { await kv.set(key, { sha: 'drive:' + t.sha, md: t.text }); if (c.id === CH) cur = true; }
+      chapters.push({ id: c.id, label: c.label, file: c.name || (was && was.file) || c.file });
+    }
+    if (bk !== bookKey()) return;
+    book = { ...m, chapters, fp: j.fp };
+    await kv.set('book:' + bk, book);
+    fillChapters(); syncNav(CH);
+    if (cur) await openChapter(CH, true);
+    stat.textContent = 'ほかの端末で新しくした本文を取り込みました';
   }
   // PDF は1ファイルを1冊にする。PDF そのものは 'pdf:<本>' に置き、ページの大きさだけ先に調べておく（開くたびに全ページを読まないため）。
   // want: ドライブの本のフォルダ（本棚の「ファイルを選ぶ」から。そのフォルダの本と同じ PDF のときだけ戻す）
@@ -4074,7 +4257,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     shelf.close(); opener.close();
     await switchBook(got[got.length - 1].id);
     const say = (k) => got.filter(k).map((b) => `「${b.title}」`).join('');
-    stat.textContent = [[(b) => !b.again && !b.drive, 'をこのiPadに保存しました'], [(b) => b.again, 'は前に開いた本です（書き込みもそのまま）'], [(b) => b.drive, 'をドライブの書き込みとつなぎました']]
+    stat.textContent = [[(b) => !b.again && !b.drive && !b.update, 'をこのiPadに保存しました'], [(b) => b.again, 'は前に開いた本です（書き込みもそのまま）'], [(b) => b.drive, 'をドライブの書き込みとつなぎました'],
+      [(b) => b.update, 'を新しい版にしました（書き込みは段落の字で付け直します）']]
       .filter(([k]) => got.some(k)).map(([k, t]) => say(k) + t).join('。');
   }
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
@@ -4110,6 +4294,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       const meta = r.id === 'gh' ? ghMeta : await kv.get('book:' + r.id), sz = meta && meta.pdf && meta.sizes && meta.sizes[0];
       const el = document.createElement('div'), cv = document.createElement('button'), lb = document.createElement('div'), nm = document.createElement('span');
       el.className = 'bk'; el.dataset.id = r.id;
+      if (meta && meta.local && !meta.pdf) el.dataset.md = '1';
       cv.type = 'button'; cv.className = 'cv'; cv.setAttribute('aria-current', String(r.id === src)); cv.setAttribute('aria-label', `「${r.title}」を開く`);
       cv.style.aspectRatio = sz ? `${sz[0]} / ${sz[1]}` : '210 / 297';
       const bl = sz && await kv.get('cover:' + r.id).catch(() => null);
@@ -4140,6 +4325,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (e.target.closest('.bk-m')) {
       bkAt = id; bkDel.classList.remove('arm'); bkDel.textContent = '削除';
       bkSync.hidden = !driveOn(); bkSync.textContent = bk.querySelector('.sy') ? 'この端末だけにする' : 'ドライブと同期する';
+      bkAdd.hidden = !bk.dataset.md;
       const r = e.target.getBoundingClientRect();
       bkMenu.hidden = false;
       bkMenu.style.left = Math.max(8, Math.min(innerWidth - bkMenu.offsetWidth - 8, r.right - bkMenu.offsetWidth)) + 'px';
@@ -4219,7 +4405,7 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     const meta = await kv.get('book:' + id);
     for (const c of (meta && meta.chapters) || []) {
       for (const f of picNames(((await kv.get('ink:' + id + ':' + c.id)) || {}).blocks)) await kv.del(picKey(f, id));   // 貼った画像
-      for (const k of ['md:', 'html:', 'ink:']) await kv.del(k + id + ':' + c.id);
+      for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:']) await kv.del(k + id + ':' + c.id);
     }
     for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:']) await kv.del(k + id);
     await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== id));
@@ -4246,6 +4432,20 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     const t = el.querySelector('.nm').textContent;
     shelfMsg.textContent = off ? `「${t}」はこの端末だけにしました（ドライブにもう置いた分は消しません）` : `「${t}」をドライブと同期します`;
     if (id === src && !off && cs) { const n = cs.pending.size; moveTo(cs, where()); if (cs.pending.size !== n) persist(); pushAll(); lastPull = Date.now(); refreshChapter(); nowSoon(); }
+  };
+  // ファイルの md の本に、直した md（同じファイル名の章を入れ替える）や新しい章を足す。書き込みは章を開いたときに段落の字で付け直す
+  const bkAdd = $('#bk-add'), bkFiles = $('#bk-files');
+  bkAdd.onclick = () => { bkFiles.dataset.id = bkAt || ''; bkMenu.hidden = true; bkFiles.click(); };
+  bkFiles.onchange = async () => {
+    const id = bkFiles.dataset.id, files = [...bkFiles.files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
+    bkFiles.value = '';
+    if (!id || !files.length) return;
+    try {
+      const r = await updateMd(id, files, await Promise.all(files.map(mdText)));
+      shelf.close();
+      await switchBook(id);
+      stat.textContent = r.update ? `「${r.title}」の章を${r.update[0] ? `${r.update[0]}つ入れ替え` : ''}${r.update[0] && r.update[1] ? '、' : ''}${r.update[1] ? `${r.update[1]}つ足し` : ''}ました` : `「${r.title}」は同じ中身でした`;
+    } catch (e) { shelfMsg.textContent = '足せませんでした: ' + (e.message || ''); }
   };
   $('#books').onclick = showShelf;
 

@@ -412,7 +412,7 @@ dialog#cfg, dialog#ask, dialog#opener { max-height: calc(100% - 90px); }
 #bk-menu { position: fixed; z-index: 5; display: grid; padding: 4px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 6px 24px rgba(20,30,60,.18); }
 #bk-menu button { text-align: left; font-weight: 400; font-size: 14px; color: var(--ink-r); }
 #bk-menu button.arm { font-weight: 600; }
-#bk-menu #bk-sync { color: var(--fg); }
+#bk-menu :is(#bk-sync, #bk-add) { color: var(--fg); }
 #shelf p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 12px; }
 #shelf .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 #shelf .row button { border-color: var(--rule); }
@@ -671,6 +671,7 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
         <li>「読むだけ」をオンにすると、Apple Pencil でスクロールでき、書き込みはしません（ツールを押すと書けるように戻ります）。</li>
         <li>「本」から md ファイルや PDF を開けます。PDF は右下のページ番号を押すとページの一覧が開き、縮小画像の「…」から前や後ろに白紙を入れられます。そこの「エクスポート」で、ページを選んで書き込みごと PDF にできます（md の本は、目次の「エクスポート」で章を選びます）。</li>
         <li>md の本では、本文のリンクを指で押すと、その見出し・脚注・ほかの章へ移ります（外のサイトはブラウザで開きます。ペンで押しても動きません）。数式は $…$・$$…$$ のほか、\( \)・\[ \] でも書けます。md の中の HTML は、動く部分（スクリプトなど）を除いて表示します。</li>
+        <li>md ファイルを直したときは、同じ名前のファイルをもう一度開くと、同じ本の新しい版になります。書き込みとしおりは、同じ字の段落に付け直します（段落を足したり消したりしても付いてきます）。章を足すときは、本棚の表紙の下の「…」の「ファイルを足す・入れ替える」から選びます。</li>
         <li>本と書き込みはこの端末に保存されるので、通信なしでも開けます。Google ドライブにつなぐと、書き込みは通信できるときにドライブへ送られ、Claude が読めるようになります。</li>
         <li>ドライブにつなぐと、ほかの端末（スマホなど）でも同じ本と書き込みを使えます。ほかの端末では「本」の「ファイルから開く」から「ドライブの本」を選んでインポートします（同じファイルを「この端末のファイル」から開いてもつながります）。2台で同じ所に書いても両方残り、ほかの端末で書いた分は、章を開いたときとアプリに戻ったときに取り込みます。</li>
         <li>ドライブにつないでいても、本ごとに、本棚の表紙の下の「…」から「この端末だけ」にできます。その本はドライブに何も送りません（ドライブにもう置いた分は消しません）。ドライブと同期している本には、表紙の右下に雲の印が付きます。</li>
@@ -704,7 +705,8 @@ body.pdf #doc > .src, body.pdf #foot { display: none; }
   <form method="dialog">
     <h2>本</h2>
     <div id="shelf-list"></div>
-    <div id="bk-menu" hidden><button type="button" id="bk-sync" hidden></button><button type="button" id="bk-del">削除</button></div>
+    <div id="bk-menu" hidden><button type="button" id="bk-add" hidden>ファイルを足す・入れ替える</button><button type="button" id="bk-sync" hidden></button><button type="button" id="bk-del">削除</button></div>
+    <input type="file" id="bk-files" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden>
     <p id="shelf-msg" aria-live="polite">md ファイルをいくつか選ぶと、1ファイルが1章の本になります。PDF も開けます。</p>
     <div class="row">
       <button value="cancel">閉じる</button>
