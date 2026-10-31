@@ -5,7 +5,7 @@
 (() => {
   const W = 680;
   // アプリの版。sw.js の VERSION と同じにする（設定の見出しに小さく出し、開き直したあと新しい版か確かめられるようにする）
-  const APP_VERSION = 'ink-reader-v73';
+  const APP_VERSION = 'ink-reader-v74';
   const PREF = 'ink';
   const $ = (s) => document.querySelector(s);
   const page = $('#page'), sizer = $('#sizer'), wrap = $('#wrap'), doc = $('#doc'), svg = $('#ink'), stat = $('#stat');
@@ -859,11 +859,14 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     return true;
   }
   const imgUrls = {};
+  // 図がまだない（ファイルの md の図を選んでいない）ときは、名前を書いた枠を出す（本棚の「…」の「ファイルを足す・入れ替える」で入れられる）
+  const missImg = (el) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${el.width || 400}" height="${el.height || 160}"><rect x=".5" y=".5" width="99%" height="99%" rx="4" fill="#f3f5f8" stroke="#b9c0cc" stroke-dasharray="6 4"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="14" fill="#5d6573">図がありません: ${el.dataset.img.replace(/[<&"]/g, '')}</text></svg>`);
   async function fillImages() {
     for (const el of doc.querySelectorAll('img[data-img]')) {
       const key = 'img:' + book.imageDir + '/' + el.dataset.img;
-      if (!imgUrls[key]) { const bl = await kv.get(key); if (bl) imgUrls[key] = URL.createObjectURL(bl); }
-      if (imgUrls[key]) el.src = imgUrls[key];
+      if (!imgUrls[key]) { const bl = asBlob(await kv.get(key)); if (bl) imgUrls[key] = URL.createObjectURL(bl); }
+      el.src = imgUrls[key] || missImg(el);
+      el.classList.toggle('miss', !imgUrls[key]);
     }
   }
   async function chapterHtml(id) {
@@ -1036,8 +1039,18 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       const v = await kv.get('md:' + bk + ':' + c.id);
       if (v) await put(dir + '/chapters/' + c.id + '.md', v.md);
     }
+    // ファイルの md の図は images/<名前>（置いた図とその大きさを覚え、変わったものだけ置き直す）
+    const ik = 'imgup:' + tag(R) + bk, idone = (await kv.get(ik)) || {};
+    for (const [f, wh] of local && !meta.pdf ? Object.entries(meta.images || {}) : []) {
+      const bl = asBlob(await kv.get('img:' + meta.imageDir + '/' + f));
+      if (!bl || idone[f] === bl.size) continue;
+      const path = dir + '/images/' + f;
+      await R.put(path, bl, await R.sha(path), `img: ${dir.split('/').pop()} ${f}`);
+      idone[f] = bl.size; await kv.set(ik, idone);
+    }
     const from = local ? { from: 'file' } : { from: 'github', repo: cfg.repo, branch: cfg.branch, path: cfg.book };
-    await put(dir + '/book.json', JSON.stringify({ title: meta.title, ...from, pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}), ...(meta.fp ? { fp: meta.fp } : {}) }, null, 1));
+    const imgs = local && !meta.pdf && Object.keys(meta.images || {}).length ? { images: meta.images } : {};
+    await put(dir + '/book.json', JSON.stringify({ title: meta.title, ...from, pdf: !!meta.pdf, chapters, ...(meta.sizes ? { sizes: meta.sizes } : {}), ...(meta.fp ? { fp: meta.fp } : {}), ...imgs }, null, 1));
     await kv.set('up:' + tag(R) + bk, true);
     return dir;
   }
@@ -4123,24 +4136,39 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
         const texts = data || await Promise.all(j.chapters.map(async (c) => { const f = await drive.get(d.dir + '/' + c.file); if (!f) throw new Error('ドライブに本文がありません'); return f.text; }));
         for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: 'drive:' + (fp || i), md: texts[i] });
         fp ||= await fpOf(texts);
+        await pullImages(d.dir, 'img/' + id, j.images);
       }
       if (!j.fp && fp) drive.sha(d.dir + '/book.json').then((v) => drive.put(d.dir + '/book.json', JSON.stringify({ ...j, fp }, null, 1), v)).catch(() => {});   // 前の版の book.json に指紋を足しておく
-      return { ...await addBook(id, { title: j.title, local: true, ...(j.pdf ? { pdf: true, sizes: j.sizes } : {}), chapters, images: {}, dir: d.dir, fp }), drive: true };
+      return { ...await addBook(id, { title: j.title, local: true, ...(j.pdf ? { pdf: true, sizes: j.sizes } : {}), chapters, images: j.pdf ? {} : j.images || {}, imageDir: 'img/' + id, dir: d.dir, fp }), drive: true };
     } catch (e) { kv.del('pdf:' + id).catch(() => {}); for (const c of chapters) kv.del('md:' + id + ':' + c.id).catch(() => {}); throw e; }
   }
-  async function importMd(files) {
+  // ドライブの本の図（images/<名前>）を端末に取る。端末にもうある図は取らない
+  async function pullImages(dir, imageDir, images) {
+    for (const f of Object.keys(images || {})) {
+      const key = 'img:' + imageDir + '/' + f;
+      if (await kv.get(key)) continue;
+      const bl = await drive.blob(dir + '/images/' + f).catch(() => null);
+      if (bl) { try { await kv.set(key, bl); } catch { await kv.set(key, { type: bl.type, buf: await bl.arrayBuffer() }); } }
+    }
+  }
+  async function importMd(files, imgs = []) {
+    const r = await importMd1(files, imgs);
+    if (imgs.length && !r.update) await addImages(r.id, imgs);
+    return r;
+  }
+  async function importMd1(files, imgs) {
     const texts = [], chapters = [];
     for (const [i, f] of files.entries()) { const md = await mdText(f); texts.push(md); chapters.push({ id: 'c' + (i + 1), label: mdTitle(md, f.name), file: f.name }); }
     const title = chapters[0].label + (chapters.length > 1 ? ` ほか${chapters.length - 1}章` : ''), x = { fp: await fpOf(texts), title, texts };
     const had = await findOnDevice(x);
     if (had) return had;
     const up = await findUpdate(files, texts);
-    if (up) return updateMd(up, files, texts);
+    if (up) return updateMd(up, files, texts, imgs);
     const d = await findOnDrive(x);
     if (d) return restoreBook(d, texts, x.fp);
     const id = 'local:' + newId();
     for (const [i, c] of chapters.entries()) await kv.set('md:' + id + ':' + c.id, { sha: files[i].name + ':' + files[i].size + ':' + files[i].lastModified, md: texts[i] });
-    return addBook(id, { title, local: true, chapters, images: {}, fp: x.fp });
+    return addBook(id, { title, local: true, chapters, images: {}, imageDir: 'img/' + id, fp: x.fp });
   }
   // 直した md を開き直したとき・章を足したときは、前の本の新しい版にする（書き込みは、章を開いたときに段落の字で付け直す）。
   // 前の本の章とファイル名が同じで、本文の行が 3 割以上同じものが 1 つでもあれば（違うものがなければ）、その本。名前の違うファイルは章として足す
@@ -4168,8 +4196,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     return best && best.id;
   }
   // 本 id の章を、ファイル名が同じものは入れ替え、ほかは足す（本棚の「…」の「ファイルを足す・入れ替える」からも）
-  async function updateMd(id, files, texts) {
-    const m = await kv.get('book:' + id), chapters = m.chapters.map((c) => ({ ...c }));
+  async function updateMd(id, files, texts, imgs = []) {
+    const nImg = imgs.length ? await addImages(id, imgs) : 0, m = await kv.get('book:' + id), chapters = m.chapters.map((c) => ({ ...c }));
     let changed = 0, added = 0, n = Math.max(0, ...chapters.map((c) => +((c.id.match(/^c(\d+)$/) || [])[1] || 0)));
     for (const [i, f] of files.entries()) {
       let c = chapters.find((x) => fileKey(x.file) === fileKey(f.name));
@@ -4179,14 +4207,41 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       c.label = mdTitle(texts[i], f.name);
       await kv.set('md:' + id + ':' + c.id, { sha: f.name + ':' + f.size + ':' + f.lastModified, md: texts[i] });
     }
-    if (!changed && !added) return { id, title: m.title, again: true };
+    if (!changed && !added) return nImg ? { id, title: m.title, update: [0, 0, nImg] } : { id, title: m.title, again: true };
     const all = await Promise.all(chapters.map(async (c) => ((await kv.get('md:' + id + ':' + c.id)) || {}).md || ''));
     const autoT = (cs) => cs[0].label + (cs.length > 1 ? ` ほか${cs.length - 1}章` : ''), title = m.title === autoT(m.chapters) ? autoT(chapters) : m.title;
     await kv.set('book:' + id, { ...m, chapters, title, fp: await fpOf(all) });
     if (title !== m.title) await kv.set('books', ((await kv.get('books')) || []).map((r) => r.id === id ? { ...r, title } : r));
     if (await kv.get('up:drive:' + id)) await kv.set('up:drive:' + id, 'again');   // ドライブの本文と book.json も置き直す
     if (id === bookKey()) book = await kv.get('book:' + id);
-    return { id, title, update: [changed, added] };
+    return { id, title, update: [changed, added, nImg] };
+  }
+  // ファイルの md の図を、端末に入れる（kv 'img:<図の場所>/<名前>'。名前は md に書いたファイル名）。大きさは本の情報の images に。
+  // 図が変わったら章の HTML を作り直し、ドライブにも置き直す。入れた（変わった）数を返す
+  async function addImages(id, imgs) {
+    const m = await kv.get('book:' + id);
+    if (!m) return 0;
+    m.imageDir ||= 'img/' + id; m.images ||= {};
+    let n = 0;
+    for (const f of imgs) {
+      const key = 'img:' + m.imageDir + '/' + f.name, old = asBlob(await kv.get(key));
+      if (old && old.size === f.size && m.images[f.name]) continue;
+      const wh = await imgSize(f);
+      if (!wh) continue;
+      try { await kv.set(key, f); } catch { await kv.set(key, { type: f.type, buf: await f.arrayBuffer() }); }
+      m.images[f.name] = wh; n++;
+      for (const u of Object.keys(imgUrls)) if (u === key) { URL.revokeObjectURL(imgUrls[u]); delete imgUrls[u]; }
+    }
+    if (!n) return 0;
+    await kv.set('book:' + id, m);
+    for (const c of m.chapters) await kv.del('html:' + id + ':' + c.id);
+    if (await kv.get('up:drive:' + id)) await kv.set('up:drive:' + id, 'again');
+    if (id === bookKey()) book = m;
+    return n;
+  }
+  async function imgSize(f) {
+    const url = URL.createObjectURL(f), im = new Image();
+    try { im.src = url; await im.decode(); return [im.naturalWidth || 400, im.naturalHeight || 300]; } catch { return null; } finally { URL.revokeObjectURL(url); }
   }
   // ほかの端末でファイルの md を新しい版にしたとき（ドライブの book.json の指紋が変わる）は、本文を取り直す。10 秒に 1 回まで。
   // この端末で新しい版にしてまだ置いていないときは取らない
@@ -4198,7 +4253,9 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     if (up !== true || Date.now() - verAt < 10000) return;
     verAt = Date.now();
     const f = await drive.get(dir + '/book.json'), j = f && JSON.parse(f.text || 'null');
-    if (!j || j.from !== 'file' || !j.fp || j.fp === book.fp || bk !== bookKey()) return;
+    const figs = (x) => JSON.stringify(x || {}), newFigs = j && figs(j.images) !== figs(book.images);
+    if (!j || j.from !== 'file' || !j.fp || (j.fp === book.fp && !newFigs) || bk !== bookKey()) return;
+    if (newFigs) { await pullImages(dir, book.imageDir || 'img/' + bk, j.images); for (const c of book.chapters) await kv.del('html:' + bk + ':' + c.id); }
     const m = await kv.get('book:' + bk), chapters = [];
     let cur = false;
     for (const c of j.chapters) {
@@ -4209,10 +4266,10 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       chapters.push({ id: c.id, label: c.label, file: c.name || (was && was.file) || c.file });
     }
     if (bk !== bookKey()) return;
-    book = { ...m, chapters, fp: j.fp };
+    book = { ...m, chapters, fp: j.fp, ...(newFigs ? { images: j.images, imageDir: m.imageDir || 'img/' + bk } : {}) };
     await kv.set('book:' + bk, book);
     fillChapters(); syncNav(CH);
-    if (cur) await openChapter(CH, true);
+    if (cur || newFigs) await openChapter(CH, true);
     stat.textContent = 'ほかの端末で新しくした本文を取り込みました';
   }
   // PDF は1ファイルを1冊にする。PDF そのものは 'pdf:<本>' に置き、ページの大きさだけ先に調べておく（開くたびに全ページを読まないため）。
@@ -4247,18 +4304,23 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     finally { if (pd) pd.destroy(); }
   }
   const isPdfFile = (f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+  const isImgFile = (f) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(f.name) || /^image\//.test(f.type);
   async function openFiles(files) {
     files = [...files].sort((x, y) => x.name.localeCompare(y.name, 'ja', { numeric: true }));
     if (!files.length) return;
-    const got = [];
+    const got = [], imgs = files.filter(isImgFile);
     for (const f of files.filter(isPdfFile)) got.push(await importPdf(f));
-    const mds = files.filter((f) => !isPdfFile(f));
-    if (mds.length) got.push(await importMd(mds));
+    const mds = files.filter((f) => !isPdfFile(f) && !isImgFile(f));
+    if (mds.length) got.push(await importMd(mds, imgs));
+    else if (imgs.length) {   // 図だけ選んだ: 開いている md の本に足す
+      if (!book || !isLocal() || isPdf()) { stat.textContent = '図は md と一緒に選ぶか、ファイルから開いた md の本を開いてから選んでください'; return; }
+      got.push(await updateMd(bookKey(), [], [], imgs));
+    }
     shelf.close(); opener.close();
     await switchBook(got[got.length - 1].id);
     const say = (k) => got.filter(k).map((b) => `「${b.title}」`).join('');
     stat.textContent = [[(b) => !b.again && !b.drive && !b.update, 'をこのiPadに保存しました'], [(b) => b.again, 'は前に開いた本です（書き込みもそのまま）'], [(b) => b.drive, 'をドライブの書き込みとつなぎました'],
-      [(b) => b.update, 'を新しい版にしました（書き込みは段落の字で付け直します）']]
+      [(b) => b.update && (b.update[0] || b.update[1]), 'を新しい版にしました（書き込みは段落の字で付け直します）'], [(b) => b.update && !b.update[0] && !b.update[1], 'に図を入れました']]
       .filter(([k]) => got.some(k)).map(([k, t]) => say(k) + t).join('。');
   }
   for (const el of document.querySelectorAll('.open-file')) el.onchange = () => { openFiles(el.files).catch((e) => { stat.textContent = '開けませんでした: ' + (e.message || ''); }); el.value = ''; };
@@ -4407,7 +4469,8 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
       for (const f of picNames(((await kv.get('ink:' + id + ':' + c.id)) || {}).blocks)) await kv.del(picKey(f, id));   // 貼った画像
       for (const k of ['md:', 'html:', 'ink:', 'hs:', 'ansb:']) await kv.del(k + id + ':' + c.id);
     }
-    for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:']) await kv.del(k + id);
+    for (const f of Object.keys((meta && meta.local && meta.images) || {})) await kv.del('img:' + meta.imageDir + '/' + f);   // ファイルの md の図
+    for (const k of ['book:', 'pdf:', 'ptext:', 'cover:', 'picup:drive:', 'imgup:drive:']) await kv.del(k + id);
     await kv.set('books', ((await kv.get('books')) || []).filter((x) => x.id !== id));
     const o = openedAt(); delete o[id]; store.set(PREF + ':opened', JSON.stringify(o));
     if (id === src) { CH = null; cs = null; await switchBook('gh'); }
@@ -4441,10 +4504,11 @@ PDF の本は、アプリの「エクスポート」と同じ PDF（元のペー
     bkFiles.value = '';
     if (!id || !files.length) return;
     try {
-      const r = await updateMd(id, files, await Promise.all(files.map(mdText)));
+      const mds = files.filter((f) => !isImgFile(f)), r = await updateMd(id, mds, await Promise.all(mds.map(mdText)), files.filter(isImgFile));
       shelf.close();
       await switchBook(id);
-      stat.textContent = r.update ? `「${r.title}」の章を${r.update[0] ? `${r.update[0]}つ入れ替え` : ''}${r.update[0] && r.update[1] ? '、' : ''}${r.update[1] ? `${r.update[1]}つ足し` : ''}ました` : `「${r.title}」は同じ中身でした`;
+      const [a, z, g] = r.update || [], say = [a && `章を${a}つ入れ替え`, z && `章を${z}つ足し`, g && `図を${g}つ入れ`].filter(Boolean).join('、');
+      stat.textContent = say ? `「${r.title}」の${say}ました` : `「${r.title}」は同じ中身でした`;
     } catch (e) { shelfMsg.textContent = '足せませんでした: ' + (e.message || ''); }
   };
   $('#books').onclick = showShelf;

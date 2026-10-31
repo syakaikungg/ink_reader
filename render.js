@@ -111,10 +111,20 @@
     // 前の版と同じ段落の分け方にする（式だけの段落の <p> を外す。前は KaTeX の HTML に対して置き換えていた）
     const disp = (i) => math[i].startsWith('<span class="katex-display"'), tail = (i) => math[i].endsWith('</span></span></span>');
     html = html.replace(/<p>(@@M(\d+)@@)/g, (m, x, i) => disp(+i) ? x : m).replace(/(@@M(\d+)@@)<\/p>/g, (m, x, i) => tail(+i) ? x : m);
-    html = html.replace(/<img src="([^"]+)" alt="([^"]*)">/g, (_, f) => {
-      const [w, h] = (images && images[f]) || [400, 300];
+    // 図: 本の図（images にあるもの。名前だけ合えばよい）は、端末に入れた絵を data-img で入れる（app.js の fillImages）。
+    // ウェブの画像（https:）と data: はそのまま。まだない図は名前だけ入れておく（あとで図を選ぶと出る）
+    const base = (f) => { let x = f; try { x = decodeURIComponent(f); } catch {} return x.replace(/&amp;/g, '&').split(/[\\/]/).pop().split(/[?#]/)[0]; };
+    const findImg = (f) => {
+      if (!images) return null;
+      if (images[f]) return f;
+      const b = base(f), l = b.toLowerCase();
+      return images[b] ? b : Object.keys(images).find((k) => k.toLowerCase() === l) || null;
+    };
+    html = html.replace(/<img src="([^"]+)" alt="([^"]*)"(?: title="[^"]*")?>/g, (m, f, alt) => {
+      if (/^(https?:|data:)/i.test(f)) return m;
+      const k = findImg(f), [w, h] = k ? images[k] : [400, 160];
       const page = (f.match(/page_(\d+)/) || [])[1];
-      return `<img data-img="${f}" width="${w}" height="${h}" alt="図${page ? `（原書${page}ページ）` : ''}">`;
+      return `<img data-img="${escHtml(k || base(f))}" width="${w}" height="${h}" alt="図${page ? `（原書${page}ページ）` : alt ? `（${alt}）` : ''}">`;
     });
     // 掃除は 2 回（1 回目の書き出しを読み直したときに形が変わる書き方があるため）
     let t = tpl(html);
@@ -141,7 +151,7 @@
     html = html.replace(/<p>FIG\. /g, '<p class="cap">FIG. ');
     return html;
   };
-  window.renderMarkdown.version = 3;   // 出力を変えたら上げる（端末内のキャッシュを作り直す）
+  window.renderMarkdown.version = 4;   // 出力を変えたら上げる（端末内のキャッシュを作り直す）
   // 横にはみ出す長い式は、紙の幅に収まるまで小さくする（横にスクロールさせると、書き込みと式がずれる）。本文を置いたあとと字体を読んだあとに呼ぶ
   window.renderMarkdown.fit = (root) => {
     const ks = [...root.querySelectorAll('.katex-display')];
