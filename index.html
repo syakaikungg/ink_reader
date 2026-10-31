@@ -288,6 +288,7 @@ html, body, body * { touch-action: manipulation; }
 /* md のいろいろな書き方。表・コード・引用・区切り線は render.js が div.blk で包む（段落の下の余白を枠の外に足すため） */
 #doc a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 #doc .blk { display: flow-root; margin: 0 0 16px; }
+#doc > .lz { content-visibility: auto; }   /* 長い章の段落: 画面から遠いときは描かない（高さは app.js が覚えさせる） */
 #doc .blk > * { margin: 0; }
 #doc .blk > hr { margin: 14px 0; }
 #doc hr { height: 0; border: 0; border-top: 1px solid var(--rule); }
