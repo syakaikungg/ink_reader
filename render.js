@@ -67,8 +67,10 @@
     example: '例', question: '問い', faq: '問い', help: '問い', quote: '引用', cite: '引用', abstract: '要約', summary: '要約', tldr: '要約', success: 'できた', check: 'できた', done: 'できた',
     failure: 'だめ', fail: 'だめ', missing: 'だめ', bug: 'バグ', todo: 'TODO' };
 
-  window.renderMarkdown = function renderMarkdown(md, images) {
-    const math = [], texs = [], code = [];
+  // marked に渡す前の下ごしらえ（前書きを除く・コードをよける・数式を put で置き換える・脚注の定義を抜き出す）。
+  // inline: 脚注の番号と Obsidian の書き方も直す（段落の分け方には関係しないので、renderMarkdown.source では飛ばす）
+  function prep(md, put, inline) {
+    const code = [];
     md = md.replace(/\r\n?/g, '\n').replace(/^﻿/, '');
     md = md.replace(/^---\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?:\n|$)/, '');   // 前書き（YAML）は本文に出さない
     // コードの中の $ や \( は数式にしない（コードは置き換えておき、数式の後で戻す）。\$ はそのままの $
@@ -76,14 +78,6 @@
     md = md.replace(/^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?)?(?:\n {0,3}\1[`~]*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S]))/gm, keep);
     md = md.replace(/(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\n))+?)(?<!`)\1(?!`)/g, keep);
     md = md.replace(/\\\$/g, keep);
-    const put = (tex, display) => {
-      // data-tex に元の TeX を残す（「Claudeに聞く」で本文を md に戻すため）
-      const esc = tex.trim().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-      math.push(katex.renderToString(tex.trim(), { displayMode: display, output: 'html', throwOnError: false, strict: false })
-        .replace('<span class="katex"', `<span class="katex" data-tex="${esc}"`));
-      texs.push(tex.trim());
-      return `@@M${math.length - 1}@@`;
-    };
     md = md.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => '\n\n' + put(t, true) + '\n\n');
     md = md.replace(/^[ \t]*\\\[([\s\S]+?)\\\][ \t]*$/gm, (_, t) => '\n\n' + put(t, true) + '\n\n');   // \[ \] は行の頭と終わりにあるときだけ（文中の \[1\] は角かっこ）
     md = md.replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => put(t, false));
@@ -92,18 +86,33 @@
     const defs = new Map(), order = [];
     md = md.replace(/^\[\^([^\]\s]+)\]:[ \t]*(.*(?:\n(?: {2,}|\t)\S.*)*)/gm, (_, k, t) => { defs.set(k, t.replace(/\n\s+/g, ' ')); return ''; });
     const fid = (k) => 'md-fn-' + k.replace(/[^\w-]/g, (c) => '_' + c.charCodeAt(0));
-    if (defs.size) md = md.replace(/\[\^([^\]\s]+)\](?!:)/g, (m, k) => {
-      if (!defs.has(k)) return m;
-      if (!order.includes(k)) order.push(k);
-      return `<sup class="fnref"><a href="#${fid(k)}">${order.indexOf(k) + 1}</a></sup>`;
-    });
-    // Obsidian の書き方: ==印== と [[ほかのノート]]・![[画像]]
-    md = md.replace(/==(?=[^\s=])([^\n=]*?[^\s=])==/g, '<mark>$1</mark>');
-    md = md.replace(/(!?)\[\[([^\]|\n]+?)(?:\|([^\]\n]+))?\]\]/g, (_, img, to, name) => img
-      ? `![${(name || '').replace(/[[\]]/g, '')}](<${to.trim()}>)`
-      : `<a href="${escHtml(to.trim())}" class="wiki">${escHtml((name || to).trim())}</a>`);
+    if (inline) {
+      if (defs.size) md = md.replace(/\[\^([^\]\s]+)\](?!:)/g, (m, k) => {
+        if (!defs.has(k)) return m;
+        if (!order.includes(k)) order.push(k);
+        return `<sup class="fnref"><a href="#${fid(k)}">${order.indexOf(k) + 1}</a></sup>`;
+      });
+      // Obsidian の書き方: ==印== と [[ほかのノート]]・![[画像]]
+      md = md.replace(/==(?=[^\s=])([^\n=]*?[^\s=])==/g, '<mark>$1</mark>');
+      md = md.replace(/(!?)\[\[([^\]|\n]+?)(?:\|([^\]\n]+))?\]\]/g, (_, img, to, name) => img
+        ? `![${(name || '').replace(/[[\]]/g, '')}](<${to.trim()}>)`
+        : `<a href="${escHtml(to.trim())}" class="wiki">${escHtml((name || to).trim())}</a>`);
+    }
     md = md.replace(/@@C(\d+)@@/g, (_, i) => code[+i]);
-    let html = marked.parse(md);
+    return { md, code, defs, order, fid };
+  }
+  window.renderMarkdown = function renderMarkdown(md, images) {
+    const math = [], texs = [];
+    const put = (tex, display) => {
+      // data-tex に元の TeX を残す（「Claudeに聞く」で本文を md に戻すため）
+      const esc = tex.trim().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      math.push(katex.renderToString(tex.trim(), { displayMode: display, output: 'html', throwOnError: false, strict: false })
+        .replace('<span class="katex"', `<span class="katex" data-tex="${esc}"`));
+      texs.push(tex.trim());
+      return `@@M${math.length - 1}@@`;
+    };
+    const pr = prep(md, put, true), { code, defs, order, fid } = pr;
+    let html = marked.parse(pr.md);
     if (defs.size) {
       const keys = order.concat([...defs.keys()].filter((k) => !order.includes(k)));
       html += `<section class="footnotes"><ol>${keys.map((k) => `<li id="${fid(k)}">${marked.parseInline(defs.get(k).replace(/@@C(\d+)@@/g, (_, i) => code[+i]))}</li>`).join('')}</ol></section>`;
@@ -150,6 +159,75 @@
     html = t.innerHTML.replace(/@@M(\d+)@@/g, (_, i) => math[+i]);
     html = html.replace(/<p>FIG\. /g, '<p class="cap">FIG. ');
     return html;
+  };
+  // 段落ごとの元の md（「Claudeに聞く」・いま.md で本文をそのまま渡すため）。renderMarkdown の段落（#doc の子要素。出典の行は除く）と同じ順の配列。
+  // 段落の数が合わない書き方（HTML の中に md を書いたなど）のときは null（画面の字から作る）
+  window.renderMarkdown.source = (md) => {
+    const raw = [];
+    const put = (tex, display) => { raw.push(display ? `$$${tex.trim()}$$` : `$${tex.trim()}$`); return `@@M${raw.length - 1}@@`; };
+    const pr = prep(md, put, false), out = [];
+    const back = (t) => t.replace(/@@M(\d+)@@/g, (_, i) => raw[+i]).trim();
+    // HTML の中に md を書いた所（<details> … </details> など）は、閉じるまでを一つの段落にする
+    const depth = (t) => { let d = 0; for (const m of t.matchAll(/<(\/?)([a-zA-Z][\w-]*)\b[^>]*?(\/?)>/g)) if (!m[3] && !/^(area|br|col|embed|hr|img|input|link|meta|source|track|wbr)$/i.test(m[2])) d += m[1] ? -1 : 1; return d; };
+    let open = null, d = 0;
+    for (const tk of marked.lexer(pr.md)) {
+      if (open) { open.push(tk.raw); if (tk.type === 'html' && (d += depth(tk.raw)) <= 0) { out.push(back(open.join(''))); open = null; } continue; }
+      if (tk.type === 'space' || tk.type === 'def') continue;
+      let n = 1;
+      if (tk.type === 'html') {
+        if ((d = depth(tk.raw)) > 0) { open = [tk.raw]; continue; }
+        const t = tpl(tk.raw); clean(t.content); n = t.content.children.length;
+      }
+      for (let i = 0; i < n; i++) out.push(back(tk.raw));
+    }
+    if (open) out.push(back(open.join('')));
+    if (pr.defs.size) out.push([...pr.defs].map(([k, t]) => `[^${k}]: ${back(t.replace(/@@C(\d+)@@/g, (_, i) => pr.code[+i]))}`).join('\n'));
+    return out;
+  };
+  // 段落の途中の余白（md）。段落 el の行の切れ目に、高さ h の空き（span.msp）を入れる。list: [[at, h], …]（at は余白を入れる前の段落の上端からの位置。上から順）。
+  // at に一番近い行の切れ目（段落の上端か、2 行目から下の行の頭）に入れ、行がなければ段落の終わりに入れる。返すもの: 入れた所の、余白を入れる前の位置の配列。
+  // 端末で行の折り返しが違っても、近い行の切れ目に入る（書き込みも位置で結びついているので、それに合う）。scale: 画面の拡大率
+  window.renderMarkdown.space = (el, list, scale = 1) => {
+    for (const x of [...el.querySelectorAll('.msp')]) { const p = x.parentNode; x.remove(); p.normalize(); }
+    if (!list.length) return [];
+    const top = el.getBoundingClientRect().top, rows = [{ y: 0, at: null }], rg = document.createRange();
+    // 行の頭: 字（数式の外）と、数式・図はひとかたまりで見て、前の行より下に来たものを行の頭とする
+    let cur = null;
+    const see = (r, at) => {
+      if (!r || !r.height) return;
+      const y0 = (r.top - top) / scale, y1 = (r.bottom - top) / scale, c = (y0 + y1) / 2;
+      if (!cur) { cur = { y0, y1 }; return; }
+      if (c > cur.y1) { rows.push({ y: (cur.y1 + y0) / 2, at }); cur = { y0, y1 }; }
+      else { cur.y0 = Math.min(cur.y0, y0); cur.y1 = Math.max(cur.y1, y1); }
+    };
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n;) {
+      if (n.nodeType === 1 && (n.matches('.katex, img, svg, br') || getComputedStyle(n).display.startsWith('inline-'))) {
+        see(n.getClientRects()[0], { el: n });
+        let nx = n; while (nx && !nx.nextSibling && nx !== el) nx = nx.parentNode;   // 中は見ない
+        n = nx && nx !== el ? (tw.currentNode = nx.nextSibling) : null;
+        continue;
+      }
+      if (n.nodeType === 3) for (let i = 0; i < n.data.length; i++) {
+        if (!n.data[i].trim()) continue;
+        rg.setStart(n, i); rg.setEnd(n, i + 1);
+        see(rg.getClientRects()[0], { node: n, i });
+      }
+      n = tw.nextNode();
+    }
+    const picks = list.map(([at]) => rows.reduce((a, r) => (!a || Math.abs(r.y - at) < Math.abs(a.y - at) ? r : a), null));
+    const els = [];
+    for (let k = list.length - 1; k >= 0; k--) {   // 下から入れる（上の字の場所が変わらないように）
+      const sp = document.createElement('span'), r = picks[k];
+      sp.className = 'msp'; sp.setAttribute('aria-hidden', 'true'); sp.style.height = list[k][1] + 'px'; sp.dataset.k = k;
+      if (!r || picks.indexOf(r) !== k) el.append(sp);   // 同じ行の切れ目にもう入れる余白がある
+      else if (!r.at) el.prepend(sp);   // 段落の上端
+      else if (r.at.el) r.at.el.before(sp);
+      else { const t = r.at.i ? r.at.node.splitText(r.at.i) : r.at.node; t.before(sp); }
+      els[k] = sp;
+    }
+    let acc = 0;
+    return els.map((sp, k) => { const y = (sp.getBoundingClientRect().top - top) / scale - acc; acc += list[k][1]; return Math.round(y * 64) / 64; });
   };
   window.renderMarkdown.version = 4;   // 出力を変えたら上げる（端末内のキャッシュを作り直す）
   // 横にはみ出す長い式は、紙の幅に収まるまで小さくする（横にスクロールさせると、書き込みと式がずれる）。本文を置いたあとと字体を読んだあとに呼ぶ
