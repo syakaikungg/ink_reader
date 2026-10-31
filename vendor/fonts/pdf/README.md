@@ -6,6 +6,8 @@ md の本を PDF に書き出すとき（`export-md.js`）、文字を文字の�
 - `SourceSerif4-Regular.ttf` / `-Semibold.ttf` / `-Italic.ttf`: `vendor/fonts/SourceSerif4-latin*.woff2`（可変の字体）を、太さ 400・600、opsz 16 に固定した TTF。fontkit が可変の woff2 を subset できないため。
 - `KaTeX_*.ttf`: 数式の字体。`vendor/fonts/KaTeX_*.woff2`（KaTeX 0.16.11）を TTF に戻しただけ（字の形・幅は画面と同じ）。fontkit は woff2 を subset すると字が空になるため。KaTeX の字体は MIT ライセンス。
 
+画面の md の本文も同じ字で描く（端末が違っても行の折り返しをそろえるため）。`../NotoSerifJP-cp932.woff2` は `NotoSerifJP-Regular.ttf` を woff2 にしただけのもの（`f = TTFont('NotoSerifJP-Regular.ttf'); f.flavor = 'woff2'; f.save('../NotoSerifJP-cp932.woff2')`。brotli が要る）。
+
 ライセンスは KaTeX 以外は SIL Open Font License 1.1（`OFL.txt`）。作り方（fonttools 4.68）:
 
 ```python
